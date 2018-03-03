@@ -1,0 +1,30 @@
+[package]
+name = "bitcoin-spv"
+version = "0.1.0"
+authors = ["Tamas Blummer <tamas.blummer@gmail.com>"]
+license = "Apache-2.0"
+homepage = "https://github.com/tamasblummer/bitcoin-spv/"
+repository = "https://github.com/tamasblummer/bitcoin-spv/"
+documentation = "https://github.com/tamasblummer/bitcoin-spv/"
+description = "SPV client for Bitcoin"
+keywords = [ "crypto", "bitcoin" ]
+readme = "README.md"
+
+[lib]
+name = "bitcoin_spv"
+path = "src/lib.rs"
+
+[dependencies]
+bitcoin = { git = "https://github.com/tamasblummer/rust-bitcoin", branch = "prs" }
+tokio = "0.1"
+tokio-io = "0.1"
+tokio-core = "0.1"
+futures = "0.1"
+bytes = "0.4"
+rand = "0.4"
+lazy_static = "1.0"
+log = "0.4"
+simple_logger = "0.5.0"
+time = "0.1.39"
+rusqlite = "0.13.0"
+libc = "0.2"
