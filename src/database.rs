@@ -241,7 +241,7 @@ impl<'a> DBTX<'a> {
         Ok(Block { header, txdata })
     }
 
-    /// Return an reverse hight order iterator for the headers [tip, genesis)
+    /// Return an reverse height order iterator for the headers [tip, genesis)
     pub fn get_headers_iterator (&self, genesis: &Sha256dHash, tip: &Sha256dHash) -> HeadersIterator {
         HeadersIterator { genesis: *genesis, current: *tip, tx: &self }
     }

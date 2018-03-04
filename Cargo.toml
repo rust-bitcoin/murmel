@@ -15,8 +15,8 @@ name = "bitcoin_spv"
 path = "src/lib.rs"
 
 [dependencies]
-# this is temporary, until my PRs are merged.
-bitcoin = { git = "https://github.com/tamasblummer/rust-bitcoin", branch = "prs" }
+bitcoin = "0.11.0"
+lightning = { git = "https://github.com/tamasblummer/rust-lightning", branch = "master" }
 tokio = "0.1"
 tokio-io = "0.1"
 tokio-core = "0.1"
@@ -29,3 +29,6 @@ simple_logger = "0.5.0"
 time = "0.1.39"
 rusqlite = "0.13.0"
 libc = "0.2"
+
+[patch.crates-io]
+bitcoin = { git = "https://github.com/tamasblummer/rust-bitcoin", branch = "prs"  }

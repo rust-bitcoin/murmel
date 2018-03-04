@@ -14,6 +14,7 @@
 
 use bitcoin::blockdata::blockchain::Blockchain;
 use bitcoin::blockdata::constants::genesis_block;
+use bitcoin::blockdata::transaction::Transaction;
 use bitcoin::network::constants::{magic, Network};
 use bitcoin::network::message::{NetworkMessage, RawNetworkMessage};
 use bitcoin::network::message_blockdata::*;
@@ -31,10 +32,13 @@ use std::io;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
+use std::sync::Arc;
 
 lazy_static! {
     static ref STDRNG : Mutex<StdRng> = Mutex::new(StdRng::new().unwrap());
 }
+
+use connector::LightningConnector;
 
 /// a connected peer
 pub struct Peer {
@@ -50,21 +54,27 @@ pub struct Node {
     pub network: Network,
     pub height: AtomicUsize,
     pub nonce: u64,
-    pub peers: Mutex<HashMap<SocketAddr, Peer>>,
+    pub peers: Arc<Mutex<HashMap<SocketAddr, Peer>>>,
     pub blockchain: Mutex<Blockchain>,
     pub db: Mutex<DB>,
+    pub connector: LightningConnector
 }
+
 
 impl Node {
     /// Create a new local node for a network that uses the given database
     pub fn new(network: Network, db: DB) -> Node {
+        let peers = Arc::new(Mutex::new(HashMap::new()));
+        let connector = LightningConnector::new(
+            Broadcaster::new(peers.clone(), magic(network)));
         Node {
             network,
             height: AtomicUsize::new(0),
             nonce: STDRNG.lock().unwrap().next_u64(),
-            peers: Mutex::new(HashMap::new()),
+            peers,
             blockchain: Mutex::new(Blockchain::new(network)),
             db : Mutex::new(db),
+            connector
         }
     }
 
@@ -103,6 +113,8 @@ impl Node {
                 if v.len() > 0 {
                     // blocks we want to download
                     let mut ask_for_blocks = Vec::new();
+                    let mut disconnected_headers = Vec::new();
+
                     {
                         // new scope to limit lock
 
@@ -112,28 +124,46 @@ impl Node {
                         let mut db = self.db.lock().unwrap();
                         let tx = db.transaction()?;
 
-                        let mut last_tip = Sha256dHash::default();
                         for header in v {
-                            // add to in-memory blockchain - this also checks work
+                            let old_tip = blockchain.best_tip_hash();
+                            // add to in-memory blockchain - this also checks proof of work
                             if blockchain.add_header(header.header).is_ok() {
-                                // if successful also add to db
+
+                                let new_tip = blockchain.best_tip_hash ();
+                                let header_hash = header.header.bitcoin_hash();
+                                let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as u32;
+                                if header.header.time > now - 60*60*24 && new_tip ==  header_hash {
+                                    // if not older than a day and extending the trunk then ask for the block
+                                    ask_for_blocks.push (new_tip);
+                                }
+
                                 tx.insert_header(&header.header)?;
 
-                                // not older than a day, themn also request the full block
-                                // this is temporary until BIP157 & BIP158 become available
-                                let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as u32;
-                                if header.header.time > now - 60*60*24 && blockchain.best_tip_hash () != last_tip {
-                                    last_tip = header.header.bitcoin_hash();
-                                    ask_for_blocks.push (last_tip);
+                                if header_hash == new_tip && header.header.prev_blockhash != old_tip {
+                                    let mut prevhash = header.header.prev_blockhash;
+                                    // a re-organisation happened
+                                    while !blockchain.get_block(prevhash).unwrap().is_on_main_chain(&blockchain) {
+                                        let previous = blockchain.get_block(prevhash).unwrap();
+                                        disconnected_headers.push(previous.block.header);
+                                        prevhash = previous.block.header.prev_blockhash;
+                                    }
                                 }
                             }
                         }
                         tx.set_tip(&blockchain.best_tip_hash())?;
+
                         tx.commit()?;
                         info!("add {} headers tip={} from peer={}", v.len(),
                               blockchain.best_tip_hash(), peer.remote_addr);
                     }
+
+                    disconnected_headers.reverse();
+                    for header in disconnected_headers {
+                        self.connector.block_disconnected(&header);
+                    }
+                    // ask for new blocks on trunk
                     self.get_blocks(peer, ask_for_blocks)?;
+                    // ask if peer knows even more
                     self.get_headers(peer)
                 } else {
                     Ok(())
@@ -147,11 +177,18 @@ impl Node {
                     let block = block.unwrap();
                     if block.block.txdata.is_empty() {
                         if blockchain.get_block(b.bitcoin_hash()).unwrap().is_on_main_chain(&blockchain) {
-                            // store a block if it is on the chain with most work
-                            let mut db = self.db.lock().unwrap();
-                            let tx = db.transaction()?;
-                            tx.insert_block(&b)?;
-                            tx.commit()?;
+
+                            // limit context
+                            {
+                                // store a block if it is on the chain with most work
+                                let mut db = self.db.lock().unwrap();
+                                let tx = db.transaction()?;
+                                tx.insert_block(&b)?;
+                                tx.commit()?;
+                            }
+
+                            // send new block to lighning connector
+                            self.connector.block_connected(&b, block.height);
                         }
                     }
                 }
@@ -209,6 +246,19 @@ impl Node {
         }
     }
 
+    /// send a new transaction to all peers
+    pub fn send_transaction (&self, tx : Transaction) -> Result <(), SPVError> {
+        self.broadcast (&NetworkMessage::Tx(tx))
+    }
+
+    /// send the same message to all connected peers
+    pub fn broadcast (&self, msg: &NetworkMessage) -> Result <(), SPVError> {
+        for (_, peer) in self.peers.lock().unwrap().iter() {
+            self.reply(peer, msg)?;
+        }
+        Ok(())
+    }
+
     /// wrap a message into an envelope with magic number and checksum
     pub fn raw_message(&self, payload: &NetworkMessage) -> RawNetworkMessage {
         RawNetworkMessage { magic: magic(self.network), payload: payload.clone() }
@@ -225,3 +275,26 @@ impl Node {
         }
     }
 }
+
+/// a helper class to implement LightningConnector
+pub struct Broadcaster {
+    peers: Arc<Mutex<HashMap<SocketAddr, Peer>>>,
+    magic: u32
+}
+
+impl Broadcaster {
+    pub fn new (peers: Arc<Mutex<HashMap<SocketAddr, Peer>>>, magic: u32) -> Broadcaster {
+        Broadcaster { peers, magic }
+    }
+
+    pub fn broadcast (&self, tx: &Transaction) -> Result<(), SPVError> {
+        let msg = NetworkMessage::Tx((*tx).clone());
+        for (_, peer) in self.peers.lock().unwrap().iter() {
+            if peer.tx.unbounded_send(RawNetworkMessage { magic: self.magic, payload: msg.clone()}).is_err() {
+                return Err(SPVError::Generic(format!("can not speak to peer={}", peer.remote_addr)))
+            }
+        }
+        Ok(())
+    }
+}
+
