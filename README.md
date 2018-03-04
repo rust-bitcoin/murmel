@@ -18,7 +18,7 @@ The current plan is to create a small footprint, low bandwidth, stable and secur
 * [Rust language bindings for Bitcoin secp256k1 library.](https://github.com/apoelstra/rust-secp256k1)
 * [Rust Bitcoin library](https://github.com/apoelstra/rust-bitcoin)
 * [Bitcoin's libbitcoinconsenus.a with Rust binding.](https://github.com/tamasblummer/rust-bitcoinconsensus)
-* [Bitcoin SPV](https://github.com/tamasblummer/bitcoin-spv)
-* [Rust-Lightning, not Rusty's Lightning](https://github.com/tamasblummer/rust-lightning)
+* [Bitcoin SPV in Rust](https://github.com/tamasblummer/bitcoin-spv)
+* [Rust-Lightning, not Rusty's Lightning](https://github.com/TheBlueMatt/rust-lightning)
 
 Send me your PRs if aligned with above vision.
