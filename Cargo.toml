@@ -15,6 +15,7 @@ name = "bitcoin_spv"
 path = "src/lib.rs"
 
 [dependencies]
+# this is temporary, until my PRs are merged.
 bitcoin = { git = "https://github.com/tamasblummer/rust-bitcoin", branch = "prs" }
 tokio = "0.1"
 tokio-io = "0.1"
