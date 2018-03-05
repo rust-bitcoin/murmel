@@ -21,25 +21,24 @@ use bitcoin::network::message_blockdata::*;
 use bitcoin::network::message_network::*;
 use bitcoin::network::serialize::BitcoinHash;
 use bitcoin::util::hash::Sha256dHash;
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
+use connector::LightningConnector;
 use database::DB;
 use dispatcher::Tx;
 use error::SPVError;
+use lightning::chain::chaininterface::ChainWatchInterface;
 use rand::{Rng, StdRng};
 use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
-use std::sync::Arc;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 lazy_static! {
     static ref STDRNG : Mutex<StdRng> = Mutex::new(StdRng::new().unwrap());
 }
-
-use connector::LightningConnector;
-use lightning::chain::chaininterface::ChainWatchInterface;
 
 /// a connected peer
 pub struct Peer {
@@ -51,9 +50,13 @@ pub struct Peer {
 }
 
 impl Peer {
-    pub fn new (tx: Tx, local_addr: SocketAddr, remote_addr: SocketAddr, version: VersionMessage) -> Peer {
+    pub fn new(tx: Tx, local_addr: SocketAddr, remote_addr: SocketAddr, version: VersionMessage) -> Peer {
         Peer {
-            tx, local_addr, remote_addr, version, banscore: AtomicUsize::new(0)
+            tx,
+            local_addr,
+            remote_addr,
+            version,
+            banscore: AtomicUsize::new(0),
         }
     }
 
@@ -77,7 +80,7 @@ pub struct Node {
     peers: Arc<Mutex<HashMap<SocketAddr, Peer>>>,
     blockchain: Mutex<Blockchain>,
     db: Mutex<DB>,
-    connector: LightningConnector
+    connector: Arc<LightningConnector>,
 }
 
 
@@ -93,8 +96,8 @@ impl Node {
             nonce: STDRNG.lock().unwrap().next_u64(),
             peers,
             blockchain: Mutex::new(Blockchain::new(network)),
-            db : Mutex::new(db),
-            connector
+            db: Mutex::new(db),
+            connector: Arc::new(connector),
         }
     }
 
@@ -106,15 +109,14 @@ impl Node {
         if let Ok(tip) = tx.get_tip() {
             let mut n = 0;
             let mut blockchain = self.blockchain.lock().unwrap();
-            for header in tx.get_headers (&genesis_block(self.network).bitcoin_hash(), &tip)? {
+            for header in tx.get_headers(&genesis_block(self.network).bitcoin_hash(), &tip)? {
                 if blockchain.add_header(header).is_ok() {
                     n += 1;
                 }
             }
             self.height.store(blockchain.best_tip_height() as usize, Ordering::Relaxed);
             info!("loaded {} headers from database", n);
-        }
-        else {
+        } else {
             info!("no headers in the database");
         }
         tx.rollback()?;
@@ -123,14 +125,14 @@ impl Node {
 
     /// Process incoming messages
     pub fn process(&self, msg: &RawNetworkMessage, remote_addr: &SocketAddr) -> Result<(), SPVError> {
-        if let Some (peer) = self.peers.lock().unwrap().get(remote_addr) {
-            self.process_for_peer (msg, peer)
+        if let Some(peer) = self.peers.lock().unwrap().get(remote_addr) {
+            self.process_for_peer(msg, peer)
         } else {
             Err(SPVError::Generic(format!("unknwon peer {}", *remote_addr)))
         }
     }
 
-    fn process_for_peer (&self, msg: &RawNetworkMessage, peer: &Peer) -> Result<(), SPVError> {
+    fn process_for_peer(&self, msg: &RawNetworkMessage, peer: &Peer) -> Result<(), SPVError> {
         match msg.payload {
             // reply top ping with pong
             NetworkMessage::Ping(nonce) => {
@@ -243,17 +245,17 @@ impl Node {
     fn get_blocks(&self, peer: &Peer, blocks: Vec<Sha256dHash>) -> Result<(), SPVError> {
         let mut invs = Vec::new();
         for b in blocks {
-            invs.push(Inventory{
+            invs.push(Inventory {
                 inv_type: InvType::Block,
-                hash: b
+                hash: b,
             });
         }
         self.reply(peer, &NetworkMessage::GetData(invs))
     }
 
-    pub fn get_headers_at_connect(&self, remote_addr: &SocketAddr) -> Result<(), SPVError>  {
-        if let Some (peer) = self.peers.lock().unwrap().get(&remote_addr) {
-            self.get_headers (peer)
+    pub fn get_headers_at_connect(&self, remote_addr: &SocketAddr) -> Result<(), SPVError> {
+        if let Some(peer) = self.peers.lock().unwrap().get(&remote_addr) {
+            self.get_headers(peer)
         } else {
             Err(SPVError::Generic(format!("unknown peer {}", *remote_addr)))
         }
@@ -282,12 +284,12 @@ impl Node {
     }
 
     /// send a new transaction to all peers
-    fn send_transaction (&self, tx : Transaction) -> Result <(), SPVError> {
-        self.broadcast (&NetworkMessage::Tx(tx))
+    fn send_transaction(&self, tx: Transaction) -> Result<(), SPVError> {
+        self.broadcast(&NetworkMessage::Tx(tx))
     }
 
     /// send the same message to all connected peers
-    fn broadcast (&self, msg: &NetworkMessage) -> Result <(), SPVError> {
+    fn broadcast(&self, msg: &NetworkMessage) -> Result<(), SPVError> {
         for (_, peer) in self.peers.lock().unwrap().iter() {
             self.reply(peer, msg)?;
         }
@@ -299,56 +301,56 @@ impl Node {
         RawNetworkMessage { magic: magic(self.network), payload: payload.clone() }
     }
 
-    pub fn get_magic (&self) -> u32 {
+    pub fn get_magic(&self) -> u32 {
         magic(self.network)
     }
 
-    pub fn get_peer_height (&self, remote_addr: &SocketAddr) -> Option<u32> {
-        if let Some (peer) = self.peers.lock().unwrap().get(&remote_addr) {
+    pub fn get_peer_height(&self, remote_addr: &SocketAddr) -> Option<u32> {
+        if let Some(peer) = self.peers.lock().unwrap().get(&remote_addr) {
             Some(peer.version.start_height as u32)
         } else {
             None
         }
     }
 
-    pub fn has_peer (&self, remote_addr: &SocketAddr) -> bool {
+    pub fn has_peer(&self, remote_addr: &SocketAddr) -> bool {
         self.peers.lock().unwrap().contains_key(remote_addr)
     }
 
 
-    pub fn add_peer (&self, remote_addr: &SocketAddr, peer: Peer) {
+    pub fn add_peer(&self, remote_addr: &SocketAddr, peer: Peer) {
         self.peers.lock().unwrap().insert(*remote_addr, peer);
     }
 
-    pub fn get_nonce (&self) -> u64 {
+    pub fn get_nonce(&self) -> u64 {
         self.nonce
     }
 
-    pub fn get_height (&self) -> u32 {
-        self.height.load (Ordering::Relaxed) as u32
+    pub fn get_height(&self) -> u32 {
+        self.height.load(Ordering::Relaxed) as u32
     }
 
-    pub fn get_chain_watch_interface (&self) -> &ChainWatchInterface {
-        &self.connector
+    pub fn get_chain_watch_interface(&self) -> Arc<ChainWatchInterface> {
+        self.connector.clone()
     }
 }
 
 /// a helper class to implement LightningConnector
 pub struct Broadcaster {
     peers: Arc<Mutex<HashMap<SocketAddr, Peer>>>,
-    magic: u32
+    magic: u32,
 }
 
 impl Broadcaster {
-    pub fn new (peers: Arc<Mutex<HashMap<SocketAddr, Peer>>>, magic: u32) -> Broadcaster {
+    pub fn new(peers: Arc<Mutex<HashMap<SocketAddr, Peer>>>, magic: u32) -> Broadcaster {
         Broadcaster { peers, magic }
     }
 
-    pub fn broadcast (&self, tx: &Transaction) -> Result<(), SPVError> {
+    pub fn broadcast(&self, tx: &Transaction) -> Result<(), SPVError> {
         let msg = NetworkMessage::Tx((*tx).clone());
         for (_, peer) in self.peers.lock().unwrap().iter() {
-            if peer.tx.unbounded_send(RawNetworkMessage { magic: self.magic, payload: msg.clone()}).is_err() {
-                return Err(SPVError::Generic(format!("can not speak to peer={}", peer.remote_addr)))
+            if peer.tx.unbounded_send(RawNetworkMessage { magic: self.magic, payload: msg.clone() }).is_err() {
+                return Err(SPVError::Generic(format!("can not speak to peer={}", peer.remote_addr)));
             }
         }
         Ok(())

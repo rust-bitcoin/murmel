@@ -12,35 +12,33 @@
 //See the License for the specific language governing permissions and
 //limitations under the License.
 
-use std::sync::Weak;
-use std::sync::atomic::{AtomicUsize, Ordering};
-
 use bitcoin::blockdata::block::{Block, BlockHeader};
-use bitcoin::blockdata::transaction::Transaction;
 use bitcoin::blockdata::script::Script;
+use bitcoin::blockdata::transaction::Transaction;
 use bitcoin::util::hash::Sha256dHash;
-
 use lightning::chain::chaininterface::{ChainListener, ChainWatchInterface, ChainWatchInterfaceUtil};
 use node::Broadcaster;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Weak;
 
 /// implements the ChainWatchInterface required by rust-lightning projec
 pub struct LightningConnector {
     util: ChainWatchInterfaceUtil,
     watch: AtomicUsize,
-    broadcaster: Broadcaster
+    broadcaster: Broadcaster,
 }
 
 impl LightningConnector {
-    pub fn new (broadcaster: Broadcaster) -> LightningConnector {
-        LightningConnector{
+    pub fn new(broadcaster: Broadcaster) -> LightningConnector {
+        LightningConnector {
             util: ChainWatchInterfaceUtil::new(),
             watch: AtomicUsize::new(1),
-            broadcaster
+            broadcaster,
         }
     }
 
-    pub fn block_connected (&self, block: &Block, height: u32) {
-        let mut watch = self.watch.load (Ordering::Relaxed);
+    pub fn block_connected(&self, block: &Block, height: u32) {
+        let mut watch = self.watch.load(Ordering::Relaxed);
         let mut last_seen = 0;
         // re-scan if new watch added during previous scan
         while last_seen != watch {
@@ -54,7 +52,7 @@ impl LightningConnector {
             }
             last_seen = watch;
             self.util.do_call_block_connected(&block.header, height, matched.as_slice(), matched_index.as_slice());
-            watch = self.watch.load (Ordering::Relaxed);
+            watch = self.watch.load(Ordering::Relaxed);
         }
     }
 

@@ -12,12 +12,12 @@
 //See the License for the specific language governing permissions and
 //limitations under the License.
 extern crate bitcoin;
-extern crate lightning;
 extern crate bytes;
 extern crate futures;
 #[macro_use]
 extern crate lazy_static;
 extern crate libc;
+extern crate lightning;
 #[macro_use]
 extern crate log;
 extern crate rand;
@@ -32,3 +32,4 @@ pub mod database;
 pub mod error;
 pub mod dispatcher;
 pub mod connector;
+pub mod spv;

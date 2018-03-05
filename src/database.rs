@@ -216,8 +216,7 @@ impl<'a> DBTX<'a> {
         let hid: i64;
         if let Ok(id) = self.get_id(&block.header.bitcoin_hash()) {
             hid = id;
-        }
-        else {
+        } else {
             hid = self.insert_header(&block.header)?;
         }
         for transaction in &block.txdata {
@@ -242,17 +241,17 @@ impl<'a> DBTX<'a> {
     }
 
     /// Return an reverse height order iterator for the headers [tip, genesis)
-    pub fn get_headers_iterator (&self, genesis: &Sha256dHash, tip: &Sha256dHash) -> HeadersIterator {
+    pub fn get_headers_iterator(&self, genesis: &Sha256dHash, tip: &Sha256dHash) -> HeadersIterator {
         HeadersIterator { genesis: *genesis, current: *tip, tx: &self }
     }
 
     /// Return headers in ascending hight order. (genesis, tip]
-    pub fn get_headers (&self, genesis: &Sha256dHash, tip: &Sha256dHash) -> Result<Vec<BlockHeader>, SPVError> {
+    pub fn get_headers(&self, genesis: &Sha256dHash, tip: &Sha256dHash) -> Result<Vec<BlockHeader>, SPVError> {
         let mut result = Vec::new();
         let mut current = *tip;
         while current != *genesis {
             let header = self.get_header(&current)?;
-            result.push (header);
+            result.push(header);
             current = header.prev_blockhash;
         }
         result.reverse();
@@ -264,7 +263,7 @@ impl<'a> DBTX<'a> {
 pub struct HeadersIterator<'a> {
     genesis: Sha256dHash,
     current: Sha256dHash,
-    tx: &'a DBTX<'a>
+    tx: &'a DBTX<'a>,
 }
 
 impl<'a> Iterator for HeadersIterator<'a> {
@@ -273,8 +272,7 @@ impl<'a> Iterator for HeadersIterator<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         if self.current == self.genesis {
             None
-        }
-        else {
+        } else {
             if let Result::Ok(header) = self.tx.get_header(&self.current) {
                 self.current = header.prev_blockhash;
                 Some(header)
@@ -300,15 +298,14 @@ fn encode<T: ? Sized>(data: &T) -> Result<Vec<u8>, SPVError>
         .map_err(|_| { Error::InvalidParameterName("serialization error".to_owned()) })?)
 }
 
+
 #[cfg(test)]
 mod test {
-
     use bitcoin::blockdata::constants;
     use bitcoin::network;
     use bitcoin::network::serialize::BitcoinHash;
     use bitcoin::util::hash::Sha256dHash;
     use super::DB;
-
 
     #[test]
     fn test_db1() {

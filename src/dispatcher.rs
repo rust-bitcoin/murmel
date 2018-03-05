@@ -94,7 +94,7 @@ impl Dispatcher {
                         // regular processing
                         if node.has_peer(&remote_addr) {
                             // forward to local node for processing
-                            Ok(node.process (&msg, &remote_addr)?)
+                            Ok(node.process(&msg, &remote_addr)?)
                         } else {
                             trace!("received {} from unknown peer={}", msg.command(), remote_addr);
                             Err(io::Error::new(io::ErrorKind::Other, format!("message from unknown peer={}", remote_addr)))
@@ -126,7 +126,7 @@ impl Dispatcher {
                                                 tx.clone(),
                                                 local_addr,
                                                 remote_addr,
-                                                version.clone()
+                                                version.clone(),
                                             ),
                                         );
                                         info!("Connected {} height: {} peer={}", version.user_agent, version.start_height, remote_addr);
