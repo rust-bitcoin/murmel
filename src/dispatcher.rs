@@ -12,7 +12,6 @@
 //See the License for the specific language governing permissions and
 //limitations under the License.
 use bitcoin::network::address::Address;
-use bitcoin::network::constants::magic;
 use bitcoin::network::message::NetworkMessage;
 use bitcoin::network::message::RawNetworkMessage;
 use bitcoin::network::message_network::VersionMessage;
@@ -23,7 +22,6 @@ use node::{Node, Peer};
 use std::io;
 use std::net::SocketAddr;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use tokio::net::TcpStream;
@@ -67,7 +65,7 @@ impl Dispatcher {
         trace!("starting peer={}", addr);
 
         // magic number of the network, the start of every message
-        let magic = magic(node.network);
+        let magic = node.get_magic();
 
         // connect to peer
         let client = TcpStream::connect(&addr).and_then(move |socket| {
@@ -94,16 +92,9 @@ impl Dispatcher {
                 } else {
                     if got_version && got_verack {
                         // regular processing
-                        if let Some(peer) = node.peers.lock().unwrap().get(&remote_addr) {
-                            trace!("received {} peer={}", msg.command(), peer.remote_addr);
-
+                        if node.has_peer(&remote_addr) {
                             // forward to local node for processing
-                            let result = node.process (&msg, peer);
-                            if result.is_err() {
-                                info!("node.process returned with {:?} for peer={}", result, peer.remote_addr);
-                            }
-
-                            Ok(result?)
+                            Ok(node.process (&msg, &remote_addr)?)
                         } else {
                             trace!("received {} from unknown peer={}", msg.command(), remote_addr);
                             Err(io::Error::new(io::ErrorKind::Other, format!("message from unknown peer={}", remote_addr)))
@@ -114,7 +105,7 @@ impl Dispatcher {
                             NetworkMessage::Version(version) => {
                                 got_version = true;
 
-                                if version.nonce == node.nonce {
+                                if version.nonce == node.get_nonce() {
                                     warn!("connected to myself?");
                                     Err(io::Error::new(io::ErrorKind::Other, format!("connect to myself peer={}", remote_addr)))
                                 } else {
@@ -130,14 +121,13 @@ impl Dispatcher {
                                         Err(io::Error::new(io::ErrorKind::Other, format!("not a useful full node peer={}", remote_addr)))
                                     } else {
                                         // all right, remember this peer
-                                        node.peers.lock().unwrap().insert(
-                                            remote_addr, Peer {
-                                                tx: tx.clone(),
+                                        node.add_peer(
+                                            &remote_addr, Peer::new(
+                                                tx.clone(),
                                                 local_addr,
                                                 remote_addr,
-                                                version: version.clone(),
-                                                banscore: AtomicUsize::new(0),
-                                            },
+                                                version.clone()
+                                            ),
                                         );
                                         info!("Connected {} height: {} peer={}", version.user_agent, version.start_height, remote_addr);
                                         Ok(())
@@ -155,11 +145,11 @@ impl Dispatcher {
                             }
                         };
                         if let Ok(_) = handshake {
-                            if let Some(peer) = node.peers.lock().unwrap().get(&remote_addr) {
+                            if let Some(peer_height) = node.get_peer_height(&remote_addr) {
                                 if got_version && got_verack &&
-                                    peer.version.start_height > node.height.load(Ordering::Relaxed) as i32 {
+                                    peer_height > node.get_height() {
                                     // if peer claims to have longer chain then ask for headers
-                                    Ok(node.get_headers(peer)?)
+                                    Ok(node.get_headers_at_connect(&remote_addr)?)
                                 } else {
                                     handshake
                                 }
@@ -196,9 +186,9 @@ impl Dispatcher {
             timestamp,
             receiver: Dispatcher::address_for_socket(1, remote),
             sender: Dispatcher::address_for_socket(0, local),
-            nonce: node.nonce,
+            nonce: node.get_nonce(),
             user_agent: "SPV".to_owned(),
-            start_height: node.height.load(Ordering::Relaxed) as i32,
+            start_height: node.get_height() as i32,
             relay: false,
         }))
     }

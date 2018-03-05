@@ -13,7 +13,7 @@
 //limitations under the License.
 
 use std::sync::Weak;
-use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use bitcoin::blockdata::block::{Block, BlockHeader};
 use bitcoin::blockdata::transaction::Transaction;
@@ -26,7 +26,6 @@ use node::Broadcaster;
 pub struct LightningConnector {
     util: ChainWatchInterfaceUtil,
     watch: AtomicUsize,
-    see_all: AtomicBool,
     broadcaster: Broadcaster
 }
 
@@ -35,7 +34,6 @@ impl LightningConnector {
         LightningConnector{
             util: ChainWatchInterfaceUtil::new(),
             watch: AtomicUsize::new(1),
-            see_all: AtomicBool::new(false),
             broadcaster
         }
     }
@@ -46,9 +44,8 @@ impl LightningConnector {
         while last_seen != watch {
             let mut matched = Vec::new();
             let mut matched_index = Vec::new();
-            let see_all = self.see_all.load(Ordering::Relaxed);
             for (index, transaction) in block.txdata.iter().enumerate() {
-                if see_all || self.util.does_match_tx(transaction) {
+                if self.util.does_match_tx(transaction) {
                     matched.push(transaction);
                     matched_index.push(index as u32);
                 }
@@ -76,7 +73,7 @@ impl ChainWatchInterface for LightningConnector {
     }
 
     fn watch_all_txn(&self) {
-        self.see_all.store(true, Ordering::Relaxed);
+        self.util.watch_all_txn();
         self.watch.fetch_add(1, Ordering::Relaxed);
     }
 

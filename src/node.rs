@@ -42,22 +42,41 @@ use connector::LightningConnector;
 
 /// a connected peer
 pub struct Peer {
-    pub tx: Tx,
-    pub local_addr: SocketAddr,
-    pub remote_addr: SocketAddr,
-    pub version: VersionMessage,
-    pub banscore: AtomicUsize,
+    tx: Tx,
+    local_addr: SocketAddr,
+    remote_addr: SocketAddr,
+    version: VersionMessage,
+    banscore: AtomicUsize,
+}
+
+impl Peer {
+    pub fn new (tx: Tx, local_addr: SocketAddr, remote_addr: SocketAddr, version: VersionMessage) -> Peer {
+        Peer {
+            tx, local_addr, remote_addr, version, banscore: AtomicUsize::new(0)
+        }
+    }
+
+    /// increment ban score for a misbehaving peer. Ban if score reaches 100
+    fn ban(peer: &Peer, addscore: u16) -> Result<(), io::Error> {
+        let oldscore = peer.banscore.fetch_add(addscore as usize, Ordering::Relaxed);
+        if oldscore + addscore as usize >= 100 {
+            info!("banned peer={}", peer.remote_addr);
+            Err(io::Error::new(io::ErrorKind::Other, format!("banned peer={}", peer.remote_addr)))
+        } else {
+            Ok(())
+        }
+    }
 }
 
 /// The local node processing incoming messages
 pub struct Node {
-    pub network: Network,
-    pub height: AtomicUsize,
-    pub nonce: u64,
-    pub peers: Arc<Mutex<HashMap<SocketAddr, Peer>>>,
-    pub blockchain: Mutex<Blockchain>,
-    pub db: Mutex<DB>,
-    pub connector: LightningConnector
+    network: Network,
+    height: AtomicUsize,
+    nonce: u64,
+    peers: Arc<Mutex<HashMap<SocketAddr, Peer>>>,
+    blockchain: Mutex<Blockchain>,
+    db: Mutex<DB>,
+    connector: LightningConnector
 }
 
 
@@ -102,7 +121,15 @@ impl Node {
     }
 
     /// Process incoming messages
-    pub fn process(&self, msg: &RawNetworkMessage, peer: &Peer) -> Result<(), SPVError> {
+    pub fn process(&self, msg: &RawNetworkMessage, remote_addr: &SocketAddr) -> Result<(), SPVError> {
+        if let Some (peer) = self.peers.lock().unwrap().get(remote_addr) {
+            self.process_for_peer (msg, peer)
+        } else {
+            Err(SPVError::Generic(format!("unknwon peer {}", *remote_addr)))
+        }
+    }
+
+    fn process_for_peer (&self, msg: &RawNetworkMessage, peer: &Peer) -> Result<(), SPVError> {
         match msg.payload {
             // reply top ping with pong
             NetworkMessage::Ping(nonce) => {
@@ -128,13 +155,12 @@ impl Node {
                             let old_tip = blockchain.best_tip_hash();
                             // add to in-memory blockchain - this also checks proof of work
                             if blockchain.add_header(header.header).is_ok() {
-
-                                let new_tip = blockchain.best_tip_hash ();
+                                let new_tip = blockchain.best_tip_hash();
                                 let header_hash = header.header.bitcoin_hash();
                                 let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as u32;
-                                if header.header.time > now - 60*60*24 && new_tip ==  header_hash {
+                                if header.header.time > now - 60 * 60 * 24 && new_tip == header_hash {
                                     // if not older than a day and extending the trunk then ask for the block
-                                    ask_for_blocks.push (new_tip);
+                                    ask_for_blocks.push(new_tip);
                                 }
 
                                 tx.insert_header(&header.header)?;
@@ -213,7 +239,7 @@ impl Node {
     }
 
     /// get the blocks we are interested in
-    pub fn get_blocks(&self, peer: &Peer, blocks: Vec<Sha256dHash>) -> Result<(), SPVError> {
+    fn get_blocks(&self, peer: &Peer, blocks: Vec<Sha256dHash>) -> Result<(), SPVError> {
         let mut invs = Vec::new();
         for b in blocks {
             invs.push(Inventory{
@@ -224,8 +250,16 @@ impl Node {
         self.reply(peer, &NetworkMessage::GetData(invs))
     }
 
+    pub fn get_headers_at_connect(&self, remote_addr: &SocketAddr) -> Result<(), SPVError>  {
+        if let Some (peer) = self.peers.lock().unwrap().get(&remote_addr) {
+            self.get_headers (peer)
+        } else {
+            Err(SPVError::Generic(format!("unknown peer {}", *remote_addr)))
+        }
+    }
+
     /// get headers this peer is ahead of us
-    pub fn get_headers(&self, peer: &Peer) -> Result<(), SPVError> {
+    fn get_headers(&self, peer: &Peer) -> Result<(), SPVError> {
         let locator = self.blockchain.lock().unwrap().locator_hashes();
         let last = if locator.len() > 0 {
             *locator.last().unwrap()
@@ -247,12 +281,12 @@ impl Node {
     }
 
     /// send a new transaction to all peers
-    pub fn send_transaction (&self, tx : Transaction) -> Result <(), SPVError> {
+    fn send_transaction (&self, tx : Transaction) -> Result <(), SPVError> {
         self.broadcast (&NetworkMessage::Tx(tx))
     }
 
     /// send the same message to all connected peers
-    pub fn broadcast (&self, msg: &NetworkMessage) -> Result <(), SPVError> {
+    fn broadcast (&self, msg: &NetworkMessage) -> Result <(), SPVError> {
         for (_, peer) in self.peers.lock().unwrap().iter() {
             self.reply(peer, msg)?;
         }
@@ -264,15 +298,33 @@ impl Node {
         RawNetworkMessage { magic: magic(self.network), payload: payload.clone() }
     }
 
-    /// increment ban score for a misbehaving peer. Ban if score reaches 100
-    pub fn ban(peer: &Peer, addscore: u16) -> Result<(), io::Error> {
-        let oldscore = peer.banscore.fetch_add(addscore as usize, Ordering::Relaxed);
-        if oldscore + addscore as usize >= 100 {
-            info!("banned peer={}", peer.remote_addr);
-            Err(io::Error::new(io::ErrorKind::Other, format!("banned peer={}", peer.remote_addr)))
+    pub fn get_magic (&self) -> u32 {
+        magic(self.network)
+    }
+
+    pub fn get_peer_height (&self, remote_addr: &SocketAddr) -> Option<u32> {
+        if let Some (peer) = self.peers.lock().unwrap().get(&remote_addr) {
+            Some(peer.version.start_height as u32)
         } else {
-            Ok(())
+            None
         }
+    }
+
+    pub fn has_peer (&self, remote_addr: &SocketAddr) -> bool {
+        self.peers.lock().unwrap().contains_key(remote_addr)
+    }
+
+
+    pub fn add_peer (&self, remote_addr: &SocketAddr, peer: Peer) {
+        self.peers.lock().unwrap().insert(*remote_addr, peer);
+    }
+
+    pub fn get_nonce (&self) -> u64 {
+        self.nonce
+    }
+
+    pub fn get_height (&self) -> u32 {
+        self.height.load (Ordering::Relaxed) as u32
     }
 }
 

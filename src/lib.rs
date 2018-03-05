@@ -26,7 +26,7 @@ extern crate tokio;
 extern crate tokio_core;
 extern crate tokio_io;
 
-mod codec;
+pub mod codec;
 pub mod node;
 pub mod database;
 pub mod error;
