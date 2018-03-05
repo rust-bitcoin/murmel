@@ -39,6 +39,7 @@ lazy_static! {
 }
 
 use connector::LightningConnector;
+use lightning::chain::chaininterface::ChainWatchInterface;
 
 /// a connected peer
 pub struct Peer {
@@ -325,6 +326,10 @@ impl Node {
 
     pub fn get_height (&self) -> u32 {
         self.height.load (Ordering::Relaxed) as u32
+    }
+
+    pub fn get_chain_watch_interface (&self) -> &ChainWatchInterface {
+        &self.connector
     }
 }
 

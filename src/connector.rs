@@ -23,6 +23,7 @@ use bitcoin::util::hash::Sha256dHash;
 use lightning::chain::chaininterface::{ChainListener, ChainWatchInterface, ChainWatchInterfaceUtil};
 use node::Broadcaster;
 
+/// implements the ChainWatchInterface required by rust-lightning projec
 pub struct LightningConnector {
     util: ChainWatchInterfaceUtil,
     watch: AtomicUsize,
@@ -41,6 +42,7 @@ impl LightningConnector {
     pub fn block_connected (&self, block: &Block, height: u32) {
         let mut watch = self.watch.load (Ordering::Relaxed);
         let mut last_seen = 0;
+        // re-scan if new watch added during previous scan
         while last_seen != watch {
             let mut matched = Vec::new();
             let mut matched_index = Vec::new();
