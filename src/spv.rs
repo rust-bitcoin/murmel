@@ -21,16 +21,16 @@ impl SPV {
     // The method will read previously stored headers from the database and sync up with the peers
     // then serve the returned ChainWatchInterface
     pub fn new(network: Network, peers: Vec<SocketAddr>, db: &Path) -> Result<Arc<ChainWatchInterface>, SPVError> {
-        let mut db = DB::new(Path::new("/tmp/blocks.sqlite"))?;
+        let mut db = DB::new(db)?;
         create_tables(&mut db)?;
-        let node = Rc::new(Node::new(Network::Bitcoin, db));
+        let node = Rc::new(Node::new(network, db));
         node.load_headers()?;
-
-        let dispatcher = Dispatcher::new(node.clone());
 
         let mut core = Core::new()?;
         let handle = core.handle();
-        core.run(dispatcher.run(handle, &peers))?;
+
+        let dispatcher = Dispatcher::new(node.clone(), handle.clone());
+        core.run(dispatcher.run( peers))?;
         Ok(node.get_chain_watch_interface())
     }
 }

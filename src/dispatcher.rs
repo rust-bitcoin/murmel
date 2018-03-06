@@ -33,36 +33,40 @@ pub type Tx = mpsc::UnboundedSender<RawNetworkMessage>;
 
 /// Connect and communicate with peers and dispatch messages to code of the local node.
 pub struct Dispatcher {
-    node: Rc<Node>
+    node: Rc<Node>,
+    handle: Handle
 }
 
 impl Dispatcher {
     /// Create a new dispatcher for the local node
-    pub fn new(node: Rc<Node>) -> Dispatcher {
-        Dispatcher { node: node.clone() }
+    pub fn new(node: Rc<Node>, handle: Handle) -> Dispatcher {
+        Dispatcher { node: node.clone(), handle }
     }
 
     /// Start and connect with a known set of peers
-    pub fn run(&self, handle: Handle, addrs: &Vec<SocketAddr>) -> Box<Future<Item=(), Error=io::Error>> {
+    pub fn run(&self, addrs: Vec<SocketAddr>) -> Box<Future<Item=(), Error=io::Error>> {
         // attempt to start clients specified by addrs (bootstrap address)
         for addr in addrs {
-            Dispatcher::start_peer(self.node.clone(), handle.clone(), *addr);
+            self.start_peer(addr);
         }
         Box::new(Forever)
     }
 
     /// add another peer
-    fn start_peer(inner: Rc<Node>, handle: Handle, addr: SocketAddr) {
-        handle.spawn(Dispatcher::peer(inner, handle.clone(), &addr).then(move |x| {
+    pub fn start_peer(&self, addr: SocketAddr) {
+        self.handle.spawn(self.compile_peer_future(&addr).then(move |x| {
             trace!("client finished {:?} peer={}", x, addr);
             Ok(())
         }));
     }
 
     /// compile the future that dispatches to a peer
-    fn peer(node: Rc<Node>, handle: Handle, addr: &SocketAddr)
-            -> Box<Future<Item=(), Error=io::Error>> {
+    fn compile_peer_future(&self, addr: &SocketAddr)
+                           -> Box<Future<Item=(), Error=io::Error>> {
         trace!("starting peer={}", addr);
+
+        let node = self.node.clone();
+        let handle = self.handle.clone();
 
         // magic number of the network, the start of every message
         let magic = node.get_magic();
