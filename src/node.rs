@@ -33,6 +33,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
+use std::sync::RwLock;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -77,7 +78,7 @@ pub struct Node {
     network: Network,
     height: AtomicUsize,
     nonce: u64,
-    peers: Arc<Mutex<HashMap<SocketAddr, Peer>>>,
+    peers: Arc<RwLock<HashMap<SocketAddr, Peer>>>,
     blockchain: Mutex<Blockchain>,
     db: Mutex<DB>,
     connector: Arc<LightningConnector>,
@@ -87,7 +88,7 @@ pub struct Node {
 impl Node {
     /// Create a new local node for a network that uses the given database
     pub fn new(network: Network, db: DB) -> Node {
-        let peers = Arc::new(Mutex::new(HashMap::new()));
+        let peers = Arc::new(RwLock::new(HashMap::new()));
         let connector = LightningConnector::new(
             Broadcaster::new(peers.clone(), magic(network)));
         Node {
@@ -125,7 +126,7 @@ impl Node {
 
     /// Process incoming messages
     pub fn process(&self, msg: &RawNetworkMessage, remote_addr: &SocketAddr) -> Result<(), SPVError> {
-        if let Some(peer) = self.peers.lock().unwrap().get(remote_addr) {
+        if let Some(peer) = self.peers.read().unwrap().get(remote_addr) {
             self.process_for_peer(msg, peer)
         } else {
             Err(SPVError::Generic(format!("unknwon peer {}", *remote_addr)))
@@ -254,7 +255,7 @@ impl Node {
     }
 
     pub fn get_headers_at_connect(&self, remote_addr: &SocketAddr) -> Result<(), SPVError> {
-        if let Some(peer) = self.peers.lock().unwrap().get(&remote_addr) {
+        if let Some(peer) = self.peers.read().unwrap().get(&remote_addr) {
             self.get_headers(peer)
         } else {
             Err(SPVError::Generic(format!("unknown peer {}", *remote_addr)))
@@ -290,7 +291,7 @@ impl Node {
 
     /// send the same message to all connected peers
     fn broadcast(&self, msg: &NetworkMessage) -> Result<(), SPVError> {
-        for (_, peer) in self.peers.lock().unwrap().iter() {
+        for (_, peer) in self.peers.read().unwrap().iter() {
             self.reply(peer, msg)?;
         }
         Ok(())
@@ -306,7 +307,7 @@ impl Node {
     }
 
     pub fn get_peer_height(&self, remote_addr: &SocketAddr) -> Option<u32> {
-        if let Some(peer) = self.peers.lock().unwrap().get(&remote_addr) {
+        if let Some(peer) = self.peers.read().unwrap().get(&remote_addr) {
             Some(peer.version.start_height as u32)
         } else {
             None
@@ -314,7 +315,7 @@ impl Node {
     }
 
     pub fn add_peer(&self, remote_addr: &SocketAddr, peer: Peer) {
-        self.peers.lock().unwrap().insert(*remote_addr, peer);
+        self.peers.write().unwrap().insert(*remote_addr, peer);
     }
 
     pub fn get_nonce(&self) -> u64 {
@@ -332,18 +333,18 @@ impl Node {
 
 /// a helper class to implement LightningConnector
 pub struct Broadcaster {
-    peers: Arc<Mutex<HashMap<SocketAddr, Peer>>>,
+    peers: Arc<RwLock<HashMap<SocketAddr, Peer>>>,
     magic: u32,
 }
 
 impl Broadcaster {
-    pub fn new(peers: Arc<Mutex<HashMap<SocketAddr, Peer>>>, magic: u32) -> Broadcaster {
+    pub fn new(peers: Arc<RwLock<HashMap<SocketAddr, Peer>>>, magic: u32) -> Broadcaster {
         Broadcaster { peers, magic }
     }
 
     pub fn broadcast(&self, tx: &Transaction) -> Result<(), SPVError> {
         let msg = NetworkMessage::Tx((*tx).clone());
-        for (_, peer) in self.peers.lock().unwrap().iter() {
+        for (_, peer) in self.peers.read().unwrap().iter() {
             if peer.tx.unbounded_send(RawNetworkMessage { magic: self.magic, payload: msg.clone() }).is_err() {
                 return Err(SPVError::Generic(format!("can not speak to peer={}", peer.remote_addr)));
             }
