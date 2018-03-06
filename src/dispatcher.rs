@@ -92,13 +92,7 @@ impl Dispatcher {
                 } else {
                     if got_version && got_verack {
                         // regular processing
-                        if node.has_peer(&remote_addr) {
-                            // forward to local node for processing
-                            Ok(node.process(&msg, &remote_addr)?)
-                        } else {
-                            trace!("received {} from unknown peer={}", msg.command(), remote_addr);
-                            Err(io::Error::new(io::ErrorKind::Other, format!("message from unknown peer={}", remote_addr)))
-                        }
+                        Ok(node.process(&msg, &remote_addr)?)
                     } else {
                         // handshake
                         let handshake = match msg.payload {

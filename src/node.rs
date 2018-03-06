@@ -313,11 +313,6 @@ impl Node {
         }
     }
 
-    pub fn has_peer(&self, remote_addr: &SocketAddr) -> bool {
-        self.peers.lock().unwrap().contains_key(remote_addr)
-    }
-
-
     pub fn add_peer(&self, remote_addr: &SocketAddr, peer: Peer) {
         self.peers.lock().unwrap().insert(*remote_addr, peer);
     }
