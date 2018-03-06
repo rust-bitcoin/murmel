@@ -15,10 +15,10 @@ I plan to implement BIP157 and BIP158 as soon as they are available in Bitcoin. 
 ## Contributions and Vision
 The current plan is to create a small footprint, low bandwidth, stable and secure Lightning Network node combining with the below projects:
 
-* [Rust language bindings for Bitcoin secp256k1 library.](https://github.com/apoelstra/rust-secp256k1)
-* [Rust Bitcoin library](https://github.com/apoelstra/rust-bitcoin)
-* [Bitcoin's libbitcoinconsenus.a with Rust binding.](https://github.com/tamasblummer/rust-bitcoinconsensus)
-* [Bitcoin SPV in Rust](https://github.com/tamasblummer/bitcoin-spv)
-* [Rust-Lightning, not Rusty's Lightning](https://github.com/TheBlueMatt/rust-lightning)
+* [Rust language bindings for Bitcoin secp256k1 library.](https://github.com/rust-bitcoin/rust-secp256k1)
+* [Rust Bitcoin library](https://github.com/rust-bitcoin/rust-bitcoin)
+* [Bitcoin's libbitcoinconsenus.a with Rust binding.](https://github.com/rust-bitcoin/rust-bitcoinconsensus)
+* [Bitcoin SPV in Rust](https://github.com/rust-bitcoin/bitcoin-spv)
+* [Rust-Lightning, not Rusty's Lightning](https://github.com/rust-bitcoin/rust-lightning)
 
-Send me your PRs if aligned with above vision.
+Send in your PRs if aligned with above vision.
