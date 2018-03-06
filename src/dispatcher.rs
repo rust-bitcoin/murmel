@@ -138,18 +138,10 @@ impl Dispatcher {
                                 Err(io::Error::new(io::ErrorKind::Other, format!("misbehaving peer={}", remote_addr)))
                             }
                         };
-                        if let Ok(_) = handshake {
-                            if let Some(peer_height) = node.get_peer_height(&remote_addr) {
-                                if got_version && got_verack &&
-                                    peer_height > node.get_height() {
-                                    // if peer claims to have longer chain then ask for headers
-                                    Ok(node.get_headers_at_connect(&remote_addr)?)
-                                } else {
-                                    handshake
-                                }
-                            } else {
-                                handshake
-                            }
+                        if handshake.is_ok() && got_version && got_verack
+                            && node.get_peer_height(&remote_addr).unwrap_or(0) > node.get_height() {
+                            // if peer claims to have longer chain then ask for headers
+                            Ok(node.get_headers_at_connect(&remote_addr)?)
                         } else {
                             handshake
                         }
