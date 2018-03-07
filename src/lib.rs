@@ -14,7 +14,6 @@
 extern crate bitcoin;
 extern crate bytes;
 extern crate futures;
-extern crate futures_cpupool;
 #[macro_use]
 extern crate lazy_static;
 extern crate libc;
@@ -24,7 +23,6 @@ extern crate log;
 extern crate rand;
 extern crate rusqlite;
 extern crate tokio;
-extern crate tokio_core;
 extern crate tokio_io;
 
 pub mod codec;

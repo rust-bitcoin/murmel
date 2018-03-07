@@ -19,7 +19,6 @@ extern crate log;
 extern crate rand;
 extern crate simple_logger;
 extern crate tokio;
-extern crate tokio_core;
 extern crate tokio_io;
 
 use bitcoin::network::constants::Network;
