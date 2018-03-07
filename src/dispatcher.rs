@@ -25,8 +25,8 @@ use std::rc::Rc;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use tokio::net::TcpStream;
-use tokio_core::reactor::Handle;
 use tokio_io::AsyncRead;
+use tokio::executor::current_thread;
 
 /// Type of tehe write side of the channel to a peer
 pub type Tx = mpsc::UnboundedSender<RawNetworkMessage>;
@@ -34,27 +34,27 @@ pub type Tx = mpsc::UnboundedSender<RawNetworkMessage>;
 /// Connect and communicate with peers and dispatch messages to code of the local node.
 pub struct Dispatcher {
     node: Rc<Node>,
-    handle: Handle
+    peers: Vec<SocketAddr>
 }
 
 impl Dispatcher {
     /// Create a new dispatcher for the local node
-    pub fn new(node: Rc<Node>, handle: Handle) -> Dispatcher {
-        Dispatcher { node: node.clone(), handle }
+    pub fn new(node: Rc<Node>, peers: Vec<SocketAddr>) -> Dispatcher {
+        Dispatcher { node: node.clone(), peers }
     }
 
     /// Start and connect with a known set of peers
-    pub fn run(&self, addrs: Vec<SocketAddr>) -> Box<Future<Item=(), Error=io::Error>> {
+    pub fn run(&self) -> Box<Future<Item=(), Error=()>> {
         // attempt to start clients specified by addrs (bootstrap address)
-        for addr in addrs {
-            self.start_peer(addr);
+        for addr in &self.peers {
+            self.start_peer(*addr);
         }
         Box::new(Forever)
     }
 
     /// add another peer
     pub fn start_peer(&self, addr: SocketAddr) {
-        self.handle.spawn(self.compile_peer_future(&addr).then(move |x| {
+        current_thread::spawn(self.compile_peer_future(&addr).then(move |x| {
             trace!("client finished {:?} peer={}", x, addr);
             Ok(())
         }));
@@ -66,7 +66,6 @@ impl Dispatcher {
         trace!("starting peer={}", addr);
 
         let node = self.node.clone();
-        let handle = self.handle.clone();
 
         // magic number of the network, the start of every message
         let magic = node.get_magic();
@@ -153,13 +152,13 @@ impl Dispatcher {
                 }
             });
             // activate above reading future
-            handle.spawn(read.then(|_| Ok(())));
+            current_thread::spawn(read.then(|_| Ok(())));
 
             // send everything in rx to sink
             let write = sink.send_all(rx.map_err(move |()| {
                 io::Error::new(io::ErrorKind::Other, format!("rx failed peer={}", remote_addr.clone()))
             }));
-            handle.spawn(write.then(|_| Ok(())));
+            current_thread::spawn(write.then(|_| Ok(())));
 
             Ok(())
         });
@@ -197,7 +196,7 @@ struct Forever;
 
 impl Future for Forever {
     type Item = ();
-    type Error = io::Error;
+    type Error = ();
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         Ok(Async::NotReady)

@@ -14,6 +14,7 @@
 extern crate bitcoin;
 extern crate bytes;
 extern crate futures;
+extern crate futures_cpupool;
 #[macro_use]
 extern crate lazy_static;
 extern crate libc;

@@ -109,8 +109,13 @@ impl Node {
         let tx = db.transaction()?;
         if let Ok(tip) = tx.get_tip() {
             let mut n = 0;
+            let genesis = genesis_block(self.network);
             let mut blockchain = self.blockchain.lock().unwrap();
-            for header in tx.get_headers(&genesis_block(self.network).bitcoin_hash(), &tip)? {
+            blockchain.add_header(genesis.header);
+            info!("reading headers ...");
+            let headers = tx.get_headers(&genesis.bitcoin_hash(), &tip)?;
+            info!("building in-memory header chain ...");
+            for header in headers {
                 if blockchain.add_header(header).is_ok() {
                     n += 1;
                 }

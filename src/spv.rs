@@ -8,9 +8,12 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
-use tokio_core::reactor::Core;
+use tokio::executor::current_thread;
 
-pub struct SPV;
+pub struct SPV {
+    node: Rc<Node>,
+    dispatcher: Dispatcher
+}
 
 impl SPV {
     // Initialize the SPV stack and return a ChainWatchInterface
@@ -20,18 +23,24 @@ impl SPV {
     //      db - file path to store the headers and blocks database
     // The method will read previously stored headers from the database and sync up with the peers
     // then serve the returned ChainWatchInterface
-    pub fn new(network: Network, peers: Vec<SocketAddr>, db: &Path) -> Result<Arc<ChainWatchInterface>, SPVError> {
+    pub fn new(network: Network, peers: Vec<SocketAddr>, db: &Path) -> Result<SPV, SPVError> {
         let mut db = DB::new(db)?;
         create_tables(&mut db)?;
         let node = Rc::new(Node::new(network, db));
-        node.load_headers()?;
+        let dispatcher = Dispatcher::new(node.clone(), peers);
+        Ok(SPV{node, dispatcher})
+    }
 
-        let mut core = Core::new()?;
-        let handle = core.handle();
+    pub fn get_chain_watch_interface (&self) -> Arc<ChainWatchInterface> {
+        return self.node.get_chain_watch_interface()
+    }
 
-        let dispatcher = Dispatcher::new(node.clone(), handle.clone());
-        core.run(dispatcher.run( peers))?;
-        Ok(node.get_chain_watch_interface())
+    pub fn run (&self) -> Result<(), SPVError> {
+        self.node.load_headers()?;
+        current_thread::run (|_| {
+            current_thread::spawn(self.dispatcher.run())
+        });
+        Ok(())
     }
 }
 
