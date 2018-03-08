@@ -13,67 +13,30 @@
 //limitations under the License.
 use rusqlite;
 use std::convert;
-use std::error::Error;
-use std::fmt;
 use std::io;
 use std::net::SocketAddr;
+use failure::Fail;
 
 /// An error class to offer a unified error interface upstream
+#[derive(Debug, Fail)]
 pub enum SPVError {
+    #[fail(display = "Generic: {}", _0)]
     Generic(String),
+    #[fail(display = "Misbehaving: {} peer={}", _1, _2)]
     Misbehaving(u16, String, SocketAddr),
-    IO(io::Error),
-    DB(rusqlite::Error),
+    #[fail(display = "IO error: {}", _0)]
+    IO(#[cause] io::Error),
+    #[fail(display = "DB error: {}", _0)]
+    DB(#[cause] rusqlite::Error),
+    #[fail(display = "Panic: {}", _0)]
     Panic(String),
-}
-
-impl Error for SPVError {
-    fn description(&self) -> &str {
-        match *self {
-            SPVError::Generic(ref s) => s.as_str(),
-            SPVError::Misbehaving(_, ref reason, _) => reason.as_str(),
-            SPVError::IO(ref err) => err.description(),
-            SPVError::Panic(ref reason) => reason.as_str(),
-            SPVError::DB(ref err) => err.description()
-        }
-    }
-
-    fn cause(&self) -> Option<&Error> {
-        match *self {
-            SPVError::Generic(_) => None,
-            SPVError::IO(ref err) => Some(err),
-            SPVError::Misbehaving(_, _, _) => None,
-            SPVError::Panic(_) => None,
-            SPVError::DB(ref err) => Some(err)
-        }
-    }
-}
-
-impl fmt::Display for SPVError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match *self {
-            // Both underlying errors already impl `Display`, so we defer to
-            // their implementations.
-            SPVError::Generic(ref s) => write!(f, "Generic: {}", s),
-            SPVError::IO(ref err) => write!(f, "IO error: {}", err),
-            SPVError::Misbehaving(_, ref reason, ref peer) => write!(f, "Misbehaving: {} peer={}", reason, peer),
-            SPVError::Panic(ref reason) => write!(f, "Panic: {}", reason),
-            SPVError::DB(ref err) => write!(f, "DB error: {}", err),
-        }
-    }
-}
-
-impl fmt::Debug for SPVError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        (self as &fmt::Display).fmt(f)
-    }
 }
 
 impl convert::From<SPVError> for io::Error {
     fn from(err: SPVError) -> io::Error {
         match err {
             SPVError::IO(e) => e,
-            _ => io::Error::new(io::ErrorKind::Other, err.description())
+            _ => io::Error::new(io::ErrorKind::Other, err.compat())
         }
     }
 }
@@ -89,5 +52,3 @@ impl convert::From<rusqlite::Error> for SPVError {
         SPVError::DB(err)
     }
 }
-
-
