@@ -16,7 +16,7 @@ use bitcoin::network::message::NetworkMessage;
 use bitcoin::network::message::RawNetworkMessage;
 use bitcoin::network::message_network::VersionMessage;
 use codec::BitcoinCodec;
-use futures::{Async, Future, Poll, Sink, Stream};
+use futures::{future, Future, Sink, Stream};
 use futures::sync::mpsc;
 use node::{Node, Peer};
 use std::io;
@@ -49,7 +49,7 @@ impl Dispatcher {
         for addr in &self.peers {
             self.start_peer(*addr);
         }
-        Box::new(Forever)
+        Box::new(future::empty())
     }
 
     /// add another peer
@@ -188,17 +188,5 @@ impl Dispatcher {
             SocketAddr::V6(ref addr) => (addr.ip().segments(), addr.port())
         };
         Address { services, address, port }
-    }
-}
-
-/// helper future that never finishes
-struct Forever;
-
-impl Future for Forever {
-    type Item = ();
-    type Error = ();
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        Ok(Async::NotReady)
     }
 }
