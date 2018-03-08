@@ -13,6 +13,8 @@
 //limitations under the License.
 extern crate bitcoin;
 extern crate bytes;
+#[macro_use]
+extern crate failure;
 extern crate futures;
 #[macro_use]
 extern crate lazy_static;

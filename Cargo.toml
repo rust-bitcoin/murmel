@@ -17,6 +17,7 @@ path = "src/lib.rs"
 [dependencies]
 bitcoin = "0.11.0"
 lightning = { git = "https://github.com/tamasblummer/rust-lightning", branch = "master" }
+failure = "0.1.1"
 tokio = "0.1"
 tokio-io = "0.1"
 futures = "0.1"
