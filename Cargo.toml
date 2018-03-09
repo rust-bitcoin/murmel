@@ -28,6 +28,3 @@ simple_logger = "0.5.0"
 time = "0.1.39"
 rusqlite = "0.13.0"
 libc = "0.2"
-
-[patch.crates-io]
-bitcoin = { git = "https://github.com/tamasblummer/rust-bitcoin", branch = "prs"  }
