@@ -15,8 +15,9 @@ name = "bitcoin_spv"
 path = "src/lib.rs"
 
 [dependencies]
-bitcoin = "0.11.0"
-lightning = { git = "https://github.com/rust-bitcoin/rust-lightning", branch = "master" }
+bitcoin = "0.11"
+bitcoin-chain = { git = "https://github.com/rust-bitcoin/rust-bitcoin-chain", branch = "master" }
+lightning = { git = "https://github.com/tamasblummer/rust-lightning", branch = "use_bitcoin_chain" }
 tokio = "0.1"
 tokio-io = "0.1"
 futures = "0.1"

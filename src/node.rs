@@ -12,7 +12,7 @@
 //See the License for the specific language governing permissions and
 //limitations under the License.
 
-use bitcoin::blockdata::blockchain::Blockchain;
+use bitcoin_chain::blockchain::Blockchain;
 use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::blockdata::transaction::Transaction;
 use bitcoin::network::constants::{magic, Network};
