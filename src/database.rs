@@ -112,7 +112,8 @@ impl<'a> DBTX<'a> {
 
         self.tx.execute("create table if not exists blk_tx (
                                 blk integer,
-                                tx integer
+                                tx integer,
+                                snr integer
                                 )", &[])?;
 
         self.tx.execute("create index if not exists blk_ix on blk_tx (blk)", &[])?;
@@ -219,9 +220,9 @@ impl<'a> DBTX<'a> {
         } else {
             hid = self.insert_header(&block.header)?;
         }
-        for transaction in &block.txdata {
+        for (nr, transaction) in block.txdata.iter().enumerate() {
             let tid = self.insert_transaction(transaction)?;
-            self.tx.execute("insert into blk_tx (blk, tx) values (?, ?)", &[&hid, &tid])?;
+            self.tx.execute("insert into blk_tx (blk, tx, snr) values (?, ?, ?)", &[&hid, &tid, &(nr as i64)])?;
         }
         info!("stored block {}", block.header.bitcoin_hash());
         Ok(())
@@ -231,7 +232,7 @@ impl<'a> DBTX<'a> {
     pub fn get_block(&self, hash: &Sha256dHash) -> Result<Block, SPVError> {
         let bid = self.get_id(hash)?;
         let header = self.get_header(hash)?;
-        let mut stmt = self.tx.prepare("select tx.data from blk_tx inner join tx where blk_tx.blk = ?")?;
+        let mut stmt = self.tx.prepare("select tx.data from blk_tx inner join tx on blk_tx.tx = tx.id where blk_tx.blk = ? order by blk_tx.snr")?;
         let iter = stmt.query_map(&[&bid], |row| { row.get(0) })?;
         let mut txdata: Vec<Transaction> = Vec::new();
         for data in iter {
