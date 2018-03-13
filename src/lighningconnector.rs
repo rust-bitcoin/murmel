@@ -3,15 +3,15 @@ use bitcoin::blockdata::script::Script;
 use bitcoin::util::hash::Sha256dHash;
 use lightning::chain::chaininterface::{ChainListener,ChainWatchInterface, ChainWatchInterfaceUtil};
 use node::Broadcaster;
-use std::sync::Weak;
+use std::sync::{Weak,Arc};
 
 pub struct LightningConnector {
     util: ChainWatchInterfaceUtil,
-    broadcaster: Broadcaster
+    broadcaster: Arc<Broadcaster>
 }
 
 impl LightningConnector {
-    pub fn new (broadcaster: Broadcaster) -> LightningConnector {
+    pub fn new (broadcaster: Arc<Broadcaster>) -> LightningConnector {
         LightningConnector {
             util: ChainWatchInterfaceUtil::new(),
             broadcaster
@@ -24,6 +24,10 @@ impl LightningConnector {
 
     pub fn block_disconnected(&self, header: &BlockHeader) {
         self.util.block_disconnected(header)
+    }
+
+    pub fn get_broadcaster (&self) -> Arc<Broadcaster> {
+        return self.broadcaster.clone();
     }
 }
 

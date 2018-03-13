@@ -91,7 +91,7 @@ impl Node {
     pub fn new(network: Network, db: DB) -> Node {
         let peers = Arc::new(RwLock::new(HashMap::new()));
         let connector = LightningConnector::new(
-            Broadcaster::new(peers.clone(), magic(network)));
+            Arc::new(Broadcaster::new(peers.clone(), magic(network))));
         Node {
             network,
             height: AtomicUsize::new(0),
@@ -333,6 +333,10 @@ impl Node {
 
     pub fn get_chain_watch_interface(&self) -> Arc<ChainWatchInterface> {
         self.connector.clone()
+    }
+
+    pub fn get_broadcaster (&self) -> Arc<Broadcaster> {
+        self.connector.get_broadcaster()
     }
 }
 
