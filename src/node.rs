@@ -21,14 +21,15 @@ use bitcoin::network::message_blockdata::*;
 use bitcoin::network::message_network::*;
 use bitcoin::network::serialize::BitcoinHash;
 use bitcoin::util::hash::Sha256dHash;
-use connector::LightningConnector;
 use database::DB;
 use dispatcher::Tx;
 use error::SPVError;
-use lightning::chain::chaininterface::ChainWatchInterface;
+use lightning::chain::chaininterface::{ChainWatchInterface, BroadcasterInterface};
+use lighningconnector::LightningConnector;
 use rand::{Rng, StdRng};
 use std::collections::HashMap;
 use std::io;
+use std::error::Error;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -345,12 +346,14 @@ impl Broadcaster {
     pub fn new(peers: Arc<RwLock<HashMap<SocketAddr, Peer>>>, magic: u32) -> Broadcaster {
         Broadcaster { peers, magic }
     }
+}
 
-    pub fn broadcast(&self, tx: &Transaction) -> Result<(), SPVError> {
+impl BroadcasterInterface for Broadcaster {
+    fn broadcast_transaction(&self, tx: &Transaction) -> Result<(), Box<Error>> {
         let msg = NetworkMessage::Tx((*tx).clone());
         for (_, peer) in self.peers.read().unwrap().iter() {
             if peer.tx.unbounded_send(RawNetworkMessage { magic: self.magic, payload: msg.clone() }).is_err() {
-                return Err(SPVError::Generic(format!("can not speak to peer={}", peer.remote_addr)));
+                return Err(Box::new(SPVError::Generic(format!("can not speak to peer={}", peer.remote_addr))));
             }
         }
         Ok(())

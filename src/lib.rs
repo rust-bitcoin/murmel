@@ -31,5 +31,5 @@ pub mod node;
 pub mod database;
 pub mod error;
 pub mod dispatcher;
-pub mod connector;
+pub mod lighningconnector;
 pub mod spv;

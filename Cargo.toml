@@ -17,7 +17,7 @@ path = "src/lib.rs"
 [dependencies]
 bitcoin = "0.11"
 bitcoin-chain = { git = "https://github.com/rust-bitcoin/rust-bitcoin-chain", branch = "master" }
-lightning = { git = "https://github.com/tamasblummer/rust-lightning", branch = "use_bitcoin_chain" }
+lightning = { git = "https://github.com/tamasblummer/rust-lightning", branch = "chaininterface" }
 tokio = "0.1"
 tokio-io = "0.1"
 futures = "0.1"
