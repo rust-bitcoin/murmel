@@ -152,7 +152,9 @@ impl Dispatcher {
                 }
             });
             // activate above reading future
-            current_thread::spawn(read.then(|_| Ok(())));
+            current_thread::spawn(read.then(move |_| {
+                Ok(info!("disconnected peer={}", remote_addr.clone()))
+            }));
 
             // send everything in rx to sink
             let write = sink.send_all(rx.map_err(move |()| {
