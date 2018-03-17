@@ -22,6 +22,7 @@ use node::{Node, Peer};
 use std::io;
 use std::net::SocketAddr;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use tokio::net::TcpStream;
@@ -49,7 +50,7 @@ impl Dispatcher {
         for addr in &self.peers {
             self.start_peer(*addr);
         }
-        Box::new(future::empty())
+        Box::new(future::ok(()))
     }
 
     /// add another peer
@@ -78,7 +79,7 @@ impl Dispatcher {
             // use the codec to split to messages
             let (sink, stream) = socket.framed(BitcoinCodec).split();
             // set up a channel that node code uses to send messages back to the peer
-            let (tx, rx) = mpsc::unbounded();
+            let (mut tx, rx) = mpsc::unbounded();
 
             // first send a version message. This must be the first step for an out bound connection.
             tx.unbounded_send(Dispatcher::version_message(node.clone(), &remote_addr, &local_addr))
@@ -87,6 +88,7 @@ impl Dispatcher {
             // handshake is perfect once we got both version and verack from peer
             let mut got_version = false;
             let mut got_verack = false;
+            let tx1 = tx.clone();
             // process incoming stream
             let read = stream.for_each(move |msg: RawNetworkMessage| {
                 if msg.magic != magic {
@@ -107,7 +109,7 @@ impl Dispatcher {
                                     Err(io::Error::new(io::ErrorKind::Other, format!("connect to myself peer={}", remote_addr)))
                                 } else {
                                     // acknowledge version message received
-                                    tx.unbounded_send(
+                                    tx1.unbounded_send(
                                         RawNetworkMessage {
                                             magic,
                                             payload: NetworkMessage::Verack,
@@ -120,7 +122,7 @@ impl Dispatcher {
                                         // all right, remember this peer
                                         node.add_peer(
                                             &remote_addr, Peer::new(
-                                                tx.clone(),
+                                                tx1.clone(),
                                                 local_addr,
                                                 remote_addr,
                                                 version.clone(),
@@ -151,16 +153,18 @@ impl Dispatcher {
                     }
                 }
             });
-            // activate above reading future
-            current_thread::spawn(read.then(move |_| {
-                Ok(info!("disconnected peer={}", remote_addr.clone()))
-            }));
+
 
             // send everything in rx to sink
             let write = sink.send_all(rx.map_err(move |()| {
                 io::Error::new(io::ErrorKind::Other, format!("rx failed peer={}", remote_addr.clone()))
             }));
-            current_thread::spawn(write.then(|_| Ok(())));
+
+            let rw = write.select2(read).then (move |_| {
+                Ok(info!("disconnected peer={}", remote_addr.clone()))
+            });
+
+            current_thread::spawn(rw);
 
             Ok(())
         });
