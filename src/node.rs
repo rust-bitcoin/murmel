@@ -348,14 +348,11 @@ impl Broadcaster {
 }
 
 impl BroadcasterInterface for Broadcaster {
-    fn broadcast_transaction(&self, tx: &Transaction) -> Result<(), Box<Error>> {
+    fn broadcast_transaction(&self, tx: &Transaction) {
         let msg = NetworkMessage::Tx((*tx).clone());
         for (_, peer) in self.peers.read().unwrap().iter() {
-            if peer.tx.unbounded_send(msg.clone()).is_err() {
-                return Err(Box::new(SPVError::Generic(format!("can not speak to peer={}", peer.remote_addr))));
-            }
+            peer.tx.unbounded_send(msg.clone()).unwrap();
         }
-        Ok(())
     }
 }
 
