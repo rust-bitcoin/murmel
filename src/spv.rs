@@ -6,13 +6,12 @@ use lightning::chain::chaininterface::ChainWatchInterface;
 use node::Node;
 use std::net::SocketAddr;
 use std::path::Path;
-use std::rc::Rc;
 use std::sync::Arc;
 use tokio::executor::current_thread;
+use lighningconnector::LightningConnector;
 
-pub struct SPV {
-    node: Rc<Node>,
-    dispatcher: Dispatcher
+pub struct SPV{
+    connector: Arc<LightningConnector>
 }
 
 impl SPV {
@@ -26,21 +25,18 @@ impl SPV {
     pub fn new(network: Network, peers: Vec<SocketAddr>, db: &Path) -> Result<SPV, SPVError> {
         let mut db = DB::new(db)?;
         create_tables(&mut db)?;
-        let node = Rc::new(Node::new(network, db));
-        let dispatcher = Dispatcher::new(node.clone(), peers);
-        Ok(SPV{node, dispatcher})
+        let node = Arc::new(Node::new(network, db));
+        node.load_headers()?;
+        let dispatcher = Dispatcher::new(network, 0);
+        let cnode = node.clone();
+        current_thread::run (|_| {
+            current_thread::spawn(dispatcher.run(node, peers))
+        });
+        Ok(SPV{ connector: cnode.get_chain_watch_interface () })
     }
 
     pub fn get_chain_watch_interface (&self) -> Arc<ChainWatchInterface> {
-        return self.node.get_chain_watch_interface()
-    }
-
-    pub fn run (&self) -> Result<(), SPVError> {
-        self.node.load_headers()?;
-        current_thread::run (|_| {
-            current_thread::spawn(self.dispatcher.run())
-        });
-        Ok(())
+        return self.connector.clone();
     }
 }
 

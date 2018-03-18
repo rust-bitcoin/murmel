@@ -20,6 +20,7 @@ use std::net::SocketAddr;
 
 /// An error class to offer a unified error interface upstream
 pub enum SPVError {
+    UnknownPeer (SocketAddr),
     Generic(String),
     Misbehaving(u16, String, SocketAddr),
     IO(io::Error),
@@ -30,6 +31,7 @@ pub enum SPVError {
 impl Error for SPVError {
     fn description(&self) -> &str {
         match *self {
+            SPVError::UnknownPeer(_) => "unkown peer",
             SPVError::Generic(ref s) => s.as_str(),
             SPVError::Misbehaving(_, ref reason, _) => reason.as_str(),
             SPVError::IO(ref err) => err.description(),
@@ -40,6 +42,7 @@ impl Error for SPVError {
 
     fn cause(&self) -> Option<&Error> {
         match *self {
+            SPVError::UnknownPeer(_) => None,
             SPVError::Generic(_) => None,
             SPVError::IO(ref err) => Some(err),
             SPVError::Misbehaving(_, _, _) => None,
@@ -54,6 +57,7 @@ impl fmt::Display for SPVError {
         match *self {
             // Both underlying errors already impl `Display`, so we defer to
             // their implementations.
+            SPVError::UnknownPeer(ref a) => write!(f, "Unknown peer={}", a),
             SPVError::Generic(ref s) => write!(f, "Generic: {}", s),
             SPVError::IO(ref err) => write!(f, "IO error: {}", err),
             SPVError::Misbehaving(_, ref reason, ref peer) => write!(f, "Misbehaving: {} peer={}", reason, peer),

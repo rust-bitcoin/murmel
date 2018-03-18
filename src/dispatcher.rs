@@ -11,181 +11,195 @@
 //WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 //See the License for the specific language governing permissions and
 //limitations under the License.
-use bitcoin::network::address::Address;
-use bitcoin::network::message::NetworkMessage;
+
 use bitcoin::network::message::RawNetworkMessage;
+use bitcoin::network::message::NetworkMessage;
 use bitcoin::network::message_network::VersionMessage;
-use codec::BitcoinCodec;
-use futures::{future, Future, Sink, Stream};
+use bitcoin::network::constants::{Network, magic};
+use bitcoin::network::address::Address;
+use error::SPVError;
 use futures::sync::mpsc;
-use node::{Node, Peer};
-use std::io;
 use std::net::SocketAddr;
-use std::rc::Rc;
 use std::sync::Arc;
+use std::io;
+use std::sync::Mutex;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
-use tokio::net::TcpStream;
-use tokio_io::AsyncRead;
+use std::collections::HashMap;
+use rand::{Rng, StdRng};
 use tokio::executor::current_thread;
+use tokio_io::AsyncRead;
+use futures::{future, Future, Sink, Stream};
+use tokio::net::TcpStream;
+use codec::BitcoinCodec;
+use node::Node;
 
-/// Type of tehe write side of the channel to a peer
-pub type Tx = mpsc::UnboundedSender<RawNetworkMessage>;
+lazy_static! {
+    static ref STDRNG : Mutex<StdRng> = Mutex::new(StdRng::new().unwrap());
+}
 
-/// Connect and communicate with peers and dispatch messages to code of the local node.
+/// Type of the write side of the channel to a peer
+pub type Tx = mpsc::UnboundedSender<NetworkMessage>;
+
+pub enum ProcessResult {
+    Ack,
+    Height(u32),
+    Ignored,
+    Disconnect,
+}
+
 pub struct Dispatcher {
-    node: Rc<Node>,
-    peers: Vec<SocketAddr>
+    magic: u32,
+    nonce: u64,
+    height: u32
 }
 
 impl Dispatcher {
-    /// Create a new dispatcher for the local node
-    pub fn new(node: Rc<Node>, peers: Vec<SocketAddr>) -> Dispatcher {
-        Dispatcher { node: node.clone(), peers }
+
+    pub fn new (network: Network, height: u32) -> Dispatcher {
+        Dispatcher {
+            magic: magic (network),
+            nonce: STDRNG.lock().unwrap().next_u64(),
+            height
+        }
     }
 
     /// Start and connect with a known set of peers
-    pub fn run(&self) -> Box<Future<Item=(), Error=()>> {
+    pub fn run(&self, node: Arc<Node>, peers: Vec<SocketAddr>) -> Box<Future<Item=(), Error=()>> {
         // attempt to start clients specified by addrs (bootstrap address)
-        for addr in &self.peers {
-            self.start_peer(*addr);
+        for addr in peers {
+            self.start_peer(node.clone(), addr);
         }
         Box::new(future::ok(()))
     }
 
     /// add another peer
-    pub fn start_peer(&self, addr: SocketAddr) {
-        current_thread::spawn(self.compile_peer_future(&addr).then(move |x| {
+    pub fn start_peer(&self, node: Arc<Node>, addr: SocketAddr) {
+        current_thread::spawn(self.compile_peer_future(node, addr).then(move |x| {
             trace!("client finished {:?} peer={}", x, addr);
             Ok(())
         }));
     }
 
     /// compile the future that dispatches to a peer
-    fn compile_peer_future(&self, addr: &SocketAddr)
-                           -> Box<Future<Item=(), Error=io::Error>> {
-        trace!("starting peer={}", addr);
+    fn compile_peer_future(&self, node: Arc<Node>, addr: SocketAddr) -> Box<Future<Item=(), Error=io::Error>> {
+        let magic = self.magic;
+        let nonce = self.nonce;
+        let mut height = self.height;
 
-        let node = self.node.clone();
+        let cnode = node.clone();
 
-        // magic number of the network, the start of every message
-        let magic = node.get_magic();
+        let client = TcpStream::connect(&addr)
+            .and_then(move |socket| {
+                let remote = socket.peer_addr()?;
+                let local = socket.local_addr()?;
+                trace!("connected... local: {:?}, peer {:?}", &local, &remote);
+                // use the codec to split to messages
+                let (sink, stream) = socket.framed(BitcoinCodec).split();
+                // set up a channel that node uses to send messages back to the peer
+                let (tx, rx) = mpsc::unbounded();
 
-        // connect to peer
-        let client = TcpStream::connect(&addr).and_then(move |socket| {
-            let remote_addr = socket.peer_addr()?;
-            let local_addr = socket.local_addr()?;
-            trace!("connected... local: {:?}, peer {:?}", local_addr, remote_addr);
-            // use the codec to split to messages
-            let (sink, stream) = socket.framed(BitcoinCodec).split();
-            // set up a channel that node code uses to send messages back to the peer
-            let (mut tx, rx) = mpsc::unbounded();
+                // first send a version message. This must be the first step for an out bound connection.
+                tx.unbounded_send(Dispatcher::version(nonce, height, &remote, &local)).expect("tx should never fail");
 
-            // first send a version message. This must be the first step for an out bound connection.
-            tx.unbounded_send(Dispatcher::version_message(node.clone(), &remote_addr, &local_addr))
-                .expect("tx failed");
+                // handshake is perfect once we got both version and verack from peer
+                let mut got_version = false;
+                let mut got_verack = false;
+                let mut versions = HashMap::new();
 
-            // handshake is perfect once we got both version and verack from peer
-            let mut got_version = false;
-            let mut got_verack = false;
-            let tx1 = tx.clone();
-            // process incoming stream
-            let read = stream.for_each(move |msg: RawNetworkMessage| {
-                if msg.magic != magic {
-                    // stop for wrong magic
-                    Err(io::Error::new(io::ErrorKind::Other, format!("message is not for this network peer={}", remote_addr)))
-                } else {
+                let read = stream.for_each(move |msg: RawNetworkMessage| {
+                    if msg.magic != magic {
+                        return Err(io::Error::from(SPVError::Misbehaving(100, "bad magic number".to_string(), remote)));
+                    }
                     if got_version && got_verack {
-                        // regular processing
-                        Ok(node.process(&msg, &remote_addr)?)
-                    } else {
-                        // handshake
-                        let handshake = match msg.payload {
-                            NetworkMessage::Version(version) => {
-                                got_version = true;
-
-                                if version.nonce == node.get_nonce() {
-                                    warn!("connected to myself?");
-                                    Err(io::Error::new(io::ErrorKind::Other, format!("connect to myself peer={}", remote_addr)))
-                                } else {
-                                    // acknowledge version message received
-                                    tx1.unbounded_send(
-                                        RawNetworkMessage {
-                                            magic,
-                                            payload: NetworkMessage::Verack,
-                                        },
-                                    ).unwrap();
-                                    if version.services & 1 == 0 || version.version < 70001 {
-                                        // want to connect to full nodes only
-                                        Err(io::Error::new(io::ErrorKind::Other, format!("not a useful full node peer={}", remote_addr)))
-                                    } else {
-                                        // all right, remember this peer
-                                        node.add_peer(
-                                            &remote_addr, Peer::new(
-                                                tx1.clone(),
-                                                local_addr,
-                                                remote_addr,
-                                                version.clone(),
-                                            ),
-                                        );
-                                        info!("Connected {} height: {} peer={}", version.user_agent, version.start_height, remote_addr);
-                                        Ok(())
-                                    }
-                                }
-                            }
-                            NetworkMessage::Verack => {
-                                trace!("got verack peer={}", remote_addr);
-                                got_verack = true;
-                                Ok(())
-                            }
-                            _ => {
-                                trace!("misbehaving peer={}", remote_addr);
-                                Err(io::Error::new(io::ErrorKind::Other, format!("misbehaving peer={}", remote_addr)))
-                            }
-                        };
-                        if handshake.is_ok() && got_version && got_verack
-                            && node.get_peer_height(&remote_addr).unwrap_or(0) > node.get_height() {
-                            // if peer claims to have longer chain then ask for headers
-                            Ok(node.get_headers_at_connect(&remote_addr)?)
-                        } else {
-                            handshake
+                        // regular processing after handshake
+                        match cnode.process(&msg.payload, &remote)? {
+                            ProcessResult::Ack => {},
+                            ProcessResult::Height(h) => height = h,
+                            ProcessResult::Ignored => trace!("ignored {} from peer={}", msg.command(), &remote),
+                            ProcessResult::Disconnect =>
+                                return Err(io::Error::from(SPVError::Misbehaving(100, "we hung up".to_string(), remote)))
                         }
                     }
-                }
+                        else {
+                            let vmsg = RawNetworkMessage { magic: msg.magic, payload: msg.payload.clone() };
+                            match vmsg.payload {
+                                NetworkMessage::Version(version) => {
+                                    got_version = true;
+
+                                    if version.nonce == nonce {
+                                        return Err(io::Error::new(io::ErrorKind::Other, format!("connect to myself peer={}", remote)))
+                                    } else {
+                                        if version.services & 1 == 0 || version.version < 70001 {
+                                            // want to connect to full nodes only
+                                            return Err(io::Error::new(io::ErrorKind::Other, format!("not a useful full node peer={}", remote)))
+                                        } else {
+                                            // acknowledge version message received
+                                            tx.unbounded_send(NetworkMessage::Verack).unwrap();
+                                            // all right, remember this peer
+                                            info!("Connected {} height: {} peer={}", version.user_agent, version.start_height, remote);
+                                            versions.insert(remote, version);
+                                        }
+                                    }
+                                }
+                                NetworkMessage::Verack => {
+                                    trace!("got verack peer={}", remote);
+                                    got_verack = true;
+                                }
+                                _ => {
+                                    trace!("misbehaving peer={}", remote);
+                                    return Err(io::Error::new(io::ErrorKind::Other, format!("misbehaving peer={}", remote)))
+                                }
+                            };
+                            if got_version && got_verack {
+                                // handshake perfect
+                                let version = versions.remove(&remote).unwrap();
+                                match cnode.connected(version, &local,&remote, tx.clone())? {
+                                    ProcessResult::Ack => {},
+                                    ProcessResult::Height(h) => height = h,
+                                    ProcessResult::Ignored => trace!("ignored {} from peer={}", msg.command(), &remote),
+                                    ProcessResult::Disconnect =>
+                                        return Err(io::Error::from(SPVError::Misbehaving(100, "we hung up".to_string(), remote)))
+                                }
+                            }
+                        }
+                    Ok(())
+                });
+
+                // send everything in rx to sink
+                let write = sink.send_all(rx
+                    .map(move |msg| { RawNetworkMessage { magic: magic, payload: msg }})
+                    .map_err(move |()| {
+                        io::Error::new(io::ErrorKind::Other, format!("rx failed peer={}", remote.clone()))
+                    }));
+
+                let wnode = node.clone();
+
+                let rw = write.select2(read).then(move |_| {
+                    info!("disconnected peer={}", remote.clone());
+                    Ok(wnode.disconnected(&remote))
+                });
+
+                current_thread::spawn(rw);
+
+                Ok(())
             });
-
-
-            // send everything in rx to sink
-            let write = sink.send_all(rx.map_err(move |()| {
-                io::Error::new(io::ErrorKind::Other, format!("rx failed peer={}", remote_addr.clone()))
-            }));
-
-            let rw = write.select2(read).then (move |_| {
-                Ok(info!("disconnected peer={}", remote_addr.clone()))
-            });
-
-            current_thread::spawn(rw);
-
-            Ok(())
-        });
-
         return Box::new(client);
     }
 
-    pub fn version_message(node: Rc<Node>, remote: &SocketAddr, local: &SocketAddr) -> RawNetworkMessage {
+    pub fn version (nonce: u64, height: u32, remote: &SocketAddr, local: &SocketAddr) -> NetworkMessage {
         let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
-
-        node.clone().raw_message(&NetworkMessage::Version(VersionMessage {
+        NetworkMessage::Version(VersionMessage {
             version: 70001, // used only to be able to disable tx relay
             services: 0, // NODE_NONE this SPV implementation does not serve anything
             timestamp,
             receiver: Dispatcher::address_for_socket(1, remote),
             sender: Dispatcher::address_for_socket(0, local),
-            nonce: node.get_nonce(),
+            nonce: nonce,
             user_agent: "SPV".to_owned(),
-            start_height: node.get_height() as i32,
+            start_height: height as i32,
             relay: false,
-        }))
+        })
     }
 
     fn address_for_socket(services: u64, addr: &SocketAddr) -> Address {
