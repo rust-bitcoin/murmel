@@ -44,8 +44,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::sync::RwLock;
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
 
 /// a connected peer
 pub struct Peer {
@@ -87,11 +85,12 @@ pub struct Node {
     blockchain: Mutex<Blockchain>,
     db: Mutex<DB>,
     connector: Arc<LightningConnector>,
+	birth: u32
 }
 
 impl Node {
     /// Create a new local node for a network that uses the given database
-    pub fn new(network: Network, db: DB) -> Node {
+    pub fn new(network: Network, db: DB, birth: u32) -> Node {
         let peers = Arc::new(RwLock::new(HashMap::new()));
         let connector = LightningConnector::new(
             Arc::new(Broadcaster::new(peers.clone())));
@@ -101,6 +100,7 @@ impl Node {
             blockchain: Mutex::new(Blockchain::new(network)),
             db: Mutex::new(db),
             connector: Arc::new(connector),
+	        birth
         }
     }
 
@@ -175,23 +175,21 @@ impl Node {
 					let old_tip = blockchain.best_tip_hash();
 					// add to in-memory blockchain - this also checks proof of work
 					if blockchain.add_header(header.header).is_ok() {
+						// this is a new header, not previously stored
 						let new_tip = blockchain.best_tip_hash();
 						let header_hash = header.header.bitcoin_hash();
-						let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as u32;
-						if header.header.time > now - 60 * 60 * 24 && new_tip == header_hash {
-							// if not older than a day and extending the trunk then ask for the block
+						if header.header.time > self.birth - 60 * 60 * 3 && new_tip == header_hash {
+							// if time stamp is not older than three hours before our birth day and extending the trunk
+							// then ask for the block
 							ask_for_blocks.push(new_tip);
 						}
 
 						tx.insert_header(&header.header)?;
 
 						if header_hash == new_tip && header.header.prev_blockhash != old_tip {
-							let mut prevhash = header.header.prev_blockhash;
-							// a re-organisation happened
-							while !blockchain.get_block(prevhash).unwrap().is_on_main_chain(&blockchain) {
-								let previous = blockchain.get_block(prevhash).unwrap();
-								disconnected_headers.push(previous.block.header);
-								prevhash = previous.block.header.prev_blockhash;
+							// this is a re-org. Compute headers to unwind
+							for orphan_block in blockchain.rev_stale_iter(old_tip) {
+								disconnected_headers.push(orphan_block.header);
 							}
 						}
 					}
@@ -206,7 +204,6 @@ impl Node {
 				      blockchain.best_tip_hash(), peer.remote_addr);
 			}
 
-			disconnected_headers.reverse();
 			for header in disconnected_headers {
 				self.connector.block_disconnected(&header);
 			}

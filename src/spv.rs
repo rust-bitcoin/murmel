@@ -29,7 +29,6 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::executor::current_thread;
-use lighningconnector::LightningConnector;
 
 
 /// The complete SPV stack
@@ -44,12 +43,13 @@ impl SPV {
     ///      network - main or testnet
     ///      bootstrap - peer adresses (only tested to work with one local node for now)
     ///      db - file path to store the headers and blocks database
+    ///      birth - unix time stamp. We are interested in transactions only after this birth day
     /// The method will read previously stored headers from the database and sync up with the peers
     /// then serve the returned ChainWatchInterface
-    pub fn new(network: Network, db: &Path) -> Result<SPV, SPVError> {
+    pub fn new(network: Network, db: &Path, birth: u32) -> Result<SPV, SPVError> {
         let mut db = DB::new(db)?;
         create_tables(&mut db)?;
-        Ok(SPV{ node:  Arc::new(Node::new(network, db)), dispatcher: Dispatcher::new(network, 0)})
+        Ok(SPV{ node:  Arc::new(Node::new(network, db, birth)), dispatcher: Dispatcher::new(network, 0)})
     }
 
 	/// Start the SPV stack. This should be called AFTER registering listener of the ChainWatchInterface,
