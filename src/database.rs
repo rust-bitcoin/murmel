@@ -27,6 +27,7 @@ use bitcoin::network::encodable::{ConsensusDecodable, ConsensusEncodable};
 use bitcoin::network::serialize::{RawDecoder, RawEncoder};
 use bitcoin::network::serialize::BitcoinHash;
 use bitcoin::network::serialize::serialize;
+use bitcoin::network::address::Address;
 use bitcoin::util::hash::Sha256dHash;
 use error::SPVError;
 use libc::c_int;
@@ -104,6 +105,7 @@ impl<'a> DBTX<'a> {
     ///   * header - block header
     ///   * tx - transactions
     ///   * blk_tx - n:m mapping of header to transactions to form a block.
+    ///   * peers - list of known peers
     pub fn create_tables(&self) -> Result<c_int, SPVError> {
         trace!("creating tables...");
         self.tx.execute("create table if not exists ids (
@@ -133,8 +135,30 @@ impl<'a> DBTX<'a> {
                                 id integer primary key,
                                 data blob
                                 )", &[])?;
+
+        self.tx.execute("create table if not exists peers (
+                                address text primary key,
+                                port integer,
+                                last_seen integer,
+                                banned_until integer,
+                                speed integer)", &[])?;
+
         trace!("created tables");
         Ok(0)
+    }
+
+    /// store a peer
+    ///   * last_seen - in unix epoch seconds
+    ///   * banned_until - in unix epoch seconds
+    ///   * speed - in ms as measured with ping
+    pub fn store_peer (&self, address: &Address, last_seen: u32, banned_until: u32, speed: u16) -> Result<(), SPVError> {
+        let mut s = String::new();
+        for d in address.address.iter() {
+            s.push_str(format!("{:4x}",d).as_str());
+        }
+        self.tx.execute("insert into peers (address, port, last_seen, banned_until, speed) \
+        values (?, ?, ?, ?, ?)", &[&s, &address.port, &last_seen, &banned_until, &speed])?;
+        Ok(())
     }
 
     /// get the integer proxy for a hash. All tables use integers mapped here for better performance.

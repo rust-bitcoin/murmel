@@ -30,6 +30,7 @@ use bitcoin::network::message::NetworkMessage;
 use bitcoin::network::message_blockdata::*;
 use bitcoin::network::message_network::*;
 use bitcoin::network::serialize::BitcoinHash;
+use bitcoin::network::address::Address;
 use bitcoin::util::hash::Sha256dHash;
 use database::DB;
 use dispatcher::{Tx, ProcessResult};
@@ -251,12 +252,25 @@ impl Node {
 		Ok(ProcessResult::Ack)
 	}
 
+	fn addr (&self, v: &Vec<(u32, Address)>, peer: &Peer)  -> Result<ProcessResult, SPVError> {
+		// store a block if it is on the chain with most work
+		let mut db = self.db.lock().unwrap();
+		let tx = db.transaction()?;
+		for a in v.iter() {
+			tx.store_peer(&a.1, a.0, 0, 0)?;
+			info!("stored address {:?}", a);
+		}
+		tx.commit()?;
+		Ok(ProcessResult::Ack)
+	}
+
     fn process_for_peer(&self, msg: &NetworkMessage, peer: &Peer) -> Result<ProcessResult, SPVError> {
         match msg {
             &NetworkMessage::Ping(nonce) => self.ping(nonce, peer),
             &NetworkMessage::Headers(ref v) => self.headers(v, peer),
             &NetworkMessage::Block(ref b) => self.block(b, peer),
             &NetworkMessage::Inv(ref v) => self.inv(v, peer),
+	        &NetworkMessage::Addr(ref v) => self.addr(v, peer),
             _ => Ok(ProcessResult::Ignored)
         }
     }
