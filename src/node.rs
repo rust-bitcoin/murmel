@@ -13,6 +13,7 @@
 //limitations under the License.
 
 use bitcoin_chain::blockchain::Blockchain;
+use bitcoin::blockdata::block::{Block, LoneBlockHeader};
 use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::blockdata::transaction::Transaction;
 use bitcoin::network::constants::Network;
@@ -139,115 +140,115 @@ impl Node {
         }
     }
 
+	fn ping (&self, nonce: u64, peer :&Peer) -> Result<ProcessResult, SPVError> {
+		self.reply(peer, &NetworkMessage::Pong(nonce))
+	}
+
+	fn headers(&self, headers: &Vec<LoneBlockHeader>, peer: &Peer) -> Result<ProcessResult, SPVError> {
+		if headers.len() > 0 {
+			// blocks we want to download
+			let mut ask_for_blocks = Vec::new();
+			let mut disconnected_headers = Vec::new();
+			let mut height;
+			{
+				// new scope to limit lock
+
+				// always lock blockchain before db to avoid deadlock (if need to lock both)
+				let mut blockchain = self.blockchain.lock().unwrap();
+
+				let mut db = self.db.lock().unwrap();
+				let tx = db.transaction()?;
+
+				for header in headers {
+					let old_tip = blockchain.best_tip_hash();
+					// add to in-memory blockchain - this also checks proof of work
+					if blockchain.add_header(header.header).is_ok() {
+						let new_tip = blockchain.best_tip_hash();
+						let header_hash = header.header.bitcoin_hash();
+						let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as u32;
+						if header.header.time > now - 60 * 60 * 24 && new_tip == header_hash {
+							// if not older than a day and extending the trunk then ask for the block
+							ask_for_blocks.push(new_tip);
+						}
+
+						tx.insert_header(&header.header)?;
+
+						if header_hash == new_tip && header.header.prev_blockhash != old_tip {
+							let mut prevhash = header.header.prev_blockhash;
+							// a re-organisation happened
+							while !blockchain.get_block(prevhash).unwrap().is_on_main_chain(&blockchain) {
+								let previous = blockchain.get_block(prevhash).unwrap();
+								disconnected_headers.push(previous.block.header);
+								prevhash = previous.block.header.prev_blockhash;
+							}
+						}
+					}
+				}
+				let new_tip = blockchain.best_tip_hash();
+				height = blockchain.get_block(new_tip).unwrap().height;
+
+				tx.set_tip(&new_tip)?;
+
+				tx.commit()?;
+				info!("add {} headers tip={} from peer={}", headers.len(),
+				      blockchain.best_tip_hash(), peer.remote_addr);
+			}
+
+			disconnected_headers.reverse();
+			for header in disconnected_headers {
+				self.connector.block_disconnected(&header);
+			}
+			// ask for new blocks on trunk
+			self.get_blocks(peer, ask_for_blocks)?;
+			// ask if peer knows even more
+			self.get_headers(peer)?;
+			Ok(ProcessResult::Height(height))
+		} else {
+			Ok(ProcessResult::Ack)
+		}
+	}
+
+	fn block (&self, block: &Block, peer: &Peer)-> Result<ProcessResult, SPVError> {
+		let blockchain = self.blockchain.lock().unwrap();
+		// header should be known already, otherwise it might be spam
+		let block_node = blockchain.get_block(block.bitcoin_hash());
+		if block_node.is_some() {
+			let bn = block_node.unwrap();
+			if bn.block.txdata.is_empty() && bn.is_on_main_chain(&blockchain) {
+				// limit context
+				{
+					// store a block if it is on the chain with most work
+					let mut db = self.db.lock().unwrap();
+					let tx = db.transaction()?;
+					tx.insert_block(&block)?;
+					tx.commit()?;
+				}
+				// send new block to lighning connector
+				self.connector.block_connected(&block, bn.height);
+			}
+		}
+		Ok(ProcessResult::Ack)
+	}
+
+	fn inv(&self, v: &Vec<Inventory>, peer: &Peer) -> Result<ProcessResult, SPVError> {
+		for inventory in v {
+			if inventory.inv_type == InvType::Block
+				&& self.blockchain.lock().unwrap().get_block(inventory.hash).is_none() {
+				// ask for header(s) if observing a new block
+				self.get_headers(peer)?;
+				break;
+			}
+		}
+		Ok(ProcessResult::Ack)
+	}
+
     fn process_for_peer(&self, msg: &NetworkMessage, peer: &Peer) -> Result<ProcessResult, SPVError> {
         match msg {
-            // reply top ping with pong
-            &NetworkMessage::Ping(nonce) => {
-                self.reply(peer, &NetworkMessage::Pong(nonce))
-            }
-            // store headers received
-            &NetworkMessage::Headers(ref v) => {
-                if v.len() > 0 {
-                    // blocks we want to download
-                    let mut ask_for_blocks = Vec::new();
-                    let mut disconnected_headers = Vec::new();
-                    let mut height;
-                    {
-                        // new scope to limit lock
-
-                        // always lock blockchain before db to avoid deadlock (if need to lock both)
-                        let mut blockchain = self.blockchain.lock().unwrap();
-
-                        let mut db = self.db.lock().unwrap();
-                        let tx = db.transaction()?;
-
-                        for header in v {
-                            let old_tip = blockchain.best_tip_hash();
-                            // add to in-memory blockchain - this also checks proof of work
-                            if blockchain.add_header(header.header).is_ok() {
-                                let new_tip = blockchain.best_tip_hash();
-                                let header_hash = header.header.bitcoin_hash();
-                                let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as u32;
-                                if header.header.time > now - 60 * 60 * 24 && new_tip == header_hash {
-                                    // if not older than a day and extending the trunk then ask for the block
-                                    ask_for_blocks.push(new_tip);
-                                }
-
-                                tx.insert_header(&header.header)?;
-
-                                if header_hash == new_tip && header.header.prev_blockhash != old_tip {
-                                    let mut prevhash = header.header.prev_blockhash;
-                                    // a re-organisation happened
-                                    while !blockchain.get_block(prevhash).unwrap().is_on_main_chain(&blockchain) {
-                                        let previous = blockchain.get_block(prevhash).unwrap();
-                                        disconnected_headers.push(previous.block.header);
-                                        prevhash = previous.block.header.prev_blockhash;
-                                    }
-                                }
-                            }
-                        }
-                        let new_tip = blockchain.best_tip_hash();
-                        height = blockchain.get_block(new_tip).unwrap().height;
-
-                        tx.set_tip(&new_tip)?;
-
-                        tx.commit()?;
-                        info!("add {} headers tip={} from peer={}", v.len(),
-                              blockchain.best_tip_hash(), peer.remote_addr);
-                    }
-
-                    disconnected_headers.reverse();
-                    for header in disconnected_headers {
-                        self.connector.block_disconnected(&header);
-                    }
-                    // ask for new blocks on trunk
-                    self.get_blocks(peer, ask_for_blocks)?;
-                    // ask if peer knows even more
-                    self.get_headers(peer)?;
-                    Ok(ProcessResult::Height(height))
-                } else {
-                    Ok(ProcessResult::Ack)
-                }
-            }
-            &NetworkMessage::Block(ref b) => {
-                let mut blockchain = self.blockchain.lock().unwrap();
-                // header should be known already, otherwise it might be spam
-                let block = blockchain.get_block(b.bitcoin_hash());
-                if block.is_some() {
-                    let block = block.unwrap();
-                    if block.block.txdata.is_empty() {
-                        if blockchain.get_block(b.bitcoin_hash()).unwrap().is_on_main_chain(&blockchain) {
-
-                            // limit context
-                            {
-                                // store a block if it is on the chain with most work
-                                let mut db = self.db.lock().unwrap();
-                                let tx = db.transaction()?;
-                                tx.insert_block(&b)?;
-                                tx.commit()?;
-                            }
-
-                            // send new block to lighning connector
-                            self.connector.block_connected(&b, block.height);
-                        }
-                    }
-                }
-                Ok(ProcessResult::Ack)
-            }
-            &NetworkMessage::Inv(ref v) => {
-                for inventory in v {
-                    if inventory.inv_type == InvType::Block
-                        && self.blockchain.lock().unwrap().get_block(inventory.hash).is_none() {
-                        // ask for header(s) if observing a new block
-                        self.get_headers(peer)?;
-                        break;
-                    }
-                }
-                Ok(ProcessResult::Ack)
-            }
-            _ => {
-                Ok(ProcessResult::Ignored)
-            }
+            &NetworkMessage::Ping(nonce) => self.ping(nonce, peer),
+            &NetworkMessage::Headers(ref v) => self.headers(v, peer),
+            &NetworkMessage::Block(ref b) => self.block(b, peer),
+            &NetworkMessage::Inv(ref v) => self.inv(v, peer),
+            _ => Ok(ProcessResult::Ignored)
         }
     }
 
