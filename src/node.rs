@@ -1,16 +1,25 @@
-//Copyright 2018 Tamas Blummer
 //
-//Licensed under the Apache License, Version 2.0 (the "License");
-//you may not use this file except in compliance with the License.
-//You may obtain a copy of the License at
+// Copyright 2018 Tamas Blummer
 //
-//http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//Unless required by applicable law or agreed to in writing, software
-//distributed under the License is distributed on an "AS IS" BASIS,
-//WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-//See the License for the specific language governing permissions and
-//limitations under the License.
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+//!
+//! # Bitcoin SPV client node
+//!
+//! Implements a node that reacts to network messages and serves higher application
+//! layer with a fresh view of the Bitcoin blockchain.
+//!
+
 
 use bitcoin_chain::blockchain::Blockchain;
 use bitcoin::blockdata::block::{Block, LoneBlockHeader};
@@ -48,6 +57,7 @@ pub struct Peer {
 }
 
 impl Peer {
+	/// construct a peer
     pub fn new(tx: Tx, local_addr: SocketAddr, remote_addr: SocketAddr, version: VersionMessage) -> Peer {
         Peer {
             tx,
@@ -119,6 +129,7 @@ impl Node {
         Ok(())
     }
 
+	/// called from dispatcher whenever a new peer is connected (after handshake is successful)
     pub fn connected(&self, version: VersionMessage, local_addr: &SocketAddr, remote_addr: &SocketAddr, tx: Tx) -> Result<ProcessResult, SPVError> {
         let mut peers = self.peers.write().unwrap();
         let peer = Peer::new(tx, *local_addr, *remote_addr, version);
@@ -126,6 +137,7 @@ impl Node {
         self.get_headers(peers.get(remote_addr).unwrap())
     }
 
+	/// called from dispatcher whenever a peer is disconnected
     pub fn disconnected(&self, remote_addr: &SocketAddr) {
         let mut peers = self.peers.write().unwrap();
         peers.remove(remote_addr);
@@ -149,7 +161,7 @@ impl Node {
 			// blocks we want to download
 			let mut ask_for_blocks = Vec::new();
 			let mut disconnected_headers = Vec::new();
-			let mut height;
+			let height;
 			{
 				// new scope to limit lock
 
@@ -208,7 +220,7 @@ impl Node {
 		}
 	}
 
-	fn block (&self, block: &Block, peer: &Peer)-> Result<ProcessResult, SPVError> {
+	fn block (&self, block: &Block, _: &Peer)-> Result<ProcessResult, SPVError> {
 		let blockchain = self.blockchain.lock().unwrap();
 		// header should be known already, otherwise it might be spam
 		let block_node = blockchain.get_block(block.bitcoin_hash());
@@ -264,14 +276,6 @@ impl Node {
         self.reply(peer, &NetworkMessage::GetData(invs))
     }
 
-    pub fn get_headers_at_connect(&self, remote_addr: &SocketAddr) -> Result<ProcessResult, SPVError> {
-        if let Some(peer) = self.peers.read().unwrap().get(&remote_addr) {
-            self.get_headers(peer)
-        } else {
-            Err(SPVError::UnknownPeer(*remote_addr))
-        }
-    }
-
     /// get headers this peer is ahead of us
     fn get_headers(&self, peer: &Peer) -> Result<ProcessResult, SPVError> {
         let locator = self.blockchain.lock().unwrap().locator_hashes();
@@ -305,10 +309,12 @@ impl Node {
         Ok(ProcessResult::Ack)
     }
 
+	/// retrieve the interface for lighning network
     pub fn get_chain_watch_interface(&self) -> Arc<LightningConnector> {
         self.connector.clone()
     }
 
+	/// retrieve the interface a higher application layer e.g. lighning may use to send transactions to the network
     pub fn get_broadcaster (&self) -> Arc<Broadcaster> {
         self.connector.get_broadcaster()
     }
@@ -320,7 +326,8 @@ pub struct Broadcaster {
 }
 
 impl Broadcaster {
-    pub fn new(peers: Arc<RwLock<HashMap<SocketAddr, Peer>>>) -> Broadcaster {
+    /// create a broadcaster
+	pub fn new(peers: Arc<RwLock<HashMap<SocketAddr, Peer>>>) -> Broadcaster {
         Broadcaster { peers }
     }
 }

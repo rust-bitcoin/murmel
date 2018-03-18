@@ -1,16 +1,25 @@
-//Copyright 2018 Tamas Blummer
 //
-//Licensed under the Apache License, Version 2.0 (the "License");
-//you may not use this file except in compliance with the License.
-//You may obtain a copy of the License at
+// Copyright 2018 Tamas Blummer
 //
-//http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//Unless required by applicable law or agreed to in writing, software
-//distributed under the License is distributed on an "AS IS" BASIS,
-//WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-//See the License for the specific language governing permissions and
-//limitations under the License.
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+//!
+//! # SPV Error
+//!
+//! All modules of this library use this error class to indicate problems.
+//!
+
+
 use rusqlite;
 use std::convert;
 use std::error::Error;
@@ -20,11 +29,17 @@ use std::net::SocketAddr;
 
 /// An error class to offer a unified error interface upstream
 pub enum SPVError {
+    /// There is no peer in node's collection with this socket address
     UnknownPeer (SocketAddr),
+    /// generic error message
     Generic(String),
+    /// The peer is not following the Bitcoin protocol, the first parameter is added to its ban score
     Misbehaving(u16, String, SocketAddr),
+    /// Network IO error
     IO(io::Error),
+    /// Database error
     DB(rusqlite::Error),
+    /// fatal error, should panic
     Panic(String),
 }
 

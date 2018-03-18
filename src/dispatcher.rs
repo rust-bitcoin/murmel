@@ -1,16 +1,23 @@
-//Copyright 2018 Tamas Blummer
 //
-//Licensed under the Apache License, Version 2.0 (the "License");
-//you may not use this file except in compliance with the License.
-//You may obtain a copy of the License at
+// Copyright 2018 Tamas Blummer
 //
-//http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//Unless required by applicable law or agreed to in writing, software
-//distributed under the License is distributed on an "AS IS" BASIS,
-//WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-//See the License for the specific language governing permissions and
-//limitations under the License.
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+//!
+//! # Dispatcher from network to node and back
+//!
+//! This module establishes network connections and routes messages between network and node
+//!
 
 use bitcoin::network::message::RawNetworkMessage;
 use bitcoin::network::message::NetworkMessage;
@@ -41,13 +48,19 @@ lazy_static! {
 /// Type of the write side of the channel to a peer
 pub type Tx = mpsc::UnboundedSender<NetworkMessage>;
 
+/// The node replies with this process result to messages
 pub enum ProcessResult {
+    /// Acknowledgment
     Ack,
+    /// Acknowledgment, dispatcher should indicate the new height in future version messages
     Height(u32),
+    /// The message was ignored by the node
     Ignored,
+    /// The node really does not like the message (or ban score limit reached), disconnect this rouge peer
     Disconnect,
 }
 
+/// The dispatcher of messages between network and node
 pub struct Dispatcher {
     magic: u32,
     nonce: u64,
@@ -56,6 +69,7 @@ pub struct Dispatcher {
 
 impl Dispatcher {
 
+    /// create a dispatcher
     pub fn new (network: Network, height: u32) -> Dispatcher {
         Dispatcher {
             magic: magic (network),
@@ -187,6 +201,7 @@ impl Dispatcher {
         return Box::new(client);
     }
 
+    /// compile a version message to be sent to new connections
     pub fn version (nonce: u64, height: u32, remote: &SocketAddr, local: &SocketAddr) -> NetworkMessage {
         let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
         NetworkMessage::Version(VersionMessage {
@@ -202,6 +217,7 @@ impl Dispatcher {
         })
     }
 
+    /// convert socket address to Bitcoin protocol format
     fn address_for_socket(services: u64, addr: &SocketAddr) -> Address {
         let (address, port) = match *addr {
             SocketAddr::V4(ref addr) => (addr.ip().to_ipv6_mapped().segments(), addr.port()),
