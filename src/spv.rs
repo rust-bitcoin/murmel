@@ -34,7 +34,8 @@ use lighningconnector::LightningConnector;
 
 /// The complete SPV stack
 pub struct SPV{
-    connector: Arc<LightningConnector>
+	node: Arc<Node>,
+	dispatcher: Dispatcher
 }
 
 impl SPV {
@@ -45,22 +46,26 @@ impl SPV {
     ///      db - file path to store the headers and blocks database
     /// The method will read previously stored headers from the database and sync up with the peers
     /// then serve the returned ChainWatchInterface
-    pub fn new(network: Network, peers: Vec<SocketAddr>, db: &Path) -> Result<SPV, SPVError> {
+    pub fn new(network: Network, db: &Path) -> Result<SPV, SPVError> {
         let mut db = DB::new(db)?;
         create_tables(&mut db)?;
-        let node = Arc::new(Node::new(network, db));
-        node.load_headers()?;
-        let dispatcher = Dispatcher::new(network, 0);
-        let cnode = node.clone();
-        current_thread::run (|_| {
-            current_thread::spawn(dispatcher.run(node, peers))
-        });
-        Ok(SPV{ connector: cnode.get_chain_watch_interface () })
+        Ok(SPV{ node:  Arc::new(Node::new(network, db)), dispatcher: Dispatcher::new(network, 0)})
     }
+
+	/// Start the SPV stack. This should be called AFTER registering listener of the ChainWatchInterface,
+	/// so they are called as the SPV stack catches up with the blockchain
+	pub fn run (&self, peers: Vec<SocketAddr>) -> Result<(), SPVError> {
+		self.node.load_headers()?;
+		let cnode = self.node.clone();
+		current_thread::run (|_| {
+			current_thread::spawn(self.dispatcher.run(cnode, peers))
+		});
+		Ok(())
+	}
 
     /// Get the connector to higher level appl layers, such as Lightning
     pub fn get_chain_watch_interface (&self) -> Arc<ChainWatchInterface> {
-        return self.connector.clone();
+        return self.node.get_chain_watch_interface();
     }
 }
 
