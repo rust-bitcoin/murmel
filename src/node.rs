@@ -45,6 +45,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::sync::RwLock;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 /// a connected peer
 pub struct Peer {
@@ -253,11 +255,13 @@ impl Node {
 	}
 
 	fn addr (&self, v: &Vec<(u32, Address)>, peer: &Peer)  -> Result<ProcessResult, SPVError> {
-		// store a block if it is on the chain with most work
+		let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as u32;
 		let mut db = self.db.lock().unwrap();
 		let tx = db.transaction()?;
 		for a in v.iter() {
-			tx.store_peer(&a.1, a.0, 0, 0)?;
+			if a.0 > now - 3 * 60 * 30 { // not older than 3 hours
+				tx.store_peer(&a.1, 0, 0, 0, 0)?;
+			}
 			info!("stored address {:?}", a);
 		}
 		tx.commit()?;

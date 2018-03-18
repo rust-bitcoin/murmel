@@ -89,10 +89,7 @@ impl Dispatcher {
 
     /// add another peer
     pub fn start_peer(&self, node: Arc<Node>, addr: SocketAddr) {
-        current_thread::spawn(self.compile_peer_future(node, addr).then(move |x| {
-            trace!("client finished {:?} peer={}", x, addr);
-            Ok(())
-        }));
+        current_thread::spawn(self.compile_peer_future(node, addr).then( |_| {Ok(())}));
     }
 
     /// compile the future that dispatches to a peer
@@ -144,9 +141,10 @@ impl Dispatcher {
                                     if version.nonce == nonce {
                                         return Err(io::Error::new(io::ErrorKind::Other, format!("connect to myself peer={}", remote)))
                                     } else {
-                                        if version.services & 1 == 0 || version.version < 70001 {
+                                        // want to connect to full nodes upporting segwit
+                                        if version.services & 9 != 9 || version.version < 70001 {
                                             // want to connect to full nodes only
-                                            return Err(io::Error::new(io::ErrorKind::Other, format!("not a useful full node peer={}", remote)))
+                                            return Err(io::Error::new(io::ErrorKind::Other, format!("not a useful peer={}", remote)))
                                         } else {
                                             // acknowledge version message received
                                             tx.unbounded_send(NetworkMessage::Verack).unwrap();

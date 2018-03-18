@@ -139,6 +139,7 @@ impl<'a> DBTX<'a> {
         self.tx.execute("create table if not exists peers (
                                 address text primary key,
                                 port integer,
+                                services integer,
                                 last_seen integer,
                                 banned_until integer,
                                 speed integer)", &[])?;
@@ -151,13 +152,17 @@ impl<'a> DBTX<'a> {
     ///   * last_seen - in unix epoch seconds
     ///   * banned_until - in unix epoch seconds
     ///   * speed - in ms as measured with ping
-    pub fn store_peer (&self, address: &Address, last_seen: u32, banned_until: u32, speed: u16) -> Result<(), SPVError> {
+    pub fn store_peer (&self, address: &Address, services: u32, last_seen: u32, banned_until: u32, speed: u16) -> Result<(), SPVError> {
         let mut s = String::new();
         for d in address.address.iter() {
             s.push_str(format!("{:4x}",d).as_str());
         }
-        self.tx.execute("insert into peers (address, port, last_seen, banned_until, speed) \
-        values (?, ?, ?, ?, ?)", &[&s, &address.port, &last_seen, &banned_until, &speed])?;
+        let row: Result<i64, Error> = self.tx.query_row(
+            "select rowid from peers where address = ?", &[&s], | row | { row.get(0) });
+        if row.is_err() {
+            self.tx.execute("insert into peers (address, port, services, last_seen, banned_until, speed) \
+                        values (?, ?, ?, ?, ?, ?)", &[&s, &address.port, &services, &last_seen, &banned_until, &speed])?;
+        }
         Ok(())
     }
 
