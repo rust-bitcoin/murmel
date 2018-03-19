@@ -136,14 +136,16 @@ impl Dispatcher {
                             let vmsg = RawNetworkMessage { magic: msg.magic, payload: msg.payload.clone() };
                             match vmsg.payload {
                                 NetworkMessage::Version(version) => {
+                                    if got_version {
+                                        return Err(io::Error::new(io::ErrorKind::Other, format!("misbehaving peer={}", remote)))
+                                    }
                                     got_version = true;
 
                                     if version.nonce == nonce {
                                         return Err(io::Error::new(io::ErrorKind::Other, format!("connect to myself peer={}", remote)))
                                     } else {
                                         // want to connect to full nodes upporting segwit
-                                        if version.services & 9 != 9 || version.version < 70001 {
-                                            // want to connect to full nodes only
+                                        if version.services & 9 != 9 || version.version < 70013 {
                                             return Err(io::Error::new(io::ErrorKind::Other, format!("not a useful peer={}", remote)))
                                         } else {
                                             // acknowledge version message received
@@ -155,6 +157,9 @@ impl Dispatcher {
                                     }
                                 }
                                 NetworkMessage::Verack => {
+                                    if got_verack {
+                                        return Err(io::Error::new(io::ErrorKind::Other, format!("misbehaving peer={}", remote)))
+                                    }
                                     trace!("got verack peer={}", remote);
                                     got_verack = true;
                                 }
