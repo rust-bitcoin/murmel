@@ -45,7 +45,7 @@ impl LightningConnector {
     /// called by the node if new block added to trunk (longest chain)
     /// this will notify listeners on lighning side
     pub fn block_connected(&self, block: &Block, height: u32) {
-        self.util.block_connected(block, height)
+        self.util.block_connected_with_filtering(block, height)
     }
 
     /// called by the node if a block is removed from trunk (orphaned from logest chain)

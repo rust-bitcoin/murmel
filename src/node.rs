@@ -259,8 +259,9 @@ impl Node {
 		let mut db = self.db.lock().unwrap();
 		let tx = db.transaction()?;
 		for a in v.iter() {
-			if a.0 > now - 3 * 60 * 30 { // not older than 3 hours
-				tx.store_peer(&a.1, 0, 0, 0, 0)?;
+			// if segwit full node and not older than 3 hours
+			if a.1.services & 9 == 9 && a.0 > now - 3 * 60 * 30 {
+				tx.store_peer(&a.1, a.1.services as i64, a.0, 0, 0)?;
 			}
 			info!("stored address {:?}", a);
 		}

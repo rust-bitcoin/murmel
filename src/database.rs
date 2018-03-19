@@ -152,7 +152,7 @@ impl<'a> DBTX<'a> {
     ///   * last_seen - in unix epoch seconds
     ///   * banned_until - in unix epoch seconds
     ///   * speed - in ms as measured with ping
-    pub fn store_peer (&self, address: &Address, services: u32, last_seen: u32, banned_until: u32, speed: u16) -> Result<(), SPVError> {
+    pub fn store_peer (&self, address: &Address, services: i64, last_seen: u32, banned_until: u32, speed: u16) -> Result<(), SPVError> {
         let mut s = String::new();
         for d in address.address.iter() {
             s.push_str(format!("{:4x}",d).as_str());
