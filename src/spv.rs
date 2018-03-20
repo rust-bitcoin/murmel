@@ -46,10 +46,10 @@ impl SPV {
     ///      birth - unix time stamp. We are interested in transactions only after this birth day
     /// The method will read previously stored headers from the database and sync up with the peers
     /// then serve the returned ChainWatchInterface
-    pub fn new(network: Network, db: &Path, birth: u32) -> Result<SPV, SPVError> {
+    pub fn new(user_agent :String, network: Network, db: &Path, birth: u32) -> Result<SPV, SPVError> {
         let mut db = DB::new(db)?;
         create_tables(&mut db)?;
-        Ok(SPV{ node:  Arc::new(Node::new(network, db, birth)), dispatcher: Dispatcher::new(network, 0)})
+        Ok(SPV{ node:  Arc::new(Node::new(network, db, birth)), dispatcher: Dispatcher::new(user_agent, network, 0)})
     }
 
 	/// Start the SPV stack. This should be called AFTER registering listener of the ChainWatchInterface,

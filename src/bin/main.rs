@@ -37,7 +37,7 @@ pub fn main() {
     let mut peers = Vec::new();
     peers.push(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8333));
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as u32;
-    let spv = SPV::new(Network::Bitcoin, Path::new("/tmp/blocks.sqlite"), now).unwrap();
+    let spv = SPV::new("/rust-spv:0.1.0/".to_string(), Network::Bitcoin, Path::new("/tmp/blocks.sqlite"), now).unwrap();
     spv.run(peers).unwrap();
 }
 

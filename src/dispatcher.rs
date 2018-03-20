@@ -64,17 +64,19 @@ pub enum ProcessResult {
 pub struct Dispatcher {
     magic: u32,
     nonce: u64,
-    height: u32
+    height: u32,
+    user_agent: String
 }
 
 impl Dispatcher {
 
     /// create a dispatcher
-    pub fn new (network: Network, height: u32) -> Dispatcher {
+    pub fn new (user_agent: String, network: Network, height: u32) -> Dispatcher {
         Dispatcher {
             magic: magic (network),
             nonce: STDRNG.lock().unwrap().next_u64(),
-            height
+            height,
+            user_agent
         }
     }
 
@@ -97,6 +99,7 @@ impl Dispatcher {
         let magic = self.magic;
         let nonce = self.nonce;
         let mut height = self.height;
+        let user_agent = self.user_agent.clone();
 
         let cnode = node.clone();
 
@@ -111,7 +114,7 @@ impl Dispatcher {
                 let (tx, rx) = mpsc::unbounded();
 
                 // first send a version message. This must be the first step for an out bound connection.
-                tx.unbounded_send(Dispatcher::version(nonce, height, &remote, &local)).expect("tx should never fail");
+                tx.unbounded_send(Dispatcher::version(user_agent, nonce, height, &remote, &local)).expect("tx should never fail");
 
                 // handshake is perfect once we got both version and verack from peer
                 let mut got_version = false;
@@ -205,7 +208,7 @@ impl Dispatcher {
     }
 
     /// compile a version message to be sent to new connections
-    pub fn version (nonce: u64, height: u32, remote: &SocketAddr, local: &SocketAddr) -> NetworkMessage {
+    pub fn version (user_agent: String, nonce: u64, height: u32, remote: &SocketAddr, local: &SocketAddr) -> NetworkMessage {
         let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
         NetworkMessage::Version(VersionMessage {
             version: 70001, // used only to be able to disable tx relay
@@ -214,7 +217,7 @@ impl Dispatcher {
             receiver: Dispatcher::address_for_socket(1, remote),
             sender: Dispatcher::address_for_socket(0, local),
             nonce: nonce,
-            user_agent: "SPV".to_owned(),
+            user_agent: user_agent,
             start_height: height as i32,
             relay: false,
         })
