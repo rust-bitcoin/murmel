@@ -32,4 +32,4 @@ rusqlite = "0.13.0"
 libc = "0.2"
 
 [patch.crates-io]
-bitcoin = { git = "https://github.com/tamasblummer/rust-bitcoin", branch = "address_socket"  }
+bitcoin = { git = "https://github.com/rust-bitcoin/rust-bitcoin", branch = "master"  }
