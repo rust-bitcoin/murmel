@@ -37,6 +37,10 @@ use rusqlite::Error;
 use rusqlite::OpenFlags;
 use std::io::Cursor;
 use std::path::Path;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
+use rand;
+use rand::Rng;
 
 /// Database interface to connect
 /// start, commit or rollback transactions
@@ -141,8 +145,7 @@ impl<'a> DBTX<'a> {
                                 port integer,
                                 services integer,
                                 last_seen integer,
-                                banned_until integer,
-                                speed integer)", &[])?;
+                                banned_until integer)", &[])?;
 
         trace!("created tables");
         Ok(0)
@@ -152,18 +155,59 @@ impl<'a> DBTX<'a> {
     ///   * last_seen - in unix epoch seconds
     ///   * banned_until - in unix epoch seconds
     ///   * speed - in ms as measured with ping
-    pub fn store_peer (&self, address: &Address, services: i64, last_seen: u32, banned_until: u32, speed: u16) -> Result<(), SPVError> {
+    pub fn store_peer (&self, address: &Address, last_seen: u32, banned_until: u32) -> Result<(), SPVError> {
         let mut s = String::new();
         for d in address.address.iter() {
             s.push_str(format!("{:4x}",d).as_str());
         }
+
         let row: Result<i64, Error> = self.tx.query_row(
             "select rowid from peers where address = ?", &[&s], | row | { row.get(0) });
-        if row.is_err() {
-            self.tx.execute("insert into peers (address, port, services, last_seen, banned_until, speed) \
-                        values (?, ?, ?, ?, ?, ?)", &[&s, &address.port, &services, &last_seen, &banned_until, &speed])?;
+        if let Ok (r) = row {
+            self.tx.execute("update peers set last_seen = ? where rowid = ?", &[&last_seen, &r])?;
+        }
+        else {
+            self.tx.execute("insert into peers (address, port, services, last_seen, banned_until) \
+                        values (?, ?, ?, ?, ?)", &[&s, &address.port, &(address.services as i64), &last_seen, &banned_until])?;
         }
         Ok(())
+    }
+
+    /// delete peers not seen in this month
+    pub fn discard_old_peers (&self)-> Result<(), SPVError> {
+        let oldest = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as u32
+            - 60*60*24*30;
+        self.tx.execute("delete peers where last_seen < ?", &[&oldest])?;
+        Ok(())
+    }
+
+    /// get a random stored peer
+    pub fn get_a_peer (&self) -> Result<Address, SPVError> {
+        let n_peers: i64 = self.tx.query_row(
+            "select count(*) from peers", &[], | row | { row.get(0) })?;
+
+        let mut rng = rand::thread_rng();
+        loop {
+            let rowid = (rng.next_u64() as i64) % n_peers;
+            let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as u32;
+            let address:Result<(String, u16, i64), Error> = self.tx.query_row(
+                "select address, port, services from peers where rowid = ? and banned_until < ? ", &[&(rowid as i64), &now], |row| {
+                    (row.get(0), row.get(1), row.get(2) ) });
+            if let Ok(a) = address {
+                let mut tail = a.0.as_str();
+                let mut v = [0u16; 8];
+                for i in 0..8 {
+                    let (digit, mut t) = tail.split_at(4);
+                    tail = t;
+                    v [i] = u16::from_str_radix(digit, 16).unwrap_or(0);
+                }
+                return Ok(Address {
+                    address: v,
+                    port: a.1,
+                    services: a.2 as u64
+                })
+            }
+        }
     }
 
     /// get the integer proxy for a hash. All tables use integers mapped here for better performance.

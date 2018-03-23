@@ -27,7 +27,7 @@ use lightning::chain::chaininterface::ChainWatchInterface;
 use node::Node;
 use std::net::SocketAddr;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::executor::current_thread;
 
 
@@ -49,16 +49,21 @@ impl SPV {
     pub fn new(user_agent :String, network: Network, db: &Path, birth: u32) -> Result<SPV, SPVError> {
         let mut db = DB::new(db)?;
         create_tables(&mut db)?;
-        Ok(SPV{ node:  Arc::new(Node::new(network, db, birth)), dispatcher: Dispatcher::new(user_agent, network, 0)})
+	    let db1 = Arc::new(Mutex::new(db));
+	    let db2 = db1.clone();
+        Ok(SPV{ node:  Arc::new(Node::new(network, db1, birth)), dispatcher: Dispatcher::new(db2, user_agent, network, 0)})
     }
 
 	/// Start the SPV stack. This should be called AFTER registering listener of the ChainWatchInterface,
 	/// so they are called as the SPV stack catches up with the blockchain
-	pub fn run (&self, peers: Vec<SocketAddr>) -> Result<(), SPVError> {
+	/// * peers - connect to these peers at startup (might be empty)
+	/// * min_connections - initiate connections the at least this number of peers. Peers will be chosen random
+	/// from those discovered in earlier runs
+	pub fn run (&self, peers: Vec<SocketAddr>, min_connections: u16) -> Result<(), SPVError> {
 		self.node.load_headers()?;
 		let cnode = self.node.clone();
 		current_thread::run (|_| {
-			current_thread::spawn(self.dispatcher.run(cnode, peers))
+			current_thread::spawn(self.dispatcher.run(cnode, peers, min_connections))
 		});
 		Ok(())
 	}

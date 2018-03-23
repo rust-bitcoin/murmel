@@ -86,14 +86,14 @@ pub struct Node {
     network: Network,
     peers: Arc<RwLock<HashMap<SocketAddr, Peer>>>,
     blockchain: Mutex<Blockchain>,
-    db: Mutex<DB>,
+    db: Arc<Mutex<DB>>,
     connector: Arc<LightningConnector>,
 	birth: u32
 }
 
 impl Node {
     /// Create a new local node for a network that uses the given database
-    pub fn new(network: Network, db: DB, birth: u32) -> Node {
+    pub fn new(network: Network, db: Arc<Mutex<DB>>, birth: u32) -> Node {
         let peers = Arc::new(RwLock::new(HashMap::new()));
         let connector = LightningConnector::new(
             Arc::new(Broadcaster::new(peers.clone())));
@@ -101,7 +101,7 @@ impl Node {
             network,
             peers,
             blockchain: Mutex::new(Blockchain::new(network)),
-            db: Mutex::new(db),
+            db,
             connector: Arc::new(connector),
 	        birth
         }
@@ -261,7 +261,7 @@ impl Node {
 		for a in v.iter() {
 			// if segwit full node and not older than 3 hours
 			if a.1.services & 9 == 9 && a.0 > now - 3 * 60 * 30 {
-				tx.store_peer(&a.1, a.1.services as i64, a.0, 0, 0)?;
+				tx.store_peer(&a.1, a.0, 0)?;
 			}
 			info!("stored address {:?}", a);
 		}

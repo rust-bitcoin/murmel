@@ -30,16 +30,20 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::io;
 use std::sync::Mutex;
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
+use std::time::{SystemTime, UNIX_EPOCH, Duration};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::thread;
 use rand::{Rng, StdRng};
 use tokio::executor::current_thread;
 use tokio_io::AsyncRead;
+use tokio_timer::Timer;
 use futures::{future, Future, Sink, Stream};
 use tokio::net::TcpStream;
 use codec::BitcoinCodec;
 use node::Node;
+use database::DB;
+
 
 lazy_static! {
     static ref STDRNG : Mutex<StdRng> = Mutex::new(StdRng::new().unwrap());
@@ -65,23 +69,28 @@ pub struct Dispatcher {
     magic: u32,
     nonce: u64,
     height: u32,
-    user_agent: String
+    user_agent: String,
+    connections: Arc<AtomicUsize>,
+    db: Arc<Mutex<DB>>
 }
 
 impl Dispatcher {
 
     /// create a dispatcher
-    pub fn new (user_agent: String, network: Network, height: u32) -> Dispatcher {
+    pub fn new (db: Arc<Mutex<DB>>, user_agent: String, network: Network, height: u32) -> Dispatcher {
         Dispatcher {
             magic: magic (network),
             nonce: STDRNG.lock().unwrap().next_u64(),
             height,
-            user_agent
+            user_agent,
+            connections: Arc::new(AtomicUsize::new(0)),
+            db
         }
     }
 
     /// Start and connect with a known set of peers
-    pub fn run(&self, node: Arc<Node>, peers: Vec<SocketAddr>) -> Box<Future<Item=(), Error=()>> {
+    pub fn run(&self, node: Arc<Node>, peers: Vec<SocketAddr>, min_connections: u16) -> Box<Future<Item=(), Error=()>> {
+
         // attempt to start clients specified by addrs (bootstrap address)
         for addr in peers {
             self.start_peer(node.clone(), addr);
@@ -91,7 +100,8 @@ impl Dispatcher {
 
     /// add another peer
     pub fn start_peer(&self, node: Arc<Node>, addr: SocketAddr) {
-        current_thread::spawn(self.compile_peer_future(node, addr).then( |_| {Ok(())}));
+        info!("set up peer={}", addr.clone());
+        current_thread::spawn(self.compile_peer_future(node, addr).then(|_|{Ok(())}));
     }
 
     /// compile the future that dispatches to a peer
@@ -100,6 +110,8 @@ impl Dispatcher {
         let nonce = self.nonce;
         let mut height = self.height;
         let user_agent = self.user_agent.clone();
+        let connections = self.connections.clone();
+        let connections2 = self.connections.clone();
 
         let cnode = node.clone();
 
@@ -173,6 +185,7 @@ impl Dispatcher {
                             };
                             if got_version && got_verack {
                                 // handshake perfect
+                                connections.fetch_add (1, Ordering::Relaxed);
                                 let version = versions.remove(&remote).unwrap();
                                 match cnode.connected(version, &local,&remote, tx.clone())? {
                                     ProcessResult::Ack => {},
@@ -196,6 +209,7 @@ impl Dispatcher {
                 let wnode = node.clone();
 
                 let rw = write.select2(read).then(move |_| {
+                    connections2.fetch_sub (1, Ordering::Relaxed);
                     info!("disconnected peer={}", remote.clone());
                     Ok(wnode.disconnected(&remote))
                 });
