@@ -259,11 +259,14 @@ impl Node {
 		let mut db = self.db.lock().unwrap();
 		let tx = db.transaction()?;
 		for a in v.iter() {
-			// if segwit full node and not older than 3 hours
-			if a.1.services & 9 == 9 && a.0 > now - 3 * 60 * 30 {
-				tx.store_peer(&a.1, a.0, 0)?;
-			}
-			info!("stored address {:?}", a);
+            // if not tor
+            if a.1.socket_addr().is_ok() {
+                // if segwit full node and not older than 3 hours
+                if a.1.services & 9 == 9 && a.0 > now - 3 * 60 * 30 {
+                    tx.store_peer(&a.1, a.0, 0)?;
+                }
+                info!("stored address {:?}", a.1.socket_addr()?);
+            }
 		}
 		tx.commit()?;
 		Ok(ProcessResult::Ack)

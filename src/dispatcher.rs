@@ -39,6 +39,7 @@ use tokio::executor::current_thread;
 use tokio_io::AsyncRead;
 use tokio_timer::Timer;
 use futures::{future, Future, Sink, Stream};
+use futures::future::Either;
 use tokio::net::TcpStream;
 use codec::BitcoinCodec;
 use node::Node;
@@ -208,9 +209,13 @@ impl Dispatcher {
 
                 let wnode = node.clone();
 
-                let rw = write.select2(read).then(move |_| {
+                let rw = write.select2(read).then(move |r| {
                     connections2.fetch_sub (1, Ordering::Relaxed);
-                    info!("disconnected peer={}", remote.clone());
+                    match r {
+                        Ok(_) => info!("disconnected peer={}", remote),
+                        Err(Either::A((a, _))) => info!("disconnected write {:?} peer={}", a, remote),
+                        Err(Either::B((b, _))) => info!("disconnected read {:?} peer={}", b, remote),
+                    }
                     Ok(wnode.disconnected(&remote))
                 });
 
