@@ -228,21 +228,12 @@ impl Dispatcher {
             version: 70001, // used only to be able to disable tx relay
             services: 0, // NODE_NONE this SPV implementation does not serve anything
             timestamp,
-            receiver: Dispatcher::address_for_socket(1, remote),
-            sender: Dispatcher::address_for_socket(0, local),
+            receiver: Address::new (remote, 1),
+            sender: Address::new(local, 0),
             nonce: nonce,
             user_agent: user_agent,
             start_height: height as i32,
             relay: false,
         })
-    }
-
-    /// convert socket address to Bitcoin protocol format
-    fn address_for_socket(services: u64, addr: &SocketAddr) -> Address {
-        let (address, port) = match *addr {
-            SocketAddr::V4(ref addr) => (addr.ip().to_ipv6_mapped().segments(), addr.port()),
-            SocketAddr::V6(ref addr) => (addr.ip().segments(), addr.port())
-        };
-        Address { services, address, port }
     }
 }
