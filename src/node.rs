@@ -39,7 +39,6 @@ use lightning::chain::chaininterface::BroadcasterInterface;
 use lighningconnector::LightningConnector;
 use std::collections::HashMap;
 use std::io;
-use std::error::Error;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -254,7 +253,7 @@ impl Node {
 		Ok(ProcessResult::Ack)
 	}
 
-	fn addr (&self, v: &Vec<(u32, Address)>, peer: &Peer)  -> Result<ProcessResult, SPVError> {
+	fn addr (&self, v: &Vec<(u32, Address)>, _peer: &Peer)  -> Result<ProcessResult, SPVError> {
 		let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as u32;
 		let mut db = self.db.lock().unwrap();
 		let tx = db.transaction()?;

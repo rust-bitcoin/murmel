@@ -49,9 +49,8 @@ impl SPV {
     pub fn new(user_agent :String, network: Network, db: &Path, birth: u32) -> Result<SPV, SPVError> {
         let mut db = DB::new(db)?;
         create_tables(&mut db)?;
-	    let db1 = Arc::new(Mutex::new(db));
-	    let db2 = db1.clone();
-        Ok(SPV{ node:  Arc::new(Node::new(network, db1, birth)), dispatcher: Dispatcher::new(db2, user_agent, network, 0)})
+        Ok(SPV{ node:  Arc::new(Node::new(network, Arc::new(Mutex::new(db)), birth)),
+            dispatcher: Dispatcher::new(user_agent, network, 0)})
     }
 
 	/// Start the SPV stack. This should be called AFTER registering listener of the ChainWatchInterface,

@@ -30,20 +30,17 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::io;
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH, Duration};
+use std::time::{SystemTime, UNIX_EPOCH};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::thread;
 use rand::{Rng, StdRng};
 use tokio::executor::current_thread;
 use tokio_io::AsyncRead;
-use tokio_timer::Timer;
 use futures::{future, Future, Sink, Stream};
 use futures::future::Either;
 use tokio::net::TcpStream;
 use codec::BitcoinCodec;
 use node::Node;
-use database::DB;
 
 
 lazy_static! {
@@ -71,21 +68,19 @@ pub struct Dispatcher {
     nonce: u64,
     height: u32,
     user_agent: String,
-    connections: Arc<AtomicUsize>,
-    db: Arc<Mutex<DB>>
+    connections: Arc<AtomicUsize>
 }
 
 impl Dispatcher {
 
     /// create a dispatcher
-    pub fn new (db: Arc<Mutex<DB>>, user_agent: String, network: Network, height: u32) -> Dispatcher {
+    pub fn new (user_agent: String, network: Network, height: u32) -> Dispatcher {
         Dispatcher {
             magic: magic (network),
             nonce: STDRNG.lock().unwrap().next_u64(),
             height,
             user_agent,
-            connections: Arc::new(AtomicUsize::new(0)),
-            db
+            connections: Arc::new(AtomicUsize::new(0))
         }
     }
 

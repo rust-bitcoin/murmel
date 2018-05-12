@@ -39,7 +39,6 @@ extern crate rand;
 extern crate rusqlite;
 extern crate tokio;
 extern crate tokio_io;
-extern crate tokio_timer;
 
 pub mod codec;
 pub mod node;
