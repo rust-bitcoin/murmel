@@ -164,6 +164,7 @@ impl Node {
 			let mut ask_for_blocks = Vec::new();
 			let mut disconnected_headers = Vec::new();
 			let height;
+            let mut some_new = false;
 			{
 				// new scope to limit lock
 
@@ -172,6 +173,7 @@ impl Node {
 
 				let mut db = self.db.lock().unwrap();
 				let tx = db.transaction()?;
+                let mut tip_moved = false;
 
 				for header in headers {
 					let old_tip = blockchain.best_tip_hash();
@@ -179,6 +181,7 @@ impl Node {
 					if blockchain.add_header(header.header).is_ok() {
 						// this is a new header, not previously stored
 						let new_tip = blockchain.best_tip_hash();
+                        tip_moved = tip_moved || new_tip != old_tip;
 						let header_hash = header.header.bitcoin_hash();
 						if header.header.time > self.birth - 60 * 60 * 3 && new_tip == header_hash {
 							// if time stamp is not older than three hours before our birth day and extending the trunk
@@ -187,6 +190,7 @@ impl Node {
 						}
 
 						tx.insert_header(&header.header)?;
+                        some_new = true;
 
 						if header_hash == new_tip && header.header.prev_blockhash != old_tip {
 							// this is a re-org. Compute headers to unwind
@@ -202,17 +206,25 @@ impl Node {
 				tx.set_tip(&new_tip)?;
 
 				tx.commit()?;
-				info!("add {} headers tip={} from peer={}", headers.len(),
-				      blockchain.best_tip_hash(), peer.remote_addr);
+
+                if tip_moved {
+                    info!("received {} headers new tip={} from peer={}", headers.len(),
+                          blockchain.best_tip_hash(), peer.remote_addr);
+                } else {
+                    debug!("received {} orphan headers from peer={}", headers.len(), peer.remote_addr);
+                }
 			}
 
 			for header in disconnected_headers {
 				self.connector.block_disconnected(&header);
 			}
-			// ask for new blocks on trunk
-			self.get_blocks(peer, ask_for_blocks)?;
-			// ask if peer knows even more
-			self.get_headers(peer)?;
+            // ask for new blocks on trunk
+            self.get_blocks(peer, ask_for_blocks)?;
+
+            // ask if peer knows even more
+            if some_new {
+                self.get_headers(peer)?;
+            }
 			Ok(ProcessResult::Height(height))
 		} else {
 			Ok(ProcessResult::Ack)
@@ -263,8 +275,8 @@ impl Node {
                 // if segwit full node and not older than 3 hours
                 if a.1.services & 9 == 9 && a.0 > now - 3 * 60 * 30 {
                     tx.store_peer(&a.1, a.0, 0)?;
+                    info!("stored address {:?}", a.1.socket_addr()?);
                 }
-                info!("stored address {:?}", a.1.socket_addr()?);
             }
 		}
 		tx.commit()?;
