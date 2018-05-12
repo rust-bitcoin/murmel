@@ -110,7 +110,7 @@ impl<'a> DBTX<'a> {
     ///   * tx - transactions
     ///   * blk_tx - n:m mapping of header to transactions to form a block.
     ///   * peers - list of known peers
-    pub fn create_tables(&self) -> Result<c_int, SPVError> {
+    pub fn create_tables(&self) -> Result<u32, SPVError> {
         trace!("creating tables...");
         self.tx.execute("create table if not exists ids (
                                 hash blob(32) primary key
@@ -147,8 +147,26 @@ impl<'a> DBTX<'a> {
                                 last_seen integer,
                                 banned_until integer)", &[])?;
 
+        self.tx.execute("create table if not exists birth (inception integer)", &[])?;
+
+        let stored_birth = self.get_birth ();
+        if stored_birth.is_err() {
+            let birth = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as u32;
+
+            self.tx.execute("insert into birth (inception) values (?)", &[&birth])?;
+        }
         trace!("created tables");
-        Ok(0)
+        self.get_birth()
+    }
+
+
+    /// get the integer proxy for a hash. All tables use integers mapped here for better performance.
+    pub fn get_birth(&self) -> Result<u32, SPVError> {
+        Ok(self.tx.query_row("select inception from birth",
+                             &[],
+                             |row| {
+                                 row.get(0)
+                             })?)
     }
 
     /// store a peer

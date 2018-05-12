@@ -183,9 +183,7 @@ impl Node {
 						let new_tip = blockchain.best_tip_hash();
                         tip_moved = tip_moved || new_tip != old_tip;
 						let header_hash = header.header.bitcoin_hash();
-						if header.header.time > self.birth - 60 * 60 * 3 && new_tip == header_hash {
-							// if time stamp is not older than three hours before our birth day and extending the trunk
-							// then ask for the block
+						if header.header.time > self.birth && new_tip == header_hash {
 							ask_for_blocks.push(new_tip);
 						}
 

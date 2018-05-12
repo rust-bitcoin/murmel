@@ -30,7 +30,6 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tokio::executor::current_thread;
 
-
 /// The complete SPV stack
 pub struct SPV{
 	node: Arc<Node>,
@@ -46,9 +45,9 @@ impl SPV {
     ///      birth - unix time stamp. We are interested in transactions only after this birth day
     /// The method will read previously stored headers from the database and sync up with the peers
     /// then serve the returned ChainWatchInterface
-    pub fn new(user_agent :String, network: Network, db: &Path, birth: u32) -> Result<SPV, SPVError> {
+    pub fn new(user_agent :String, network: Network, db: &Path) -> Result<SPV, SPVError> {
         let mut db = DB::new(db)?;
-        create_tables(&mut db)?;
+        let birth = create_tables(&mut db)?;
         Ok(SPV{ node:  Arc::new(Node::new(network, Arc::new(Mutex::new(db)), birth)),
             dispatcher: Dispatcher::new(user_agent, network, 0)})
     }
@@ -74,9 +73,9 @@ impl SPV {
 }
 
 /// create tables (if not already there) in the database
-fn create_tables(db: &mut DB) -> Result<(), SPVError> {
+fn create_tables(db: &mut DB) -> Result<u32, SPVError> {
     let tx = db.transaction()?;
-    tx.create_tables()?;
+    let birth = tx.create_tables()?;
     tx.commit()?;
-    Ok(())
+    Ok(birth)
 }

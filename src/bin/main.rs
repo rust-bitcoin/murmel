@@ -28,16 +28,14 @@ use bitcoin_spv::spv::SPV;
 use log::Level;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
+
 
 /// simple test drive that connects to a local bitcoind
 pub fn main() {
     simple_logger::init_with_level(Level::Info).unwrap();
     let mut peers = Vec::new();
     peers.push(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8333));
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as u32;
-    let spv = SPV::new("/rust-spv:0.1.0/".to_string(), Network::Bitcoin, Path::new("/tmp/blocks.sqlite"), now).unwrap();
+    let spv = SPV::new("/rust-spv:0.1.0/".to_string(), Network::Bitcoin, Path::new("/tmp/blocks.sqlite")).unwrap();
     spv.run(peers, 1).unwrap();
 }
 
