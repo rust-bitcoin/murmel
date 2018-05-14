@@ -47,3 +47,4 @@ pub mod error;
 pub mod dispatcher;
 pub mod lighningconnector;
 pub mod spv;
+pub mod blockfilter;
