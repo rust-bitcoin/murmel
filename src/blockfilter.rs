@@ -126,6 +126,7 @@ impl<'a> GCSFilterWriter<'a> {
             wrote += self.filter.golomb_rice_encode(&mut writer, data - delta)?;
             delta += data;
         }
+        wrote += writer.flush()?;
         Ok(wrote)
     }
 }
