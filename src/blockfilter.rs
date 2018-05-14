@@ -78,7 +78,7 @@ impl GCSFilter {
     }
 
     fn map_to_range (&self, hash: u64) -> u64 {
-        (((hash as u128) * (self.n_elements << self.grp) as u128) >> 64) as u64
+        (((hash as u128) * ((self.n_elements as u128) << self.grp)) >> 64) as u64
     }
 }
 
