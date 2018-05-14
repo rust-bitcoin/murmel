@@ -34,16 +34,15 @@ use siphasher::sip::SipHasher;
 
 /// Golomb Coded Set Filter
 pub struct GCSFilter {
-    sip_hash_k0: u64, // sip hash key 0
-    sip_hash_k1: u64, // sip hash key 1
+    sip_hash_key: u128, // sip hash key
     grp: u8,  // Golomb=Rice parameter (Golomb parameter = 2^p)
     n_elements: u32  // number of elements in the filter
 }
 
 impl GCSFilter {
     /// Create a new filter
-    pub fn new (sip_hash_k0: u64, sip_hash_k1: u64, p: u8) -> GCSFilter {
-        GCSFilter { sip_hash_k0, sip_hash_k1, grp: p, n_elements: 0 }
+    pub fn new (grp: u8, sip_hash_key: u128) -> GCSFilter {
+        GCSFilter { sip_hash_key, grp, n_elements: 0 }
     }
 
     /// Golomb-Rice encode a number n to a bit stream (Parameter 2^k)
@@ -71,7 +70,9 @@ impl GCSFilter {
     }
 
     fn hash (&self, element: &[u8]) -> u64 {
-        let mut hasher = SipHasher::new_with_keys(self.sip_hash_k0, self.sip_hash_k1);
+        let k0 = (self.sip_hash_key >> 64) as u64;
+        let k1 = self.sip_hash_key as u64;
+        let mut hasher = SipHasher::new_with_keys(k0, k1);
         hasher.write(element);
         hasher.finish()
     }
@@ -90,9 +91,9 @@ pub struct GCSFilterWriter<'a> {
 
 impl<'a> GCSFilterWriter<'a> {
     /// Create a new filter writer
-    pub fn new (writer: &'a mut io::Write, sip_hash_k0: u64, sip_hash_k1: u64, p: u8) -> GCSFilterWriter<'a> {
+    pub fn new (writer: &'a mut io::Write, grp: u8, sip_hash_key: u128) -> GCSFilterWriter<'a> {
         GCSFilterWriter {
-            filter: GCSFilter::new(sip_hash_k0, sip_hash_k1, p),
+            filter: GCSFilter::new(grp, sip_hash_key),
             writer: writer,
             elements: HashSet::new()
         }
