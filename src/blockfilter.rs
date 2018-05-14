@@ -49,7 +49,10 @@ impl<'a> BitStreamReader<'a> {
         let mut data = 0u64;
         while nbits > 0 {
             if self.offset == 8 {
-                self.reader.read(&mut self.buffer)?;
+                let read = self.reader.read(&mut self.buffer)?;
+                if read == 0 {
+                    return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "unexpected EOF"));
+                }
                 self.offset = 0;
             }
             let bits = cmp::min(8 - self.offset, nbits);
@@ -141,6 +144,7 @@ mod test {
             assert_eq!(reader.read(5).unwrap(), 1);
             assert_eq!(reader.read(6).unwrap(), 32);
             assert_eq!(reader.read(7).unwrap(), 7);
+            assert!(reader.read(8).is_err());
         }
     }
 }
