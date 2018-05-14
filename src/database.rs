@@ -30,7 +30,6 @@ use bitcoin::network::serialize::serialize;
 use bitcoin::network::address::Address;
 use bitcoin::util::hash::Sha256dHash;
 use error::SPVError;
-use libc::c_int;
 use rusqlite;
 use rusqlite::Connection;
 use rusqlite::Error;

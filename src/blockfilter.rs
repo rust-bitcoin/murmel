@@ -23,9 +23,115 @@
 
 use std::io;
 use std::cmp;
+use std::collections::HashSet;
+
+use bitcoin::network::encodable::VarInt;
+use bitcoin::network::encodable::ConsensusEncodable;
+use bitcoin::network::serialize::RawEncoder;
+
+use std::hash::Hasher;
+use siphasher::sip::SipHasher;
+
+/// Golomb Coded Set Filter
+pub struct GCSFilter {
+    sip_hash_k0: u64, // sip hash key 0
+    sip_hash_k1: u64, // sip hash key 1
+    grp: u8,  // Golomb=Rice parameter (Golomb parameter = 2^p)
+    n_elements: u32  // number of elements in the filter
+}
+
+impl GCSFilter {
+    /// Create a new filter
+    pub fn new (sip_hash_k0: u64, sip_hash_k1: u64, p: u8) -> GCSFilter {
+        GCSFilter { sip_hash_k0, sip_hash_k1, grp: p, n_elements: 0 }
+    }
+
+    /// Golomb-Rice encode a number n to a bit stream (Parameter 2^k)
+    fn golomb_rice_encode (&self, writer: &mut BitStreamWriter, n: u64) -> Result<usize, io::Error> {
+        let mut wrote = 0;
+        let mut q = n >> self.grp;
+        while q > 0 {
+            let nbits = cmp::min(q, 64);
+            wrote += writer.write(!0u64, nbits as u8)?;
+            q -= nbits;
+        }
+        wrote += writer.write(0, 1)?;
+        wrote += writer.write(n, self.grp)?;
+        Ok(wrote)
+    }
+
+    /// Golomb-Rice decode a number from a bit stream (Parameter 2^k)
+    fn golomb_rice_decode (&self, reader: &mut BitStreamReader) -> Result<u64, io::Error> {
+        let mut q = 0u64;
+        while reader.read(1)? == 1 {
+            q += 1;
+        }
+        let r = reader.read(self.grp)?;
+        return Ok((q << self.grp) + r);
+    }
+
+    fn hash (&self, element: &[u8]) -> u64 {
+        let mut hasher = SipHasher::new_with_keys(self.sip_hash_k0, self.sip_hash_k1);
+        hasher.write(element);
+        hasher.finish()
+    }
+
+    fn map_to_range (&self, hash: u64) -> u64 {
+        (((hash as u128) * (self.n_elements << self.grp) as u128) >> 64) as u64
+    }
+}
+
+/// A Golomb Coded Set Filter writer
+pub struct GCSFilterWriter<'a> {
+    filter: GCSFilter,
+    writer: &'a mut io::Write,
+    elements: HashSet<u64>
+}
+
+impl<'a> GCSFilterWriter<'a> {
+    /// Create a new filter writer
+    pub fn new (writer: &'a mut io::Write, sip_hash_k0: u64, sip_hash_k1: u64, p: u8) -> GCSFilterWriter<'a> {
+        GCSFilterWriter {
+            filter: GCSFilter::new(sip_hash_k0, sip_hash_k1, p),
+            writer: writer,
+            elements: HashSet::new()
+        }
+    }
+
+    /// add an element to the filter
+    pub fn add_element (&mut self, element: &[u8]) {
+        self.elements.insert (self.filter.hash(element));
+    }
+
+    /// Finish and flush final filter
+    pub fn finish (&mut self) -> Result<usize, io::Error> {
+        // write number of elements as varint
+        let mut encoder = RawEncoder::new(io::Cursor::new(Vec::new()));
+        self.filter.n_elements = self.elements.len() as u32;
+        VarInt(self.elements.len() as u64).consensus_encode(&mut encoder).unwrap();
+        let mut wrote = self.writer.write(encoder.into_inner().into_inner().as_slice())?;
+        // map hashes to [0, n_elements << grp]
+        let mut mapped = Vec::new();
+        mapped.reserve(self.elements.len());
+        for h in &self.elements {
+            mapped.push(self.filter.map_to_range(*h));
+        }
+        // sort
+        mapped.sort();
+        // write out deltas of sorted values into a Golonb-Rice coded bit stream
+        let mut writer = BitStreamWriter::new(self.writer);
+        let mut delta = 0;
+        for data in mapped {
+            wrote += self.filter.golomb_rice_encode(&mut writer, data - delta)?;
+            delta += data;
+        }
+        Ok(wrote)
+    }
+}
+
 
 /// Bitwise stream reader
-pub struct BitStreamReader<'a> {
+struct BitStreamReader<'a> {
     buffer: [u8;1],
     offset: u8,
     reader: &'a mut io::Read
@@ -66,7 +172,7 @@ impl<'a> BitStreamReader<'a> {
 }
 
 /// Bitwise stream writer
-pub struct BitStreamWriter<'a> {
+struct BitStreamWriter<'a> {
     buffer: [u8;1],
     offset: u8,
     writer: &'a mut io::Write
@@ -125,15 +231,16 @@ mod test {
         {
             let mut out = Cursor::new(&mut bytes);
             let mut writer = BitStreamWriter::new(&mut out);
-            writer.write(0, 1).unwrap();
-            writer.write(2, 2).unwrap();
-            writer.write(6, 3).unwrap();
-            writer.write(11, 4).unwrap();
-            writer.write(1, 5).unwrap();
-            writer.write(32, 6).unwrap();
-            writer.write(7, 7).unwrap();
+            writer.write(0, 1).unwrap(); // 0
+            writer.write(2, 2).unwrap(); // 10
+            writer.write(6, 3).unwrap(); // 110
+            writer.write(11, 4).unwrap(); // 1011
+            writer.write(1, 5).unwrap(); // 00001
+            writer.write(32, 6).unwrap(); // 100000
+            writer.write(7, 7).unwrap(); // 0000111
             writer.flush().unwrap();
         }
+        assert_eq!("01011010110000110000000001110000", format!("{:08b}{:08b}{:08b}{:08b}",bytes[0],bytes[1],bytes[2],bytes[3]));
         {
             let mut input = Cursor::new(&mut bytes);
             let mut reader = BitStreamReader::new(&mut input);
@@ -144,7 +251,8 @@ mod test {
             assert_eq!(reader.read(5).unwrap(), 1);
             assert_eq!(reader.read(6).unwrap(), 32);
             assert_eq!(reader.read(7).unwrap(), 7);
-            assert!(reader.read(8).is_err());
+            // 4 bits remained
+            assert!(reader.read(5).is_err());
         }
     }
 }

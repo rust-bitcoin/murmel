@@ -85,7 +85,7 @@ impl Dispatcher {
     }
 
     /// Start and connect with a known set of peers
-    pub fn run(&self, node: Arc<Node>, peers: Vec<SocketAddr>, min_connections: u16) -> Box<Future<Item=(), Error=()>> {
+    pub fn run(&self, node: Arc<Node>, peers: Vec<SocketAddr>, _min_connections: u16) -> Box<Future<Item=(), Error=()>> {
 
         // attempt to start clients specified by addrs (bootstrap address)
         for addr in peers {
