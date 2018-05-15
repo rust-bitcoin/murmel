@@ -26,59 +26,75 @@ use std::cmp;
 use std::collections::HashSet;
 
 use bitcoin::network::encodable::VarInt;
-use bitcoin::network::encodable::ConsensusEncodable;
-use bitcoin::network::serialize::RawEncoder;
+use bitcoin::network::encodable::{ConsensusEncodable, ConsensusDecodable};
+use bitcoin::network::serialize::{RawEncoder, RawDecoder};
+use bitcoin::util::hash::Sha256dHash;
 
 use std::hash::Hasher;
 use siphasher::sip::SipHasher;
 
-/// Golomb Coded Set Filter
-pub struct GCSFilter {
-    sip_hash_key: u128, // sip hash key
-    grp: u8,  // Golomb=Rice parameter (Golomb parameter = 2^p)
-    n_elements: u32  // number of elements in the filter
+const GOLOMB_RICE_PARAMETER: u8 = 20;
+
+/// Read and match on a serialized Golomb Coded Set Filter
+pub struct GCSFilterReader<'a> {
+    filter: GCSFilter,
+    reader: &'a mut io::Read,
+    query: HashSet<u64>
 }
 
-impl GCSFilter {
-    /// Create a new filter
-    pub fn new (grp: u8, sip_hash_key: u128) -> GCSFilter {
-        GCSFilter { sip_hash_key, grp, n_elements: 0 }
+impl<'a> GCSFilterReader<'a> {
+    /// Create a new filter reader
+    pub fn new (reader: &'a mut io::Read, block_hash: &Sha256dHash) -> Result<GCSFilterReader<'a>, io::Error> {
+        let mut decoder = RawDecoder::new(reader);
+        let n_elements: VarInt = ConsensusDecodable::consensus_decode(&mut decoder)
+            .map_err(|e| io::Error::new(io::ErrorKind::UnexpectedEof, "unexpected EOF"))?;
+        let block_hash_as_int = block_hash.into_le();
+        Ok(GCSFilterReader {
+            filter: GCSFilter::new(block_hash_as_int.0[0], block_hash_as_int.0[1], n_elements.0 as u32),
+            reader: decoder.into_inner(),
+            query: HashSet::new() })
     }
 
-    /// Golomb-Rice encode a number n to a bit stream (Parameter 2^k)
-    fn golomb_rice_encode (&self, writer: &mut BitStreamWriter, n: u64) -> Result<usize, io::Error> {
-        let mut wrote = 0;
-        let mut q = n >> self.grp;
-        while q > 0 {
-            let nbits = cmp::min(q, 64);
-            wrote += writer.write(!0u64, nbits as u8)?;
-            q -= nbits;
+    /// add a patter later matched with match_any
+    pub fn add_query_pattern (&mut self, element: &[u8]) {
+        self.query.insert (self.filter.hash(element));
+    }
+
+    /// check if any patter matched
+    pub fn match_any (&mut self) -> Result<bool, io::Error> {
+        if self.filter.n_elements > 0 {
+            // map hashes to [0, n_elements << grp]
+            let mut mapped = Vec::new();
+            mapped.reserve(self.query.len());
+            for h in &self.query {
+                mapped.push(self.filter.map_to_range(*h));
+            }
+            // sort
+            mapped.sort();
+
+            // find first match in two sorted arrays in one read pass
+            let mut reader = BitStreamReader::new(self.reader);
+            let mut data = self.filter.golomb_rice_decode(&mut reader)?;
+            let mut remaining = self.filter.n_elements - 1;
+            for p in mapped {
+                loop {
+                    if data == p {
+                        return Ok(true);
+                    } else if data < p {
+                        if remaining > 0 {
+                            data += self.filter.golomb_rice_decode(&mut reader)?;
+                            remaining -= 1;
+                        }
+                        else {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                }
+            }
         }
-        wrote += writer.write(0, 1)?;
-        wrote += writer.write(n, self.grp)?;
-        Ok(wrote)
-    }
-
-    /// Golomb-Rice decode a number from a bit stream (Parameter 2^k)
-    fn golomb_rice_decode (&self, reader: &mut BitStreamReader) -> Result<u64, io::Error> {
-        let mut q = 0u64;
-        while reader.read(1)? == 1 {
-            q += 1;
-        }
-        let r = reader.read(self.grp)?;
-        return Ok((q << self.grp) + r);
-    }
-
-    fn hash (&self, element: &[u8]) -> u64 {
-        let k0 = (self.sip_hash_key >> 64) as u64;
-        let k1 = self.sip_hash_key as u64;
-        let mut hasher = SipHasher::new_with_keys(k0, k1);
-        hasher.write(element);
-        hasher.finish()
-    }
-
-    fn map_to_range (&self, hash: u64) -> u64 {
-        (((hash as u128) * ((self.n_elements as u128) << self.grp)) >> 64) as u64
+        Ok(false)
     }
 }
 
@@ -91,11 +107,10 @@ pub struct GCSFilterWriter<'a> {
 
 impl<'a> GCSFilterWriter<'a> {
     /// Create a new filter writer
-    pub fn new (writer: &'a mut io::Write, grp: u8, sip_hash_key: u128) -> GCSFilterWriter<'a> {
+    pub fn new (writer: &'a mut io::Write, block_hash: &Sha256dHash) -> GCSFilterWriter<'a> {
+        let block_hash_as_int = block_hash.into_le();
         GCSFilterWriter {
-            filter: GCSFilter::new(grp, sip_hash_key),
-            writer: writer,
-            elements: HashSet::new()
+            filter: GCSFilter::new(block_hash_as_int.0[0], block_hash_as_int.0[1], 0), writer, elements: HashSet::new()
         }
     }
 
@@ -121,16 +136,64 @@ impl<'a> GCSFilterWriter<'a> {
         mapped.sort();
         // write out deltas of sorted values into a Golonb-Rice coded bit stream
         let mut writer = BitStreamWriter::new(self.writer);
-        let mut delta = 0;
+        let mut last = 0;
         for data in mapped {
-            wrote += self.filter.golomb_rice_encode(&mut writer, data - delta)?;
-            delta += data;
+            wrote += self.filter.golomb_rice_encode(&mut writer, data - last)?;
+            last = data;
         }
         wrote += writer.flush()?;
         Ok(wrote)
     }
 }
 
+/// Golomb Coded Set Filter
+struct GCSFilter {
+    k0: u64, // sip hash key
+    k1: u64, // sip hash key
+    n_elements: u32  // number of elements in the filter
+}
+
+impl GCSFilter {
+    /// Create a new filter
+    pub fn new (k0: u64, k1: u64, n_elements: u32) -> GCSFilter {
+        GCSFilter { k0, k1, n_elements }
+    }
+
+    /// Golomb-Rice encode a number n to a bit stream (Parameter 2^k)
+    fn golomb_rice_encode (&self, writer: &mut BitStreamWriter, n: u64) -> Result<usize, io::Error> {
+        let mut wrote = 0;
+        let mut q = n >> GOLOMB_RICE_PARAMETER;
+        while q > 0 {
+            let nbits = cmp::min(q, 64);
+            wrote += writer.write(!0u64, nbits as u8)?;
+            q -= nbits;
+        }
+        wrote += writer.write(0, 1)?;
+        wrote += writer.write(n, GOLOMB_RICE_PARAMETER)?;
+        Ok(wrote)
+    }
+
+    /// Golomb-Rice decode a number from a bit stream (Parameter 2^k)
+    fn golomb_rice_decode (&self, reader: &mut BitStreamReader) -> Result<u64, io::Error> {
+        let mut q = 0u64;
+        while reader.read(1)? == 1 {
+            q += 1;
+        }
+        let r = reader.read(GOLOMB_RICE_PARAMETER)?;
+        return Ok((q << GOLOMB_RICE_PARAMETER) + r);
+    }
+
+    /// Hash an arbitary slice with siphash using parameters of this filter
+    fn hash (&self, element: &[u8]) -> u64 {
+        let mut hasher = SipHasher::new_with_keys(self.k0, self.k1);
+        hasher.write(element);
+        hasher.finish()
+    }
+
+    fn map_to_range (&self, hash: u64) -> u64 {
+        (((hash as u128) * ((self.n_elements as u128) << GOLOMB_RICE_PARAMETER)) >> 64) as u64
+    }
+}
 
 /// Bitwise stream reader
 struct BitStreamReader<'a> {
@@ -226,6 +289,54 @@ impl<'a> BitStreamWriter<'a> {
 mod test {
     use super::*;
     use std::io::Cursor;
+    use rand;
+    use rand::Rng;
+
+    #[test]
+    fn test_filter () {
+        let mut bytes = Vec::new();
+        let mut rng = rand::thread_rng();
+        let mut patterns = HashSet::new();
+        for _ in 0..1000 {
+
+            use std::mem::transmute;
+            let bytes: [u8; 8] = unsafe { transmute(rng.next_u64().to_be()) };
+            patterns.insert(bytes);
+        }
+        {
+            let mut out = Cursor::new(&mut bytes);
+            let mut writer = GCSFilterWriter::new(&mut out, &Sha256dHash::default());
+            for p in &patterns {
+                writer.add_element(p);
+            }
+            writer.finish().unwrap();
+        }
+        {
+            let mut input = Cursor::new(&mut bytes);
+            let mut reader = GCSFilterReader::new(&mut input, &Sha256dHash::default()).unwrap();
+            let mut it = patterns.iter();
+            for _ in 0..5 {
+                reader.add_query_pattern(it.next().unwrap());
+            }
+            for _ in 0..100 {
+                let mut p = it.next().unwrap().to_vec();
+                p [0] = !p[0];
+                reader.add_query_pattern(p.as_slice());
+            }
+            assert!(reader.match_any().unwrap());
+        }
+        {
+            let mut input = Cursor::new(&mut bytes);
+            let mut reader = GCSFilterReader::new(&mut input, &Sha256dHash::default()).unwrap();
+            let mut it = patterns.iter();
+            for _ in 0..100 {
+                let mut p = it.next().unwrap().to_vec();
+                p [0] = !p[0];
+                reader.add_query_pattern(p.as_slice());
+            }
+            assert!(!reader.match_any().unwrap());
+        }
+    }
 
     #[test]
     fn test_bit_stream () {
