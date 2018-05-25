@@ -25,43 +25,135 @@ use std::io;
 use std::cmp;
 use std::collections::HashSet;
 
+use bitcoin;
 use bitcoin::network::encodable::VarInt;
 use bitcoin::network::encodable::{ConsensusEncodable, ConsensusDecodable};
 use bitcoin::network::serialize::{RawEncoder, RawDecoder};
 use bitcoin::util::hash::Sha256dHash;
+use bitcoin::blockdata::block::{BlockHeader, Block};
+use bitcoin::network::serialize::BitcoinHash;
 
 use std::hash::Hasher;
 use siphasher::sip::SipHasher;
 
 const GOLOMB_RICE_PARAMETER: u8 = 20;
 
-/// Read and match on a serialized Golomb Coded Set Filter
-pub struct GCSFilterReader<'a> {
+/// Compiles and writes a block filter
+pub struct BlockFilterWriter<'a> {
+    block: &'a Block,
+    writer: GCSFilterWriter<'a>
+}
+
+impl <'a> BlockFilterWriter<'a> {
+    /// Create a block filter writer
+    pub fn new (writer: &'a mut io::Write, block: &'a Block) -> BlockFilterWriter<'a> {
+        let block_hash_as_int = block.bitcoin_hash().into_le();
+        let writer = GCSFilterWriter::new(writer, block_hash_as_int.0[0], block_hash_as_int.0[1]);
+        BlockFilterWriter { block, writer }
+    }
+
+    /// Add transaction ids of the block to the filter
+    pub fn add_transaction_ids (&mut self) -> Result<(), io::Error> {
+        for transaction in &self.block.txdata {
+            self.writer.add_element(&transaction.txid().data());
+        }
+        Ok(())
+    }
+
+    /// Add consumed inputs of the block
+    pub fn add_inputs (&mut self) -> Result<(), io::Error> {
+
+        for transaction in &self.block.txdata {
+            // if not coin base
+            if !(transaction.input.len() == 1 && transaction.input[0].prev_hash == Sha256dHash::default()) {
+                for input in &transaction.input {
+                    let mut outpoint =  encode (&input.prev_hash)?;
+                    let serialized_previndex = encode(&input.prev_index)?;
+                    outpoint.extend(serialized_previndex);
+
+                    self.writer.add_element(outpoint.as_slice());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Add output scripts of the block
+    pub fn add_output_scripts (&mut self) -> Result<(), io::Error> {
+        for transaction in &self.block.txdata {
+            for output in &transaction.output {
+                self.writer.add_element(output.script_pubkey.data().as_slice());
+            }
+        }
+        Ok(())
+    }
+
+    /// compile basic filter as of BIP158
+    pub fn basic_filter (&mut self) -> Result<(), io::Error> {
+        self.add_transaction_ids()?;
+        self.add_inputs();
+        self.add_output_scripts()
+    }
+
+    /// Write block filter
+    pub fn finish(&mut self) -> Result<usize, io::Error> {
+        self.writer.finish()
+    }
+}
+
+fn encode<T: ? Sized>(data: &T) -> Result<Vec<u8>, io::Error>
+    where T: ConsensusEncodable<RawEncoder<io::Cursor<Vec<u8>>>> {
+    Ok(serialize(data)
+        .map_err(|_| { io::Error::new(io::ErrorKind::InvalidData, "serialization error") })?)
+}
+
+fn serialize<T: ?Sized>(data: &T) -> Result<Vec<u8>, bitcoin::util::Error>
+    where T: ConsensusEncodable<RawEncoder<io::Cursor<Vec<u8>>>>,
+{
+    let mut encoder = RawEncoder::new(io::Cursor::new(vec![]));
+    data.consensus_encode(&mut encoder)?;
+    Ok(encoder.into_inner().into_inner())
+}
+
+/// Reads and interpret a block filter
+pub struct BlockFilterReader<'a> {
+    reader: GCSFilterReader<'a>
+}
+
+impl <'a> BlockFilterReader<'a> {
+    /// Create a block filter reader
+    pub fn new (reader: &'a mut io::Read, block_hash: &Sha256dHash) -> Result<BlockFilterReader<'a>, io::Error> {
+        let block_hash_as_int = block_hash.into_le();
+        Ok(BlockFilterReader {
+            reader: GCSFilterReader::new(reader, block_hash_as_int.0[0], block_hash_as_int.0[1])?
+        })
+    }
+}
+
+
+struct GCSFilterReader<'a> {
     filter: GCSFilter,
     reader: &'a mut io::Read,
     query: HashSet<u64>
 }
 
 impl<'a> GCSFilterReader<'a> {
-    /// Create a new filter reader
-    pub fn new (reader: &'a mut io::Read, block_hash: &Sha256dHash) -> Result<GCSFilterReader<'a>, io::Error> {
+    fn new (reader: &'a mut io::Read, k0: u64, k1: u64) -> Result<GCSFilterReader<'a>, io::Error> {
         let mut decoder = RawDecoder::new(reader);
         let n_elements: VarInt = ConsensusDecodable::consensus_decode(&mut decoder)
             .map_err(|e| io::Error::new(io::ErrorKind::UnexpectedEof, "unexpected EOF"))?;
-        let block_hash_as_int = block_hash.into_le();
+
         Ok(GCSFilterReader {
-            filter: GCSFilter::new(block_hash_as_int.0[0], block_hash_as_int.0[1], n_elements.0 as u32),
+            filter: GCSFilter::new(k0, k1, n_elements.0 as u32),
             reader: decoder.into_inner(),
             query: HashSet::new() })
     }
 
-    /// add a patter later matched with match_any
-    pub fn add_query_pattern (&mut self, element: &[u8]) {
+    fn add_query_pattern (&mut self, element: &[u8]) {
         self.query.insert (self.filter.hash(element));
     }
 
-    /// check if any patter matched
-    pub fn match_any (&mut self) -> Result<bool, io::Error> {
+    fn match_any (&mut self) -> Result<bool, io::Error> {
         if self.filter.n_elements > 0 {
             // map hashes to [0, n_elements << grp]
             let mut mapped = Vec::new();
@@ -98,29 +190,24 @@ impl<'a> GCSFilterReader<'a> {
     }
 }
 
-/// A Golomb Coded Set Filter writer
-pub struct GCSFilterWriter<'a> {
+struct GCSFilterWriter<'a> {
     filter: GCSFilter,
     writer: &'a mut io::Write,
     elements: HashSet<u64>
 }
 
 impl<'a> GCSFilterWriter<'a> {
-    /// Create a new filter writer
-    pub fn new (writer: &'a mut io::Write, block_hash: &Sha256dHash) -> GCSFilterWriter<'a> {
-        let block_hash_as_int = block_hash.into_le();
+    fn new (writer: &'a mut io::Write, k0: u64, k1: u64) -> GCSFilterWriter<'a> {
         GCSFilterWriter {
-            filter: GCSFilter::new(block_hash_as_int.0[0], block_hash_as_int.0[1], 0), writer, elements: HashSet::new()
+            filter: GCSFilter::new(k0, k1, 0), writer, elements: HashSet::new()
         }
     }
 
-    /// add an element to the filter
-    pub fn add_element (&mut self, element: &[u8]) {
+    fn add_element (&mut self, element: &[u8]) {
         self.elements.insert (self.filter.hash(element));
     }
 
-    /// Finish and flush final filter
-    pub fn finish (&mut self) -> Result<usize, io::Error> {
+    fn finish (&mut self) -> Result<usize, io::Error> {
         // write number of elements as varint
         let mut encoder = RawEncoder::new(io::Cursor::new(Vec::new()));
         self.filter.n_elements = self.elements.len() as u32;
@@ -292,6 +379,48 @@ mod test {
     use rand;
     use rand::Rng;
 
+    extern crate rustc_serialize;
+    use blockfilter::test::rustc_serialize::json::Json;
+    use std::fs::File;
+    use std::io::Read;
+    use std::path::PathBuf;
+
+    extern crate hex;
+
+    fn decode<T: ? Sized>(data: Vec<u8>) -> Result<T, io::Error>
+        where T: ConsensusDecodable<RawDecoder<Cursor<Vec<u8>>>> {
+        let mut decoder: RawDecoder<Cursor<Vec<u8>>> = RawDecoder::new(Cursor::new(data));
+        Ok(ConsensusDecodable::consensus_decode(&mut decoder)
+            .map_err(|_| { io::Error::new(io::ErrorKind::InvalidData, "serialization error") })?)
+    }
+
+    #[test]
+    fn test_blockfilters () {
+        let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        d.push("test/blockfilters.json");
+        let mut file = File::open(d).unwrap();
+        let mut data = String::new();
+        file.read_to_string(&mut data).unwrap();
+
+        let json = Json::from_str(&data).unwrap();
+        for t in 1..8 {
+            let test_case = json [t].as_array().unwrap();
+            let block_hash = Sha256dHash::from_hex(test_case [1].as_string().unwrap()).unwrap();
+            let block :Block = decode (hex::decode(test_case[2].as_string().unwrap()).unwrap()).unwrap();
+            assert_eq!(block.bitcoin_hash(), block_hash);
+
+            let basic_filter = hex::decode(test_case[5].as_string().unwrap()).unwrap();
+            let mut constructed_basic = Cursor::new(Vec::new());
+            {
+                let mut basic_writer = BlockFilterWriter::new(&mut constructed_basic, &block);
+                basic_writer.basic_filter().unwrap();
+                basic_writer.finish().unwrap();
+            }
+            assert_eq!(basic_filter, constructed_basic.into_inner());
+ //           println!("{} {} {}", block_hash, basic_filter == constructed_basic.into_inner(), block.txdata.len());
+        }
+    }
+
     #[test]
     fn test_filter () {
         let mut bytes = Vec::new();
@@ -305,7 +434,7 @@ mod test {
         }
         {
             let mut out = Cursor::new(&mut bytes);
-            let mut writer = GCSFilterWriter::new(&mut out, &Sha256dHash::default());
+            let mut writer = GCSFilterWriter::new(&mut out, 0, 0);
             for p in &patterns {
                 writer.add_element(p);
             }
@@ -313,7 +442,7 @@ mod test {
         }
         {
             let mut input = Cursor::new(&mut bytes);
-            let mut reader = GCSFilterReader::new(&mut input, &Sha256dHash::default()).unwrap();
+            let mut reader = GCSFilterReader::new(&mut input, 0, 0).unwrap();
             let mut it = patterns.iter();
             for _ in 0..5 {
                 reader.add_query_pattern(it.next().unwrap());
@@ -327,7 +456,7 @@ mod test {
         }
         {
             let mut input = Cursor::new(&mut bytes);
-            let mut reader = GCSFilterReader::new(&mut input, &Sha256dHash::default()).unwrap();
+            let mut reader = GCSFilterReader::new(&mut input, 0, 0).unwrap();
             let mut it = patterns.iter();
             for _ in 0..100 {
                 let mut p = it.next().unwrap().to_vec();
