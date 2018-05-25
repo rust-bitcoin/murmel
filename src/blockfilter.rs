@@ -120,7 +120,7 @@ impl <'a> BlockFilterWriter<'a> {
     /// compile basic filter as of BIP158
     pub fn basic_filter (&mut self) -> Result<(), io::Error> {
         self.add_transaction_ids()?;
-        self.add_inputs();
+        self.add_inputs()?;
         self.add_output_scripts()
     }
 
