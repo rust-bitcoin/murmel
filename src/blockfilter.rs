@@ -65,7 +65,7 @@ impl <'a> BlockFilterWriter<'a> {
 
         for transaction in &self.block.txdata {
             // if not coin base
-            if !(transaction.input.len() == 1 && transaction.input[0].prev_hash == Sha256dHash::default()) {
+            if !transaction.is_coin_base() {
                 for input in &transaction.input {
                     let mut outpoint =  encode (&input.prev_hash)?;
                     let serialized_previndex = encode(&input.prev_index)?;
@@ -88,11 +88,46 @@ impl <'a> BlockFilterWriter<'a> {
         Ok(())
     }
 
+    /// Add wittness data of the block
+    pub fn add_wittness (&mut self) -> Result<(), io::Error> {
+        for transaction in &self.block.txdata {
+            if !transaction.is_coin_base() {
+                for input in &transaction.input {
+                    for w in &input.witness {
+                        self.writer.add_element(w.as_slice());
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// add data pushed in input scripts of the block
+    pub fn add_data_push (&mut self) -> Result<(), io::Error> {
+        for transaction in &self.block.txdata {
+            if !transaction.is_coin_base() {
+                for input in &transaction.input {
+                    for d in input.script_sig.pushed_data() {
+                        self.writer.add_element(d.as_slice());
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+
     /// compile basic filter as of BIP158
     pub fn basic_filter (&mut self) -> Result<(), io::Error> {
         self.add_transaction_ids()?;
         self.add_inputs();
         self.add_output_scripts()
+    }
+
+    /// compile extended filter as of BIP158
+    pub fn extended_filter (&mut self) -> Result<(), io::Error> {
+        self.add_wittness()?;
+        self.add_data_push()
     }
 
     /// Write block filter
@@ -412,12 +447,20 @@ mod test {
             let basic_filter = hex::decode(test_case[5].as_string().unwrap()).unwrap();
             let mut constructed_basic = Cursor::new(Vec::new());
             {
-                let mut basic_writer = BlockFilterWriter::new(&mut constructed_basic, &block);
-                basic_writer.basic_filter().unwrap();
-                basic_writer.finish().unwrap();
+                let mut writer = BlockFilterWriter::new(&mut constructed_basic, &block);
+                writer.basic_filter().unwrap();
+                writer.finish().unwrap();
             }
             assert_eq!(basic_filter, constructed_basic.into_inner());
- //           println!("{} {} {}", block_hash, basic_filter == constructed_basic.into_inner(), block.txdata.len());
+
+            let extended_filter = hex::decode(test_case[6].as_string().unwrap()).unwrap();
+            let mut constructed_extended = Cursor::new(Vec::new());
+            {
+                let mut writer = BlockFilterWriter::new(&mut constructed_extended, &block);
+                writer.extended_filter().unwrap();
+                writer.finish().unwrap();
+            }
+            assert_eq!(extended_filter, constructed_extended.into_inner());
         }
     }
 
