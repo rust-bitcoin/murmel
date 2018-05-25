@@ -52,6 +52,20 @@ impl SPV {
             dispatcher: Dispatcher::new(user_agent, network, 0)})
     }
 
+    /// Initialize the SPV stack and return a ChainWatchInterface
+    /// Set
+    ///      network - main or testnet
+    ///      bootstrap - peer adresses (only tested to work with one local node for now)
+    ///      birth - unix time stamp. We are interested in transactions only after this birth day
+    /// The method will start with an empty in-memory database and sync up with the peers
+    /// then serve the returned ChainWatchInterface
+    pub fn new_in_memory(user_agent :String, network: Network) -> Result<SPV, SPVError> {
+        let mut db = DB::mem()?;
+        let birth = create_tables(&mut db)?;
+        Ok(SPV{ node:  Arc::new(Node::new(network, Arc::new(Mutex::new(db)), birth)),
+            dispatcher: Dispatcher::new(user_agent, network, 0)})
+    }
+
 	/// Start the SPV stack. This should be called AFTER registering listener of the ChainWatchInterface,
 	/// so they are called as the SPV stack catches up with the blockchain
 	/// * peers - connect to these peers at startup (might be empty)
