@@ -21,20 +21,18 @@
 //! that minimizes filter size by using Golomb-Rice coding for compression.
 //!
 
-use std::io;
+use bitcoin;
+use bitcoin::blockdata::block::Block;
+use bitcoin::network::encodable::{ConsensusDecodable, ConsensusEncodable};
+use bitcoin::network::encodable::VarInt;
+use bitcoin::network::serialize::{RawDecoder, RawEncoder};
+use bitcoin::network::serialize::BitcoinHash;
+use bitcoin::util::hash::Sha256dHash;
+use siphasher::sip::SipHasher;
 use std::cmp;
 use std::collections::HashSet;
-
-use bitcoin;
-use bitcoin::network::encodable::VarInt;
-use bitcoin::network::encodable::{ConsensusEncodable, ConsensusDecodable};
-use bitcoin::network::serialize::{RawEncoder, RawDecoder};
-use bitcoin::util::hash::Sha256dHash;
-use bitcoin::blockdata::block::{BlockHeader, Block};
-use bitcoin::network::serialize::BitcoinHash;
-
 use std::hash::Hasher;
-use siphasher::sip::SipHasher;
+use std::io;
 
 const GOLOMB_RICE_PARAMETER: u8 = 20;
 
@@ -178,7 +176,7 @@ impl<'a> GCSFilterReader<'a> {
     fn new (reader: &'a mut io::Read, k0: u64, k1: u64) -> Result<GCSFilterReader<'a>, io::Error> {
         let mut decoder = RawDecoder::new(reader);
         let n_elements: VarInt = ConsensusDecodable::consensus_decode(&mut decoder)
-            .map_err(|e| io::Error::new(io::ErrorKind::UnexpectedEof, "unexpected EOF"))?;
+            .map_err(|_| io::Error::new(io::ErrorKind::UnexpectedEof, "unexpected EOF"))?;
 
         Ok(GCSFilterReader {
             filter: GCSFilter::new(k0, k1, n_elements.0 as u32),
@@ -411,16 +409,16 @@ impl<'a> BitStreamWriter<'a> {
 
 #[cfg(test)]
 mod test {
-    use super::*;
-    use std::io::Cursor;
+    use blockfilter::test::rustc_serialize::json::Json;
     use rand;
     use rand::Rng;
-
-    extern crate rustc_serialize;
-    use blockfilter::test::rustc_serialize::json::Json;
     use std::fs::File;
+    use std::io::Cursor;
     use std::io::Read;
     use std::path::PathBuf;
+    use super::*;
+
+    extern crate rustc_serialize;
 
     extern crate hex;
 

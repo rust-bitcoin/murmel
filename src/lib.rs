@@ -24,28 +24,24 @@
 #![deny(non_snake_case)]
 #![deny(unused_mut)]
 #![deny(missing_docs)]
+#![deny(unused_must_use)]
 
+extern crate mio;
 extern crate bitcoin;
 extern crate bitcoin_chain;
 extern crate bytes;
-extern crate futures;
-#[macro_use]
-extern crate lazy_static;
 extern crate libc;
 extern crate lightning;
 #[macro_use]
 extern crate log;
 extern crate rand;
 extern crate rusqlite;
-extern crate tokio;
-extern crate tokio_io;
 extern crate siphasher;
 
-pub mod codec;
 pub mod node;
 pub mod database;
 pub mod error;
-pub mod dispatcher;
 pub mod lighningconnector;
 pub mod spv;
 pub mod blockfilter;
+pub mod p2p;

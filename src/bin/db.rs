@@ -16,12 +16,9 @@
 extern crate bitcoin;
 extern crate bitcoin_spv;
 extern crate bytes;
-extern crate futures;
 extern crate log;
 extern crate rand;
 extern crate simple_logger;
-extern crate tokio;
-extern crate tokio_io;
 
 use bitcoin::network::constants::Network;
 use bitcoin_spv::spv::SPV;

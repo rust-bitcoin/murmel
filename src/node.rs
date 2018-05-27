@@ -21,69 +21,43 @@
 //!
 
 
-use bitcoin_chain::blockchain::Blockchain;
 use bitcoin::blockdata::block::{Block, LoneBlockHeader};
 use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::blockdata::transaction::Transaction;
+use bitcoin::network::address::Address;
 use bitcoin::network::constants::Network;
 use bitcoin::network::message::NetworkMessage;
 use bitcoin::network::message_blockdata::*;
-use bitcoin::network::message_network::*;
 use bitcoin::network::serialize::BitcoinHash;
-use bitcoin::network::address::Address;
 use bitcoin::util::hash::Sha256dHash;
+use bitcoin_chain::blockchain::Blockchain;
 use database::DB;
-use dispatcher::{Tx, ProcessResult};
 use error::SPVError;
-use lightning::chain::chaininterface::BroadcasterInterface;
 use lighningconnector::LightningConnector;
-use std::collections::HashMap;
-use std::io;
-use std::net::SocketAddr;
+use lightning::chain::chaininterface::BroadcasterInterface;
+use p2p::{P2P, Peer};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
-use std::sync::RwLock;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
-/// a connected peer
-pub struct Peer {
-    tx: Tx,
-    local_addr: SocketAddr,
-    remote_addr: SocketAddr,
-    version: VersionMessage,
-    banscore: AtomicUsize,
-}
 
-impl Peer {
-	/// construct a peer
-    pub fn new(tx: Tx, local_addr: SocketAddr, remote_addr: SocketAddr, version: VersionMessage) -> Peer {
-        Peer {
-            tx,
-            local_addr,
-            remote_addr,
-            version,
-            banscore: AtomicUsize::new(0),
-        }
-    }
-
-    /// increment ban score for a misbehaving peer. Ban if score reaches 100
-    fn ban(peer: &Peer, addscore: u16) -> Result<(), io::Error> {
-        let oldscore = peer.banscore.fetch_add(addscore as usize, Ordering::Relaxed);
-        if oldscore + addscore as usize >= 100 {
-            info!("banned peer={}", peer.remote_addr);
-            Err(io::Error::new(io::ErrorKind::Other, format!("banned peer={}", peer.remote_addr)))
-        } else {
-            Ok(())
-        }
-    }
+/// The node replies with this process result to messages
+pub enum ProcessResult {
+    /// Acknowledgment
+    Ack,
+    /// Acknowledgment, dispatcher should indicate the new height in future version messages
+    Height(u32),
+    /// The message was ignored by the node
+    Ignored,
+    /// The node really does not like the message (or ban score limit reached), disconnect this rouge peer
+    Disconnect,
 }
 
 /// The local node processing incoming messages
 pub struct Node {
+    p2p: Arc<P2P>,
     network: Network,
-    peers: Arc<RwLock<HashMap<SocketAddr, Peer>>>,
     blockchain: Mutex<Blockchain>,
     db: Arc<Mutex<DB>>,
     connector: Arc<LightningConnector>,
@@ -92,13 +66,11 @@ pub struct Node {
 
 impl Node {
     /// Create a new local node for a network that uses the given database
-    pub fn new(network: Network, db: Arc<Mutex<DB>>, birth: u32) -> Node {
-        let peers = Arc::new(RwLock::new(HashMap::new()));
-        let connector = LightningConnector::new(
-            Arc::new(Broadcaster::new(peers.clone())));
+    pub fn new(p2p: Arc<P2P>, network: Network, db: Arc<Mutex<DB>>, birth: u32) -> Node {
+        let connector = LightningConnector::new(Arc::new(Broadcaster{}));
         Node {
+            p2p,
             network,
-            peers,
             blockchain: Mutex::new(Blockchain::new(network)),
             db,
             connector: Arc::new(connector),
@@ -132,25 +104,24 @@ impl Node {
     }
 
 	/// called from dispatcher whenever a new peer is connected (after handshake is successful)
-    pub fn connected(&self, version: VersionMessage, local_addr: &SocketAddr, remote_addr: &SocketAddr, tx: Tx) -> Result<ProcessResult, SPVError> {
-        let mut peers = self.peers.write().unwrap();
-        let peer = Peer::new(tx, *local_addr, *remote_addr, version);
-        peers.insert(*remote_addr, peer);
-        self.get_headers(peers.get(remote_addr).unwrap())
+    pub fn connected(&self, peer: &Peer) -> Result<ProcessResult, SPVError> {
+        self.get_headers(peer)
     }
 
-	/// called from dispatcher whenever a peer is disconnected
-    pub fn disconnected(&self, remote_addr: &SocketAddr) {
-        let mut peers = self.peers.write().unwrap();
-        peers.remove(remote_addr);
+    /// called from dispatcher whenever a peer is disconnected
+    pub fn disconnected(&self, _peer: &Peer) -> Result<ProcessResult, SPVError> {
+        Ok(ProcessResult::Ack)
     }
 
     /// Process incoming messages
-    pub fn process(&self, msg: &NetworkMessage, remote_addr: &SocketAddr) -> Result<ProcessResult, SPVError> {
-        if let Some(peer) = self.peers.read().unwrap().get(remote_addr) {
-            self.process_for_peer(msg, peer)
-        } else {
-            Err(SPVError::UnknownPeer(*remote_addr))
+    pub fn process(&self, msg: &NetworkMessage, peer: &Peer) -> Result<ProcessResult, SPVError> {
+        match msg {
+            &NetworkMessage::Ping(nonce) => self.ping(nonce, peer),
+            &NetworkMessage::Headers(ref v) => self.headers(v, peer),
+            &NetworkMessage::Block(ref b) => self.block(b, peer),
+            &NetworkMessage::Inv(ref v) => self.inv(v, peer),
+            &NetworkMessage::Addr(ref v) => self.addr(v, peer),
+            _ => Ok(ProcessResult::Ignored)
         }
     }
 
@@ -207,9 +178,9 @@ impl Node {
 
                 if tip_moved {
                     info!("received {} headers new tip={} from peer={}", headers.len(),
-                          blockchain.best_tip_hash(), peer.remote_addr);
+                          blockchain.best_tip_hash(), peer.pid);
                 } else {
-                    debug!("received {} orphan headers from peer={}", headers.len(), peer.remote_addr);
+                    debug!("received {} orphan headers from peer={}", headers.len(), peer.pid);
                 }
 			}
 
@@ -281,17 +252,6 @@ impl Node {
 		Ok(ProcessResult::Ack)
 	}
 
-    fn process_for_peer(&self, msg: &NetworkMessage, peer: &Peer) -> Result<ProcessResult, SPVError> {
-        match msg {
-            &NetworkMessage::Ping(nonce) => self.ping(nonce, peer),
-            &NetworkMessage::Headers(ref v) => self.headers(v, peer),
-            &NetworkMessage::Block(ref b) => self.block(b, peer),
-            &NetworkMessage::Inv(ref v) => self.inv(v, peer),
-	        &NetworkMessage::Addr(ref v) => self.addr(v, peer),
-            _ => Ok(ProcessResult::Ignored)
-        }
-    }
-
     /// get the blocks we are interested in
     fn get_blocks(&self, peer: &Peer, blocks: Vec<Sha256dHash>) -> Result<ProcessResult, SPVError> {
         let mut invs = Vec::new();
@@ -317,11 +277,8 @@ impl Node {
 
     /// Reply to peer
     fn reply(&self, peer: &Peer, msg: &NetworkMessage) -> Result<ProcessResult, SPVError> {
-        if peer.tx.unbounded_send((*msg).clone()).is_err() {
-            Err(SPVError::Generic(format!("can not speak to peer={}", peer.remote_addr)))
-        } else {
-            Ok(ProcessResult::Ack)
-        }
+        peer.send(msg)?;
+        Ok(ProcessResult::Ack)
     }
 
     /// send a new transaction to all peers
@@ -331,9 +288,7 @@ impl Node {
 
     /// send the same message to all connected peers
     fn broadcast(&self, msg: &NetworkMessage) -> Result<ProcessResult, SPVError> {
-        for (_, peer) in self.peers.read().unwrap().iter() {
-            self.reply(peer, msg)?;
-        }
+        self.p2p.broadcast(msg)?;
         Ok(ProcessResult::Ack)
     }
 
@@ -349,23 +304,11 @@ impl Node {
 }
 
 /// a helper class to implement LightningConnector
-pub struct Broadcaster {
-    peers: Arc<RwLock<HashMap<SocketAddr, Peer>>>,
-}
-
-impl Broadcaster {
-    /// create a broadcaster
-	pub fn new(peers: Arc<RwLock<HashMap<SocketAddr, Peer>>>) -> Broadcaster {
-        Broadcaster { peers }
-    }
-}
+pub struct Broadcaster;
 
 impl BroadcasterInterface for Broadcaster {
     fn broadcast_transaction(&self, tx: &Transaction) {
-        let msg = NetworkMessage::Tx((*tx).clone());
-        for (_, peer) in self.peers.read().unwrap().iter() {
-            peer.tx.unbounded_send(msg.clone()).unwrap();
-        }
+        // TODO
     }
 }
 

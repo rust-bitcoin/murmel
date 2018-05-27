@@ -18,16 +18,12 @@ path = "src/lib.rs"
 bitcoin = "0.13"
 bitcoin-chain = { git = "https://github.com/rust-bitcoin/rust-bitcoin-chain", branch = "master" }
 lightning = { git = "https://github.com/rust-bitcoin/rust-lightning", branch = "master" }
-tokio = "0.1"
-tokio-io = "0.1"
-futures = "0.1"
+mio = "0.6"
 bytes = "0.4"
 rand = "0.4"
 siphasher = "0.2"
-lazy_static = "1.0"
 log = "0.4"
 simple_logger = "0.5.0"
-time = "0.1.39"
 rusqlite = "0.13.0"
 libc = "0.2"
 

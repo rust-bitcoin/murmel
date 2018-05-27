@@ -34,7 +34,7 @@ pub enum SPVError {
     /// generic error message
     Generic(String),
     /// The peer is not following the Bitcoin protocol, the first parameter is added to its ban score
-    Misbehaving(u16, String, SocketAddr),
+    Misbehaving(u16, String),
     /// Network IO error
     IO(io::Error),
     /// Database error
@@ -48,7 +48,7 @@ impl Error for SPVError {
         match *self {
             SPVError::UnknownPeer(_) => "unkown peer",
             SPVError::Generic(ref s) => s.as_str(),
-            SPVError::Misbehaving(_, ref reason, _) => reason.as_str(),
+            SPVError::Misbehaving(_, ref reason) => reason.as_str(),
             SPVError::IO(ref err) => err.description(),
             SPVError::Panic(ref reason) => reason.as_str(),
             SPVError::DB(ref err) => err.description()
@@ -60,7 +60,7 @@ impl Error for SPVError {
             SPVError::UnknownPeer(_) => None,
             SPVError::Generic(_) => None,
             SPVError::IO(ref err) => Some(err),
-            SPVError::Misbehaving(_, _, _) => None,
+            SPVError::Misbehaving(_, _) => None,
             SPVError::Panic(_) => None,
             SPVError::DB(ref err) => Some(err)
         }
@@ -75,7 +75,7 @@ impl fmt::Display for SPVError {
             SPVError::UnknownPeer(ref a) => write!(f, "Unknown peer={}", a),
             SPVError::Generic(ref s) => write!(f, "Generic: {}", s),
             SPVError::IO(ref err) => write!(f, "IO error: {}", err),
-            SPVError::Misbehaving(_, ref reason, ref peer) => write!(f, "Misbehaving: {} peer={}", reason, peer),
+            SPVError::Misbehaving(_, ref reason) => write!(f, "Misbehaving: {}", reason),
             SPVError::Panic(ref reason) => write!(f, "Panic: {}", reason),
             SPVError::DB(ref err) => write!(f, "DB error: {}", err),
         }

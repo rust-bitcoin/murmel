@@ -21,19 +21,18 @@
 
 use bitcoin::network::constants::Network;
 use database::DB;
-use dispatcher::Dispatcher;
 use error::SPVError;
 use lightning::chain::chaininterface::ChainWatchInterface;
 use node::Node;
+use p2p::P2P;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use tokio::executor::current_thread;
 
 /// The complete SPV stack
 pub struct SPV{
 	node: Arc<Node>,
-	dispatcher: Dispatcher
+	p2p: Arc<P2P>
 }
 
 impl SPV {
@@ -48,8 +47,10 @@ impl SPV {
     pub fn new(user_agent :String, network: Network, db: &Path) -> Result<SPV, SPVError> {
         let mut db = DB::new(db)?;
         let birth = create_tables(&mut db)?;
-        Ok(SPV{ node:  Arc::new(Node::new(network, Arc::new(Mutex::new(db)), birth)),
-            dispatcher: Dispatcher::new(user_agent, network, 0)})
+        let p2p = Arc::new(P2P::new(user_agent, network, 0));
+        let node = Arc::new(Node::new(p2p.clone(), network, Arc::new(Mutex::new(db)),
+                                      birth));
+        Ok(SPV{ node, p2p})
     }
 
     /// Initialize the SPV stack and return a ChainWatchInterface
@@ -62,8 +63,10 @@ impl SPV {
     pub fn new_in_memory(user_agent :String, network: Network) -> Result<SPV, SPVError> {
         let mut db = DB::mem()?;
         let birth = create_tables(&mut db)?;
-        Ok(SPV{ node:  Arc::new(Node::new(network, Arc::new(Mutex::new(db)), birth)),
-            dispatcher: Dispatcher::new(user_agent, network, 0)})
+        let p2p = Arc::new(P2P::new(user_agent, network, 0));
+        let node = Arc::new(Node::new(p2p.clone(), network, Arc::new(Mutex::new(db)),
+                                      birth));
+        Ok(SPV{ node, p2p})
     }
 
 	/// Start the SPV stack. This should be called AFTER registering listener of the ChainWatchInterface,
@@ -71,12 +74,12 @@ impl SPV {
 	/// * peers - connect to these peers at startup (might be empty)
 	/// * min_connections - initiate connections the at least this number of peers. Peers will be chosen random
 	/// from those discovered in earlier runs
-	pub fn run (&self, peers: Vec<SocketAddr>, min_connections: u16) -> Result<(), SPVError> {
+	pub fn run (&self, peers: Vec<SocketAddr>, _min_connections: u16) -> Result<(), SPVError> {
 		self.node.load_headers()?;
-		let cnode = self.node.clone();
-		current_thread::run (|_| {
-			current_thread::spawn(self.dispatcher.run(cnode, peers, min_connections))
-		});
+        for addr in &peers {
+            self.p2p.add_peer(addr)?;
+        }
+        self.p2p.run(self.node.clone())?;
 		Ok(())
 	}
 
