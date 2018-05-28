@@ -364,7 +364,7 @@ impl Read for Buffer {
             while have < buf.len() {
                 let current = &self.content[self.pos.0];
                 let minlen = min(buf.len() - have, current.len() - self.pos.1);
-                buf[have..minlen].copy_from_slice(&current[self.pos.1..self.pos.1 + minlen]);
+                buf[have..have+minlen].copy_from_slice(&current[self.pos.1..self.pos.1 + minlen]);
                 self.pos.1 += minlen;
                 have += minlen;
                 if self.pos.1 == current.len() {
