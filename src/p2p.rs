@@ -138,11 +138,12 @@ impl P2P {
             for event in events.iter() {
                 let pid = PeerId { token: event.token() };
 
-                if event.readiness().contains(Ready::hup()) {
-                    // node.disconnected(pid)?; TODO
-                    self.peers.write().unwrap().remove(&pid);
-                    info!("left us peer={}", pid);
-                } else if let Some(peer) = self.peers.write().unwrap().get_mut(&pid) {
+                if let Some(peer) = self.peers.write().unwrap().get_mut(&pid) {
+                    if event.readiness().contains(Ready::hup()) {
+                        node.disconnected(peer)?;
+                        self.peers.write().unwrap().remove(&pid);
+                        info!("left us peer={}", pid);
+                    }
                     if event.readiness().contains(Ready::readable()) {
                         let mut buffer = [0u8; MAX_MESSAGE_SIZE];
                         while let Ok(len) = peer.stream.read(&mut buffer) {
@@ -150,9 +151,9 @@ impl P2P {
                                 break;
                             }
                             peer.buffer.write(&buffer[0..len])?;
-                            while let Some(msg) = decode (&mut peer.buffer)? {
+                            while let Some(msg) = decode(&mut peer.buffer)? {
                                 trace!("received {} peer={}", msg.command(), pid);
-                                match peer.process_incoming (&msg, node.clone())? {
+                                match peer.process_incoming(&msg, node.clone())? {
                                     ProcessResult::Disconnect => {
                                         self.peers.write().unwrap().remove(&pid);
                                         info!("disconnected peer={}", pid);
@@ -163,10 +164,10 @@ impl P2P {
                         }
                     }
                     if event.readiness().contains(Ready::writable()) {
-                        while let Some(msg) = peer.try_receive () {
+                        while let Some(msg) = peer.try_receive() {
                             let mut buffer = Buffer::new();
                             let raw = RawNetworkMessage { magic: self.magic, payload: msg };
-                            encode ( &raw, &mut buffer)?;
+                            encode(&raw, &mut buffer)?;
                             peer.stream.write(buffer.into_vec().as_slice())?;
                             trace!("sent {} to peer={}", raw.command(), pid);
                         }
