@@ -35,7 +35,7 @@ use mio::net::TcpStream;
 use node::{Node, ProcessResult};
 use rand::{Rng, StdRng};
 use std::cmp::{max, min};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fmt::{Display, Error, Formatter};
 use std::io;
 use std::io::{Read, Write};
@@ -150,7 +150,7 @@ impl P2P {
                             if len == 0 {
                                 break;
                             }
-                            peer.buffer.extend_from_slice(&buffer[0..len]);
+                            peer.buffer.write(&buffer[0..len])?;
                             while let Some(msg) = decode (&mut peer.buffer)? {
                                 trace!("received {} peer={}", msg.command(), pid);
                                 match peer.process_incoming (&msg, node.clone())? {
@@ -165,10 +165,10 @@ impl P2P {
                     }
                     if event.readiness().contains(Ready::writable()) {
                         while let Some(msg) = peer.try_receive () {
-                            let mut buffer = BytesMut::with_capacity(MAX_MESSAGE_SIZE);
+                            let mut buffer = Buffer::new();
                             let raw = RawNetworkMessage { magic: self.magic, payload: msg };
                             encode ( &raw, &mut buffer)?;
-                            peer.stream.write(buffer.as_ref())?;
+                            peer.stream.write(buffer.into_vec().as_slice())?;
                             trace!("sent {} to peer={}", raw.command(), pid);
                         }
                         peer.deregister()?;
@@ -186,7 +186,7 @@ pub struct Peer {
     pub pid: PeerId,
     poll: Arc<Poll>,
     stream: TcpStream,
-    buffer: BytesMut,
+    buffer: Buffer,
     got_verack: bool,
     nonce: u64,
     /// the version message the peer sent to us at connect
@@ -201,7 +201,7 @@ impl Peer {
 
         let stream = TcpStream::connect(addr)?;
         let (sender, receiver) = mpsc::channel();
-        let peer = Peer{pid, poll: poll.clone(), stream, buffer: BytesMut::new(),
+        let peer = Peer{pid, poll: poll.clone(), stream, buffer: Buffer::new(),
             got_verack: false, nonce, version: None, sender, receiver};
         peer.register_read()?;
         Ok(peer)
@@ -303,54 +303,89 @@ impl Peer {
     }
 }
 
-/// A helper class that wrap BytesMut so it implements io::Read and io::Write
-struct BufferRW<'a> (&'a mut BytesMut);
+struct Buffer {
+    content: VecDeque<Vec<u8>>,
+    pos: (usize, usize)
+}
 
-impl<'a> io::Write for BufferRW<'a> {
-    fn write(&mut self, buf: &[u8]) -> Result<usize, io::Error> {
-        if self.0.remaining_mut() < buf.len() {
-            self.0.reserve(max(1024, buf.len()));
-        }
-        self.0.put_slice(buf);
-        Ok(buf.len())
+impl Buffer {
+    fn new () -> Buffer {
+        Buffer{ content: VecDeque::new(), pos: (0, 0) }
     }
 
+    fn rollback (&mut self) {
+        self.pos = (0, 0);
+    }
+
+    fn commit (&mut self) {
+        for _ in 0..self.pos.0 {
+            self.content.pop_front();
+        }
+    }
+
+    fn into_vec (mut self) -> Vec<u8> {
+        let mut merged = Vec::new();
+        for v in self.content.drain(..) {
+            merged.extend_from_slice(v.as_slice());
+        }
+        merged
+    }
+}
+
+impl Write for Buffer {
+    fn write(&mut self, buf: &[u8]) -> Result<usize, io::Error> {
+        if buf.len() > 0 {
+            self.content.push_back(buf.to_vec());
+        }
+        Ok(buf.len())
+    }
     fn flush(&mut self) -> Result<(), io::Error> {
         Ok(())
     }
 }
 
-impl<'a> io::Read for BufferRW<'a> {
+impl Read for Buffer {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, io::Error> {
-        let minlen = min(self.0.len(), buf.len());
-        buf[..minlen].copy_from_slice(&self.0.split_to(minlen));
-        Ok(minlen)
+        if self.pos.0 == self.content.len() {
+            Ok(0)
+        }
+        else {
+            let current = &self.content[self.pos.0];
+            let minlen = min(buf.len(), current.len() - self.pos.1);
+            buf[..minlen].copy_from_slice(&current[self.pos.1 .. self.pos.1 + minlen]);
+            self.pos.1 += minlen;
+            if self.pos.1 == current.len() {
+                self.pos.0 += 1;
+                self.pos.1 = 0;
+            }
+            Ok(minlen)
+        }
     }
 }
 
-fn encode(item: &RawNetworkMessage, dst: &mut BytesMut) -> Result<(), io::Error> {
-    match item.consensus_encode(&mut RawEncoder::new(BufferRW(dst))) {
+fn encode(item: &RawNetworkMessage, dst: &mut Buffer) -> Result<(), io::Error> {
+    match item.consensus_encode(&mut RawEncoder::new(dst)) {
         Ok(_) => Ok(()),
         Err(e) => Err(io::Error::new(io::ErrorKind::WriteZero, e))
     }
 }
 
-fn decode(src: &mut BytesMut) -> Result<Option<RawNetworkMessage>, io::Error> {
-    // TODO: this is a wasteful solution
-    // all I'd need is reset src position if decode fails with ByteOrder
-    // could however not find a BytesMut API to do so
-    let mut buf = src.clone();
+fn decode(src: &mut Buffer) -> Result<Option<RawNetworkMessage>, io::Error> {
+    let mut raw = RawDecoder::new(src);
     let decode: Result<RawNetworkMessage, util::Error> =
-        ConsensusDecodable::consensus_decode(&mut RawDecoder::new(BufferRW(&mut buf)));
+        ConsensusDecodable::consensus_decode(&mut raw);
+    let src = raw.into_inner();
     match decode {
         Ok(m) => {
-            let sl = src.len();
-            src.advance(sl - buf.len());
+            src.commit();
             Ok(Some(m))
         }
-        Err(util::Error::ByteOrder(_)) => Ok(None),
+        Err(util::Error::ByteOrder(_)) => {
+            src.rollback();
+            Ok(None)
+        },
         Err(e) => {
-            trace!("invalid data in codec: {} size {}", e, src.len());
+            trace!("invalid data in codec: {}", e);
             Err(io::Error::new(io::ErrorKind::InvalidData, e))
         }
     }
