@@ -27,7 +27,6 @@ use bitcoin::network::message_network::VersionMessage;
 use bitcoin::network::serialize::{RawDecoder, RawEncoder};
 use bitcoin::network::address::Address;
 use bitcoin::util;
-use bytes::{BufMut, BytesMut};
 use error::SPVError;
 use mio::*;
 use mio::unix::UnixReady;

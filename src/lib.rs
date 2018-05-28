@@ -29,7 +29,6 @@
 extern crate mio;
 extern crate bitcoin;
 extern crate bitcoin_chain;
-extern crate bytes;
 extern crate libc;
 extern crate lightning;
 #[macro_use]

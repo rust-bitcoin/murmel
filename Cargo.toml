@@ -19,7 +19,6 @@ bitcoin = "0.13"
 bitcoin-chain = { git = "https://github.com/rust-bitcoin/rust-bitcoin-chain", branch = "master" }
 lightning = { git = "https://github.com/rust-bitcoin/rust-lightning", branch = "master" }
 mio = "0.6"
-bytes = "0.4"
 rand = "0.4"
 siphasher = "0.2"
 log = "0.4"

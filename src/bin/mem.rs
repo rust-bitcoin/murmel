@@ -15,7 +15,6 @@
 //
 extern crate bitcoin;
 extern crate bitcoin_spv;
-extern crate bytes;
 extern crate log;
 extern crate rand;
 extern crate simple_logger;
