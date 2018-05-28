@@ -304,22 +304,28 @@ impl Peer {
 
 struct Buffer {
     content: VecDeque<Vec<u8>>,
-    pos: (usize, usize)
+    pos: (usize, usize),
+    checkpoint: (usize, usize)
 }
 
 impl Buffer {
     fn new () -> Buffer {
-        Buffer{ content: VecDeque::new(), pos: (0, 0) }
+        Buffer{ content: VecDeque::new(), pos: (0, 0), checkpoint: (0, 0) }
+    }
+
+    fn checkpoint (&mut self) {
+        self.checkpoint = self.pos;
     }
 
     fn rollback (&mut self) {
-        self.pos = (0, 0);
+        self.pos = self.checkpoint;
     }
 
     fn commit (&mut self) {
         for _ in 0..self.pos.0 {
             self.content.pop_front();
         }
+        self.pos.0 = 0;
     }
 
     fn into_vec (mut self) -> Vec<u8> {
@@ -334,7 +340,12 @@ impl Buffer {
 impl Write for Buffer {
     fn write(&mut self, buf: &[u8]) -> Result<usize, io::Error> {
         if buf.len() > 0 {
-            self.content.push_back(buf.to_vec());
+            if self.content.len () > 0 && self.content[self.pos.0].len() < 1024 && buf.len () < 1024 {
+                self.content[self.pos.0].extend_from_slice(buf);
+            }
+            else {
+                self.content.push_back(buf.to_vec());
+            }
         }
         Ok(buf.len())
     }
@@ -345,19 +356,28 @@ impl Write for Buffer {
 
 impl Read for Buffer {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, io::Error> {
-        if self.pos.0 == self.content.len() {
+        if self.content.len() == 0 {
             Ok(0)
         }
         else {
-            let current = &self.content[self.pos.0];
-            let minlen = min(buf.len(), current.len() - self.pos.1);
-            buf[..minlen].copy_from_slice(&current[self.pos.1 .. self.pos.1 + minlen]);
-            self.pos.1 += minlen;
-            if self.pos.1 == current.len() {
-                self.pos.0 += 1;
-                self.pos.1 = 0;
+            let mut have = 0;
+            while have < buf.len() {
+                let current = &self.content[self.pos.0];
+                let minlen = min(buf.len() - have, current.len() - self.pos.1);
+                buf[have..minlen].copy_from_slice(&current[self.pos.1..self.pos.1 + minlen]);
+                self.pos.1 += minlen;
+                have += minlen;
+                if self.pos.1 == current.len() {
+                    if self.pos.0 < self.content.len() - 1 {
+                        self.pos.0 += 1;
+                        self.pos.1 = 0;
+                    }
+                    else {
+                        break;
+                    }
+                }
             }
-            Ok(minlen)
+            Ok(have)
         }
     }
 }
@@ -370,6 +390,7 @@ fn encode(item: &RawNetworkMessage, dst: &mut Buffer) -> Result<(), io::Error> {
 }
 
 fn decode(src: &mut Buffer) -> Result<Option<RawNetworkMessage>, io::Error> {
+    src.checkpoint ();
     let mut raw = RawDecoder::new(src);
     let decode: Result<RawNetworkMessage, util::Error> =
         ConsensusDecodable::consensus_decode(&mut raw);
