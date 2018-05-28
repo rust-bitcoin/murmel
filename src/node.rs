@@ -257,7 +257,7 @@ impl Node {
         let mut invs = Vec::new();
         for b in blocks {
             invs.push(Inventory {
-                inv_type: InvType::Block,
+                inv_type: InvType::WitnessBlock,
                 hash: b,
             });
         }
