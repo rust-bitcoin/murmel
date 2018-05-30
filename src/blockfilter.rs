@@ -163,6 +163,16 @@ impl <'a> BlockFilterReader<'a> {
             reader: GCSFilterReader::new(reader, block_hash_as_int.0[0], block_hash_as_int.0[1])?
         })
     }
+
+    /// add a query pattern
+    fn add_query_pattern (&mut self, element: &[u8]) {
+        self.reader.add_query_pattern (element);
+    }
+
+    /// match any previously added query pattern
+    pub fn match_any (&mut self) -> Result<bool, io::Error> {
+        self.reader.match_any()
+    }
 }
 
 
