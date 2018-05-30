@@ -60,7 +60,6 @@ impl <'a> BlockFilterWriter<'a> {
 
     /// Add consumed inputs of the block
     pub fn add_inputs (&mut self) -> Result<(), io::Error> {
-
         for transaction in &self.block.txdata {
             // if not coin base
             if !transaction.is_coin_base() {
@@ -151,46 +150,40 @@ fn serialize<T: ?Sized>(data: &T) -> Result<Vec<u8>, bitcoin::util::Error>
 }
 
 /// Reads and interpret a block filter
-pub struct BlockFilterReader<'a> {
-    reader: GCSFilterReader<'a>
+pub struct BlockFilterReader {
+    reader: GCSFilterReader
 }
 
-impl <'a> BlockFilterReader<'a> {
+impl BlockFilterReader {
     /// Create a block filter reader
-    pub fn new (reader: &'a mut io::Read, block_hash: &Sha256dHash) -> Result<BlockFilterReader<'a>, io::Error> {
+    pub fn new (block_hash: &Sha256dHash) -> Result<BlockFilterReader, io::Error> {
         let block_hash_as_int = block_hash.into_le();
         Ok(BlockFilterReader {
-            reader: GCSFilterReader::new(reader, block_hash_as_int.0[0], block_hash_as_int.0[1])?
+            reader: GCSFilterReader::new( block_hash_as_int.0[0], block_hash_as_int.0[1])?
         })
     }
 
     /// add a query pattern
-    fn add_query_pattern (&mut self, element: &[u8]) {
+    pub fn add_query_pattern (&mut self, element: &[u8]) {
         self.reader.add_query_pattern (element);
     }
 
     /// match any previously added query pattern
-    pub fn match_any (&mut self) -> Result<bool, io::Error> {
-        self.reader.match_any()
+    pub fn match_any (&mut self, reader: &mut io::Read) -> Result<bool, io::Error> {
+        self.reader.match_any(reader)
     }
 }
 
 
-struct GCSFilterReader<'a> {
+struct GCSFilterReader {
     filter: GCSFilter,
-    reader: &'a mut io::Read,
     query: HashSet<u64>
 }
 
-impl<'a> GCSFilterReader<'a> {
-    fn new (reader: &'a mut io::Read, k0: u64, k1: u64) -> Result<GCSFilterReader<'a>, io::Error> {
-        let mut decoder = RawDecoder::new(reader);
-        let n_elements: VarInt = ConsensusDecodable::consensus_decode(&mut decoder)
-            .map_err(|_| io::Error::new(io::ErrorKind::UnexpectedEof, "unexpected EOF"))?;
-
+impl GCSFilterReader {
+    fn new (k0: u64, k1: u64) -> Result<GCSFilterReader, io::Error> {
         Ok(GCSFilterReader {
-            filter: GCSFilter::new(k0, k1, n_elements.0 as u32),
-            reader: decoder.into_inner(),
+            filter: GCSFilter::new(k0, k1),
             query: HashSet::new() })
     }
 
@@ -198,41 +191,49 @@ impl<'a> GCSFilterReader<'a> {
         self.query.insert (self.filter.hash(element));
     }
 
-    fn match_any (&mut self) -> Result<bool, io::Error> {
-        if self.filter.n_elements > 0 {
-            // map hashes to [0, n_elements << grp]
-            let mut mapped = Vec::new();
-            mapped.reserve(self.query.len());
-            for h in &self.query {
-                mapped.push(self.filter.map_to_range(*h));
-            }
-            // sort
-            mapped.sort();
+    fn match_any (&mut self, reader: &mut io::Read) -> Result<bool, io::Error> {
+        let mut decoder = RawDecoder::new(reader);
+        let n_elements: VarInt = ConsensusDecodable::consensus_decode(&mut decoder)
+            .map_err(|_| io::Error::new(io::ErrorKind::UnexpectedEof, "unexpected EOF"))?;
+        let ref mut reader = decoder.into_inner();
+        if n_elements.0 == 0 {
+            return Ok(false)
+        }
+        // map hashes to [0, n_elements << grp]
+        let mut mapped = Vec::new();
+        mapped.reserve(self.query.len());
+        for h in &self.query {
+            mapped.push(map_to_range(*h, n_elements.0));
+        }
+        // sort
+        mapped.sort();
 
-            // find first match in two sorted arrays in one read pass
-            let mut reader = BitStreamReader::new(self.reader);
-            let mut data = self.filter.golomb_rice_decode(&mut reader)?;
-            let mut remaining = self.filter.n_elements - 1;
-            for p in mapped {
-                loop {
-                    if data == p {
-                        return Ok(true);
-                    } else if data < p {
-                        if remaining > 0 {
-                            data += self.filter.golomb_rice_decode(&mut reader)?;
-                            remaining -= 1;
-                        }
-                        else {
-                            break;
-                        }
+        // find first match in two sorted arrays in one read pass
+        let mut reader = BitStreamReader::new(reader);
+        let mut data = self.filter.golomb_rice_decode(&mut reader)?;
+        let mut remaining = n_elements.0 - 1;
+        for p in mapped {
+            loop {
+                if data == p {
+                    return Ok(true);
+                } else if data < p {
+                    if remaining > 0 {
+                        data += self.filter.golomb_rice_decode(&mut reader)?;
+                        remaining -= 1;
                     } else {
                         break;
                     }
+                } else {
+                    break;
                 }
             }
         }
         Ok(false)
     }
+}
+
+fn map_to_range (hash: u64, n_elements: u64) -> u64 {
+    (((hash as u128) * ((n_elements as u128) << GOLOMB_RICE_PARAMETER)) >> 64) as u64
 }
 
 struct GCSFilterWriter<'a> {
@@ -244,7 +245,7 @@ struct GCSFilterWriter<'a> {
 impl<'a> GCSFilterWriter<'a> {
     fn new (writer: &'a mut io::Write, k0: u64, k1: u64) -> GCSFilterWriter<'a> {
         GCSFilterWriter {
-            filter: GCSFilter::new(k0, k1, 0), writer, elements: HashSet::new()
+            filter: GCSFilter::new(k0, k1), writer, elements: HashSet::new()
         }
     }
 
@@ -255,14 +256,13 @@ impl<'a> GCSFilterWriter<'a> {
     fn finish (&mut self) -> Result<usize, io::Error> {
         // write number of elements as varint
         let mut encoder = RawEncoder::new(io::Cursor::new(Vec::new()));
-        self.filter.n_elements = self.elements.len() as u32;
         VarInt(self.elements.len() as u64).consensus_encode(&mut encoder).unwrap();
         let mut wrote = self.writer.write(encoder.into_inner().into_inner().as_slice())?;
         // map hashes to [0, n_elements << grp]
         let mut mapped = Vec::new();
         mapped.reserve(self.elements.len());
         for h in &self.elements {
-            mapped.push(self.filter.map_to_range(*h));
+            mapped.push(map_to_range(*h, self.elements.len() as u64));
         }
         // sort
         mapped.sort();
@@ -281,14 +281,13 @@ impl<'a> GCSFilterWriter<'a> {
 /// Golomb Coded Set Filter
 struct GCSFilter {
     k0: u64, // sip hash key
-    k1: u64, // sip hash key
-    n_elements: u32  // number of elements in the filter
+    k1: u64 // sip hash key
 }
 
 impl GCSFilter {
     /// Create a new filter
-    pub fn new (k0: u64, k1: u64, n_elements: u32) -> GCSFilter {
-        GCSFilter { k0, k1, n_elements }
+    fn new (k0: u64, k1: u64) -> GCSFilter {
+        GCSFilter { k0, k1 }
     }
 
     /// Golomb-Rice encode a number n to a bit stream (Parameter 2^k)
@@ -320,10 +319,6 @@ impl GCSFilter {
         let mut hasher = SipHasher::new_with_keys(self.k0, self.k1);
         hasher.write(element);
         hasher.finish()
-    }
-
-    fn map_to_range (&self, hash: u64) -> u64 {
-        (((hash as u128) * ((self.n_elements as u128) << GOLOMB_RICE_PARAMETER)) >> 64) as u64
     }
 }
 
@@ -494,8 +489,7 @@ mod test {
             writer.finish().unwrap();
         }
         {
-            let mut input = Cursor::new(&mut bytes);
-            let mut reader = GCSFilterReader::new(&mut input, 0, 0).unwrap();
+            let ref mut reader = GCSFilterReader::new(0, 0).unwrap();
             let mut it = patterns.iter();
             for _ in 0..5 {
                 reader.add_query_pattern(it.next().unwrap());
@@ -505,18 +499,19 @@ mod test {
                 p [0] = !p[0];
                 reader.add_query_pattern(p.as_slice());
             }
-            assert!(reader.match_any().unwrap());
+            let mut input = Cursor::new(&bytes);
+            assert!(reader.match_any(&mut input).unwrap());
         }
         {
-            let mut input = Cursor::new(&mut bytes);
-            let mut reader = GCSFilterReader::new(&mut input, 0, 0).unwrap();
+            let mut reader = GCSFilterReader::new(0, 0).unwrap();
             let mut it = patterns.iter();
             for _ in 0..100 {
                 let mut p = it.next().unwrap().to_vec();
                 p [0] = !p[0];
                 reader.add_query_pattern(p.as_slice());
             }
-            assert!(!reader.match_any().unwrap());
+            let mut input = Cursor::new(&bytes);
+            assert!(!reader.match_any(&mut input).unwrap());
         }
     }
 
