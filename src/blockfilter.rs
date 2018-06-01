@@ -50,14 +50,6 @@ impl <'a> BlockFilterWriter<'a> {
         BlockFilterWriter { block, writer }
     }
 
-    /// Add transaction ids of the block to the filter
-    pub fn add_transaction_ids (&mut self) -> Result<(), io::Error> {
-        for transaction in &self.block.txdata {
-            self.writer.add_element(&transaction.txid().data());
-        }
-        Ok(())
-    }
-
     /// Add consumed inputs of the block
     pub fn add_inputs (&mut self) -> Result<(), io::Error> {
         for transaction in &self.block.txdata {
@@ -85,48 +77,10 @@ impl <'a> BlockFilterWriter<'a> {
         Ok(())
     }
 
-    /// Add wittness data of the block
-    pub fn add_wittness (&mut self) -> Result<(), io::Error> {
-        for transaction in &self.block.txdata {
-            if !transaction.is_coin_base() {
-                for input in &transaction.input {
-                    for w in &input.witness {
-                        self.writer.add_element(w.as_slice());
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// add data pushed in input scripts of the block
-    pub fn add_data_push (&mut self) -> Result<(), io::Error> {
-        for transaction in &self.block.txdata {
-            if !transaction.is_coin_base() {
-                for input in &transaction.input {
-                    if let Ok(data) = input.script_sig.pushed_data() {
-                        for d in data {
-                            self.writer.add_element(d.as_slice());
-                        }
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-
-
     /// compile basic filter as of BIP158
     pub fn basic_filter (&mut self) -> Result<(), io::Error> {
-        self.add_transaction_ids()?;
         self.add_inputs()?;
         self.add_output_scripts()
-    }
-
-    /// compile extended filter as of BIP158
-    pub fn extended_filter (&mut self) -> Result<(), io::Error> {
-        self.add_wittness()?;
-        self.add_data_push()
     }
 
     /// Write block filter
