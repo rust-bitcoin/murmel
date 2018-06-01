@@ -181,6 +181,7 @@ impl Node {
                           blockchain.best_tip_hash(), peer.pid);
                 } else {
                     debug!("received {} orphan headers from peer={}", headers.len(), peer.pid);
+                    ask_for_blocks.clear();
                 }
 			}
 
@@ -254,25 +255,31 @@ impl Node {
 
     /// get the blocks we are interested in
     fn get_blocks(&self, peer: &Peer, blocks: Vec<Sha256dHash>) -> Result<ProcessResult, SPVError> {
-        let mut invs = Vec::new();
-        for b in blocks {
-            invs.push(Inventory {
-                inv_type: InvType::WitnessBlock,
-                hash: b,
-            });
+        if blocks.len () > 0 {
+            let mut invs = Vec::new();
+            for b in blocks {
+                invs.push(Inventory {
+                    inv_type: InvType::WitnessBlock,
+                    hash: b,
+                });
+            }
+            return self.reply(peer, &NetworkMessage::GetData(invs))
         }
-        self.reply(peer, &NetworkMessage::GetData(invs))
+        Ok(ProcessResult::Ack)
     }
 
     /// get headers this peer is ahead of us
     fn get_headers(&self, peer: &Peer) -> Result<ProcessResult, SPVError> {
         let locator = self.blockchain.lock().unwrap().locator_hashes();
-        let last = if locator.len() > 0 {
-            *locator.last().unwrap()
-        } else {
-            Sha256dHash::default()
-        };
-        self.reply(peer, &NetworkMessage::GetHeaders(GetHeadersMessage::new(locator, last)))
+        if locator.len() > 0 {
+            let last = if locator.len() > 0 {
+                *locator.last().unwrap()
+            } else {
+                Sha256dHash::default()
+            };
+            return self.reply(peer, &NetworkMessage::GetHeaders(GetHeadersMessage::new(locator, last)))
+        }
+        Ok(ProcessResult::Ack)
     }
 
     /// Reply to peer

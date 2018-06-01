@@ -1,4 +1,8 @@
 extern crate tempfile;
+extern crate bitcoin;
+extern crate bitcoin_spv;
+extern crate simple_logger;
+extern crate log;
 
 use std::io;
 use std::str;
@@ -6,6 +10,12 @@ use std::fs::File;
 use std::io::Write;
 use std::process::{Command, Stdio};
 use std::{thread, time};
+
+use bitcoin::network::constants::Network;
+use bitcoin_spv::spv::SPV;
+use log::Level;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
 
 struct Bitcoind {
     datadir: tempfile::TempDir,
@@ -26,6 +36,8 @@ fn bitcoind() -> Result<Bitcoind, io::Error> {
     let mut config_file = File::create(config)?;
     writeln!(config_file, "rpcuser=regtest")?;
     writeln!(config_file, "rpcpassword=regtest")?;
+    writeln!(config_file, "port=28333")?;
+
 
     println!("starting bitcoind with -conf={}", config_path);
     let _bitcoind = Command::new("bitcoind")
@@ -66,5 +78,12 @@ fn download() {
     let bitcoind = bitcoind().unwrap();
     bitcoind.cli(&["generate", "500"]).unwrap();
     thread::sleep(time::Duration::from_secs(2));
-    //println!("{}", bitcoind.cli(&["getblockchaininfo"]).unwrap());
+    simple_logger::init_with_level(Level::Trace).unwrap();
+    let mut peers = Vec::new();
+    peers.push(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 28333));
+    thread::spawn(|| {
+        let spv = SPV::new_in_memory("/rust-spv:0.1.0/".to_string(), Network::Regtest).unwrap();
+        spv.run(peers, 1).unwrap()
+    });
+    thread::sleep(time::Duration::from_secs(5));
 }

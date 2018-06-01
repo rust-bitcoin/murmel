@@ -35,6 +35,7 @@ use node::{Node, ProcessResult};
 use rand::{Rng, StdRng};
 use std::cmp::{max, min};
 use std::collections::{HashMap, VecDeque};
+use std::collections::hash_map::Entry;
 use std::fmt::{Display, Error, Formatter};
 use std::io;
 use std::io::{Read, Write};
@@ -43,6 +44,7 @@ use std::sync::{Arc, mpsc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const MAX_MESSAGE_SIZE :usize = 4*1024*1024;
+const READ_BUFFER_SIZE:usize = 8*1024;
 
 /// Type of a peer's Id
 #[derive(Hash, Eq, PartialEq, Copy, Clone)]
@@ -92,6 +94,7 @@ impl P2P {
         let mut peers = self.peers.write().unwrap();
         peer.send(&P2P::version(&self.user_agent, self.nonce, self.height, addr))?;
         peers.insert(pid, peer);
+        trace!("added peer={}", pid);
         Ok(pid)
     }
 
@@ -130,49 +133,59 @@ impl P2P {
     /// run the dispatcher loop
     /// // this method does not return unless there is a serious networking error
     pub fn run(&self, node: Arc<Node>) -> Result<(), SPVError> {
-        let mut events = Events::with_capacity(1024);
         trace!("start mio event loop");
+        let mut events = Events::with_capacity(10);
+        let mut buffer = [0u8; READ_BUFFER_SIZE];
         loop {
             self.poll.poll(&mut events, None)?;
 
             for event in events.iter() {
                 let pid = PeerId { token: event.token() };
-
-                if let Some(peer) = self.peers.write().unwrap().get_mut(&pid) {
+                if let Entry::Occupied(mut peer_entry) = self.peers.write().unwrap().entry(pid) {
+                    let mut disconnect = false;
                     if event.readiness().contains(Ready::hup()) {
-                        node.disconnected(peer)?;
-                        self.peers.write().unwrap().remove(&pid);
+                        disconnect = true;
                         info!("left us peer={}", pid);
-                    }
-                    if event.readiness().contains(Ready::readable()) {
-                        let mut buffer = [0u8; MAX_MESSAGE_SIZE];
-                        while let Ok(len) = peer.stream.read(&mut buffer) {
-                            if len == 0 {
-                                break;
+                    } else {
+                        if event.readiness().contains(Ready::writable()) {
+                            trace!("writeable peer={}", pid);
+                            let peer = peer_entry.get_mut();
+                            while let Some(msg) = peer.try_receive() {
+                                let mut buffer = Buffer::new();
+                                let raw = RawNetworkMessage { magic: self.magic, payload: msg };
+                                encode(&raw, &mut buffer)?;
+                                peer.stream.write(buffer.into_vec().as_slice())?;
+                                trace!("sent {} to peer={}", raw.command(), pid);
                             }
-                            peer.buffer.write(&buffer[0..len])?;
-                            while let Some(msg) = decode(&mut peer.buffer)? {
-                                trace!("received {} peer={}", msg.command(), pid);
-                                match peer.process_incoming(&msg, node.clone())? {
-                                    ProcessResult::Disconnect => {
-                                        self.peers.write().unwrap().remove(&pid);
-                                        info!("disconnected peer={}", pid);
+                            peer.deregister()?;
+                            peer.register_read()?;
+                        }
+                        if event.readiness().contains(Ready::readable()) {
+                            trace!("readable peer={}", pid);
+                            let mut peer = peer_entry.get_mut();
+                            while let Ok(len) = peer.stream.read(&mut buffer) {
+                                if disconnect || len == 0 {
+                                    break;
+                                }
+                                peer.buffer.write(&buffer[0..len])?;
+                                while let Some(msg) = decode(&mut peer.buffer)? {
+                                    trace!("received {} peer={}", msg.command(), pid);
+                                    match peer.process_incoming(&msg, node.clone())? {
+                                        ProcessResult::Disconnect => {
+                                            disconnect = true;
+                                            info!("disconnected peer={}", pid);
+                                            break;
+                                        }
+                                        _ => {}
                                     }
-                                    _ => {}
                                 }
                             }
                         }
                     }
-                    if event.readiness().contains(Ready::writable()) {
-                        while let Some(msg) = peer.try_receive() {
-                            let mut buffer = Buffer::new();
-                            let raw = RawNetworkMessage { magic: self.magic, payload: msg };
-                            encode(&raw, &mut buffer)?;
-                            peer.stream.write(buffer.into_vec().as_slice())?;
-                            trace!("sent {} to peer={}", raw.command(), pid);
-                        }
-                        peer.deregister()?;
-                        peer.register_read()?;
+                    if disconnect {
+                        node.disconnected(peer_entry.get())?;
+                        peer_entry.remove();
+                        info!("disconnected peer={}", pid);
                     }
                 }
             }
@@ -341,7 +354,7 @@ impl Buffer {
 impl Write for Buffer {
     fn write(&mut self, buf: &[u8]) -> Result<usize, io::Error> {
         if buf.len() > 0 {
-            if self.content.len () > 0 && self.content[self.pos.0].len() < 1024 && buf.len () < 1024 {
+            if self.content.len () > 0 && self.content[self.pos.0].len() < READ_BUFFER_SIZE  {
                 self.content[self.pos.0].extend_from_slice(buf);
             }
             else {
