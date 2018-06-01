@@ -393,7 +393,7 @@ mod test {
     // TODO temporarily disabled: test vectors suspect.
     fn test_blockfilters () {
         let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        d.push("test/blockfilters.json");
+        d.push("tests/blockfilters.json");
         let mut file = File::open(d).unwrap();
         let mut data = String::new();
         file.read_to_string(&mut data).unwrap();
