@@ -46,12 +46,11 @@ impl SPV {
     /// The method will read previously stored headers from the database and sync up with the peers
     /// then serve the returned ChainWatchInterface
     pub fn new(user_agent :String, network: Network, db: &Path) -> Result<SPV, SPVError> {
-        let mut db = DB::new(db)?;
-        let birth = create_tables(&mut db)?;
+        let db = Arc::new(Mutex::new(DB::new(db)?));
+        let birth = create_tables(db.clone())?;
         let peers = Arc::new(RwLock::new(PeerMap::new()));
-        let p2p = Arc::new(P2P::new(user_agent, network, 0, peers.clone()));
-        let node = Arc::new(Node::new(p2p.clone(), network, Arc::new(Mutex::new(db)),
-                                      birth, peers.clone()));
+        let p2p = Arc::new(P2P::new(user_agent, network, 0, peers.clone(), db.clone()));
+        let node = Arc::new(Node::new(p2p.clone(), network, db.clone(), birth, peers.clone()));
         Ok(SPV{ node, p2p })
     }
 
@@ -63,12 +62,11 @@ impl SPV {
     /// The method will start with an empty in-memory database and sync up with the peers
     /// then serve the returned ChainWatchInterface
     pub fn new_in_memory(user_agent :String, network: Network) -> Result<SPV, SPVError> {
-        let mut db = DB::mem()?;
-        let birth = create_tables(&mut db)?;
+        let db = Arc::new(Mutex::new(DB::mem()?));
+        let birth = create_tables(db.clone())?;
         let peers = Arc::new(RwLock::new(PeerMap::new()));
-        let p2p = Arc::new(P2P::new(user_agent, network, 0, peers.clone()));
-        let node = Arc::new(Node::new(p2p.clone(), network, Arc::new(Mutex::new(db)),
-                                      birth, peers.clone()));
+        let p2p = Arc::new(P2P::new(user_agent, network, 0, peers.clone(), db.clone()));
+        let node = Arc::new(Node::new(p2p.clone(), network, db.clone(), birth, peers.clone()));
         Ok(SPV{ node, p2p })
     }
 
@@ -93,7 +91,8 @@ impl SPV {
 }
 
 /// create tables (if not already there) in the database
-fn create_tables(db: &mut DB) -> Result<u32, SPVError> {
+fn create_tables(db: Arc<Mutex<DB>>) -> Result<u32, SPVError> {
+    let mut db = db.lock().unwrap();
     let tx = db.transaction()?;
     let birth = tx.create_tables()?;
     tx.commit()?;

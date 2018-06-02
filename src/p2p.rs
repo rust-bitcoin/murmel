@@ -32,6 +32,7 @@ use mio::*;
 use mio::unix::UnixReady;
 use mio::net::TcpStream;
 use node::{Node, ProcessResult};
+use database::DB;
 use rand::{Rng, StdRng};
 use std::cmp::min;
 use std::collections::{HashMap, VecDeque};
@@ -87,12 +88,14 @@ pub struct P2P {
     poll: Arc<Poll>,
     // next peer id
     // atomic only for interior mutability
-    next_peer_id: AtomicUsize
+    next_peer_id: AtomicUsize,
+    // database
+    db: Arc<Mutex<DB>>
 }
 
 impl P2P {
     /// create a new P2P network controller
-    pub fn new(user_agent: String, network: Network, height: u32, peers: Arc<RwLock<PeerMap>>) -> P2P {
+    pub fn new(user_agent: String, network: Network, height: u32, peers: Arc<RwLock<PeerMap>>, db: Arc<Mutex<DB>>) -> P2P {
         let mut rng = StdRng::new().unwrap();
         P2P {
             magic: magic(network),
@@ -101,7 +104,8 @@ impl P2P {
             user_agent,
             peers,
             poll: Arc::new(Poll::new().unwrap()),
-            next_peer_id: AtomicUsize::new(0)
+            next_peer_id: AtomicUsize::new(0),
+            db
         }
     }
 
@@ -256,7 +260,8 @@ impl P2P {
                     for msg in incoming {
                         trace!("processing {} for peer={}", msg.command(), pid);
                         match node.process (&msg.payload, pid)? {
-                            ProcessResult::Ack | ProcessResult::Ignored => {},
+                            ProcessResult::Ack => { trace!("ack {} peer=>{}", msg.command(), pid); },
+                            ProcessResult::Ignored => { trace!("ignored {} peer={}", msg.command(), pid); }
                             ProcessResult::Disconnect => {
                                 trace!("disconnecting peer={}", pid);
                                 if let Some(peer) = self.peers.read().unwrap().get(&pid) {

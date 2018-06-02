@@ -46,7 +46,7 @@ use std::sync::{RwLock, Mutex};
 pub enum ProcessResult {
     /// Acknowledgment
     Ack,
-    /// Acknowledgment, dispatcher should indicate the new height in future version messages
+    /// Acknowledgment, P2P should indicate the new height in future version messages
     Height(u32),
     /// The node really does not like the message (or ban score limit reached), disconnect this rouge peer
     Disconnect,
@@ -57,33 +57,43 @@ pub enum ProcessResult {
 
 /// a helper class to implement LightningConnector
 pub struct Broadcaster{
+    // the peer map shared with node and P2P
     peers: Arc<RwLock<PeerMap>>
 }
 
 impl BroadcasterInterface for Broadcaster {
+    /// send a transaction to all connected peers
     fn broadcast_transaction(&self, tx: &Transaction) {
-        for (_, peer) in self.peers.read().unwrap().iter() {
-            peer.lock().unwrap().send(&NetworkMessage::Tx(tx.clone())).unwrap(); //TODO
+        let txid = tx.txid();
+        for (pid, peer) in self.peers.read().unwrap().iter() {
+            debug!("send tx {} peer={}", txid, pid);
+            peer.lock().unwrap().send(&NetworkMessage::Tx(tx.clone())).unwrap_or(());
         }
     }
 }
 
 /// The local node processing incoming messages
 pub struct Node {
+    // the connected P2P network
     p2p: Arc<P2P>,
+    // peer map shared with P2P and the LightningConnector's broadcaster
     peers: Arc<RwLock<PeerMap>>,
+    // type of the connected network
     network: Network,
+    // the in-memory blockchain storing headers
     blockchain: Mutex<Blockchain>,
+    // the persistent blockchain storing previously downloaded header and blocks
     db: Arc<Mutex<DB>>,
+    // connector serving Layer 2 network
     connector: Arc<LightningConnector>,
+    // unix time stamp of birth. Do not process blocks before this time point, but strictly after.
 	birth: u32
 }
 
 impl Node {
-    /// Create a new local node for a network that uses the given database
+    /// Create a new local node
     pub fn new(p2p: Arc<P2P>, network: Network, db: Arc<Mutex<DB>>, birth: u32, peers: Arc<RwLock<PeerMap>>) -> Node {
-        let connector = LightningConnector::new(
-            Arc::new(Broadcaster{peers: peers.clone ()}));
+        let connector = LightningConnector::new(Arc::new(Broadcaster{peers: peers.clone ()}));
         Node {
             p2p,
             peers,
