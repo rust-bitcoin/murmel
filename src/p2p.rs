@@ -43,8 +43,8 @@ use std::net::{Shutdown, SocketAddr};
 use std::sync::{Arc, mpsc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const MAX_MESSAGE_SIZE :usize = 4*1024*1024;
-const READ_BUFFER_SIZE:usize = 8*1024;
+const READ_BUFFER_SIZE:usize = 1024;
+const EVENT_BUFFER_SIZE:usize = 10;
 
 /// Type of a peer's Id
 #[derive(Hash, Eq, PartialEq, Copy, Clone)]
@@ -59,6 +59,7 @@ impl Display for PeerId {
         Ok(())
     }
 }
+
 
 /// The dispatcher of messages between network and node
 pub struct P2P {
@@ -134,7 +135,7 @@ impl P2P {
     /// // this method does not return unless there is a serious networking error
     pub fn run(&self, node: Arc<Node>) -> Result<(), SPVError> {
         trace!("start mio event loop");
-        let mut events = Events::with_capacity(10);
+        let mut events = Events::with_capacity(EVENT_BUFFER_SIZE);
         let mut buffer = [0u8; READ_BUFFER_SIZE];
         loop {
             self.poll.poll(&mut events, None)?;
