@@ -174,7 +174,7 @@ impl P2P {
                     // disconnect on error
                     if let Entry::Occupied(mut peer_entry) = self.peers.write().unwrap().entry(pid) {
                         // get and lock the peer from the peer map entry
-                        peer_entry.get().lock().unwrap().stream.shutdown(Shutdown::Both)?;
+                        peer_entry.get().lock().unwrap().stream.shutdown(Shutdown::Both).unwrap_or(());
                         peer_entry.remove();
                     }
                     info!("left us peer={}", pid);
@@ -182,7 +182,7 @@ impl P2P {
                 } else {
                     // check for ability to write before read, to get rid of data before buffering more read
                     // token should only be registered for write if there is a need to write
-                    // to avoid superflous wakeups from poll
+                    // to avoid superfluous wakeups from poll
                     if event.readiness().contains(Ready::writable()) {
                         trace!("writeable peer={}", pid);
 
@@ -210,10 +210,17 @@ impl P2P {
                     // is peer readable ?
                     if event.readiness().contains(Ready::readable()) {
                         trace!("readable peer={}", pid);
+                        // collect incoming messages here
+                        // incoming messages are collected here for processing after release
+                        // of the lock on the peer map.
                         let mut incoming = Vec::new();
+                        // disconnect if set
                         let mut disconnect = false;
+                        // new handshake if set
+                        let mut handshake = false;
+                        // read lock peer map and retrieve peer
                         if let Some(peer) = self.peers.read().unwrap().get(&pid) {
-                            // get and lock the peer from the peer map entry
+                            // lock the peer from the peer
                             let mut locked_peer = peer.lock().unwrap();
 
                             // read the peer's socket
@@ -223,9 +230,10 @@ impl P2P {
                                 }
                                 // accumulate in a buffer
                                 locked_peer.buffer.write(&buffer[0..len])?;
-                                // extact messages from the buffer
+                                // extract messages from the buffer
                                 while let Some(msg) = decode(&mut locked_peer.buffer)? {
                                     trace!("received {} peer={}", msg.command(), pid);
+                                    // process handshake first
                                     match locked_peer.process_handshake(&msg, node.clone())? {
                                         HandShake::Disconnect => {
                                             trace!("disconnecting peer={}", pid);
@@ -233,10 +241,11 @@ impl P2P {
                                             break;
                                         }
                                         HandShake::Handshake => {
-                                            node.connected(pid)?;
+                                            handshake = true;
                                         }
                                         HandShake::InProgress => {},
                                         HandShake::Process => {
+                                            // queue messages to process outside of locked scope
                                             incoming.push(msg);
                                         }
                                     }
@@ -253,6 +262,10 @@ impl P2P {
                             node.disconnected(pid)?;
                         }
                         else {
+                            if handshake {
+                                info!("connected peer={}", pid);
+                                node.connected (pid)?;
+                            }
                             for msg in incoming {
                                 trace!("processing {} for peer={}", msg.command(), pid);
                                 match node.process (&msg.payload, pid)? {
