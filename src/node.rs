@@ -35,13 +35,11 @@ use database::DB;
 use error::SPVError;
 use lighningconnector::LightningConnector;
 use lightning::chain::chaininterface::BroadcasterInterface;
-use p2p::{P2P, PeerId, Peer, PeerMap};
+use p2p::{P2P, PeerId, PeerMap};
 use std::sync::Arc;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
-use std::collections::HashMap;
 use std::sync::{RwLock, Mutex};
-use std::rc::Rc;
 
 
 /// The node replies with this process result to messages
@@ -129,7 +127,7 @@ impl Node {
     }
 
     /// called from dispatcher whenever a peer is disconnected
-    pub fn disconnected(&self, pid: PeerId) -> Result<ProcessResult, SPVError> {
+    pub fn disconnected(&self, _pid: PeerId) -> Result<ProcessResult, SPVError> {
         Ok(ProcessResult::Ack)
     }
 
@@ -312,7 +310,7 @@ impl Node {
 
     /// send the same message to all connected peers
     fn broadcast(&self, msg: &NetworkMessage) -> Result<ProcessResult, SPVError> {
-        for (peer, sender) in self.peers.read().unwrap().iter() {
+        for (_, sender) in self.peers.read().unwrap().iter() {
             sender.lock().unwrap().send(msg)?;
         }
         Ok(ProcessResult::Ack)

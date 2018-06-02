@@ -33,7 +33,7 @@ use mio::unix::UnixReady;
 use mio::net::TcpStream;
 use node::{Node, ProcessResult};
 use rand::{Rng, StdRng};
-use std::cmp::{max, min};
+use std::cmp::min;
 use std::collections::{HashMap, VecDeque};
 use std::collections::hash_map::Entry;
 use std::fmt::{Display, Error, Formatter};
@@ -115,7 +115,7 @@ impl P2P {
         info!("initiating connect to {} peer={}", addr, pid);
 
         // create lock protected peer object
-        let peer = Mutex::new(Peer::new(pid, token, self.poll.clone(), addr, self.nonce)?);
+        let peer = Mutex::new(Peer::new(pid, self.poll.clone(), addr, self.nonce)?);
 
         // add peer object to peer map shared between P2P and node
         let mut peers = self.peers.write().unwrap();
@@ -150,147 +150,152 @@ impl P2P {
         })
     }
 
+    fn event_processor (&self, node: Arc<Node>, event: Event, pid: PeerId) -> Result<(), SPVError> {
+        // check for error first
+        if event.readiness().contains(Ready::hup()) {
+            // disconnect on error
+            if let Entry::Occupied(peer_entry) = self.peers.write().unwrap().entry(pid) {
+                // get and lock the peer from the peer map entry
+                peer_entry.get().lock().unwrap().stream.shutdown(Shutdown::Both).unwrap_or(());
+                peer_entry.remove();
+            }
+            info!("left us peer={}", pid);
+            node.disconnected(pid)?;
+        } else {
+            // check for ability to write before read, to get rid of data before buffering more read
+            // token should only be registered for write if there is a need to write
+            // to avoid superfluous wakeups from poll
+            if event.readiness().contains(Ready::writable()) {
+                trace!("writeable peer={}", pid);
+
+                // figure peer's entry in the peer map, provided it is still connected, ignore event if not
+                if let Some(peer) = self.peers.read().unwrap().get(&pid) {
+                    // get and lock the peer from the peer map entry
+                    let mut locked_peer = peer.lock().unwrap();
+                    // get an outgoing message from the channel (if any)
+                    while let Some(msg) = locked_peer.try_receive() {
+                        // serialize the message
+                        let mut buffer = Buffer::new();
+                        let raw = RawNetworkMessage { magic: self.magic, payload: msg };
+                        encode(&raw, &mut buffer)?;
+
+                        // write to peer's socket
+                        locked_peer.stream.write(buffer.into_vec().as_slice())?;
+                        trace!("sent {} to peer={}", raw.command(), pid);
+                    }
+                    // de-register for write events if channel is empty
+                    locked_peer.deregister()?;
+                    // keep registered for read events
+                    locked_peer.register_read()?;
+                }
+            }
+            // is peer readable ?
+            if event.readiness().contains(Ready::readable()) {
+                trace!("readable peer={}", pid);
+                // collect incoming messages here
+                // incoming messages are collected here for processing after release
+                // of the lock on the peer map.
+                let mut incoming = Vec::new();
+                // disconnect if set
+                let mut disconnect = false;
+                // new handshake if set
+                let mut handshake = false;
+                // read lock peer map and retrieve peer
+                if let Some(peer) = self.peers.read().unwrap().get(&pid) {
+                    // lock the peer from the peer
+                    let mut locked_peer = peer.lock().unwrap();
+                    // read buffer
+                    let mut buffer = [0u8; READ_BUFFER_SIZE];
+                    // read the peer's socket
+                    while let Ok(len) = locked_peer.stream.read(&mut buffer) {
+                        if disconnect || len == 0 {
+                            break;
+                        }
+                        // accumulate in a buffer
+                        locked_peer.buffer.write(&buffer[0..len])?;
+                        // extract messages from the buffer
+                        while let Some(msg) = decode(&mut locked_peer.buffer)? {
+                            trace!("received {} peer={}", msg.command(), pid);
+                            // process handshake first
+                            match locked_peer.process_handshake(&msg)? {
+                                HandShake::Disconnect => {
+                                    trace!("disconnecting peer={}", pid);
+                                    disconnect = true;
+                                    break;
+                                }
+                                HandShake::Handshake => {
+                                    handshake = true;
+                                }
+                                HandShake::InProgress => {},
+                                HandShake::Process => {
+                                    // queue messages to process outside of locked scope
+                                    incoming.push(msg);
+                                }
+                            }
+                        }
+                    }
+                }
+                if disconnect {
+                    if let Entry::Occupied(peer_entry) = self.peers.write().unwrap().entry(pid) {
+                        // get and lock the peer from the peer map entry
+                        peer_entry.get().lock().unwrap().stream.shutdown(Shutdown::Both)?;
+                        peer_entry.remove();
+                    }
+                    info!("left us peer={}", pid);
+                    node.disconnected(pid)?;
+                }
+                else {
+                    if handshake {
+                        info!("connected peer={}", pid);
+                        node.connected (pid)?;
+                    }
+                    for msg in incoming {
+                        trace!("processing {} for peer={}", msg.command(), pid);
+                        match node.process (&msg.payload, pid)? {
+                            ProcessResult::Ack | ProcessResult::Ignored => {},
+                            ProcessResult::Disconnect => {
+                                trace!("disconnecting peer={}", pid);
+                                if let Some(peer) = self.peers.read().unwrap().get(&pid) {
+                                    let locked_peer = peer.lock().unwrap();
+                                    locked_peer.stream.shutdown(Shutdown::Both)?;
+                                }
+                                info!("disconnected peer={}", pid);
+                                node.disconnected (pid)?;
+                            },
+                            ProcessResult::Height(new_height) => {
+                                if let Some(peer) = self.peers.read().unwrap().get(&pid) {
+                                    let mut locked_peer = peer.lock().unwrap();
+                                    let mut nv = locked_peer.version.clone().unwrap();
+                                    nv.start_height = new_height as i32;
+                                    locked_peer.version = Some(nv);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// run the message dispatcher loop
     /// this method does not return unless there is a serious networking error
-    pub fn run(&self, node: Arc<Node>) -> Result<(), SPVError> {
+    pub fn run(&self, node: Arc<Node>) -> Result<(), io::Error>{
         trace!("start mio event loop");
-        // events buffer
-        let mut events = Events::with_capacity(EVENT_BUFFER_SIZE);
-        // read buffer
-        let mut buffer = [0u8; READ_BUFFER_SIZE];
-
         loop {
+            // events buffer
+            let mut events = Events::with_capacity(EVENT_BUFFER_SIZE);
+
             // get the next batch of events
             self.poll.poll(&mut events, None)?;
 
             // iterate over events
             for event in events.iter() {
-
                 // construct the id of the peer the event concerns
                 let pid = PeerId { token: event.token() };
-
-                // check for error first
-                if event.readiness().contains(Ready::hup()) {
-                    // disconnect on error
-                    if let Entry::Occupied(mut peer_entry) = self.peers.write().unwrap().entry(pid) {
-                        // get and lock the peer from the peer map entry
-                        peer_entry.get().lock().unwrap().stream.shutdown(Shutdown::Both).unwrap_or(());
-                        peer_entry.remove();
-                    }
-                    info!("left us peer={}", pid);
-                    node.disconnected(pid)?;
-                } else {
-                    // check for ability to write before read, to get rid of data before buffering more read
-                    // token should only be registered for write if there is a need to write
-                    // to avoid superfluous wakeups from poll
-                    if event.readiness().contains(Ready::writable()) {
-                        trace!("writeable peer={}", pid);
-
-                        // figure peer's entry in the peer map, provided it is still connected, ignore event if not
-                        if let Some(peer) = self.peers.read().unwrap().get(&pid) {
-                            // get and lock the peer from the peer map entry
-                            let mut locked_peer = peer.lock().unwrap();
-                            // get an outgoing message from the channel (if any)
-                            while let Some(msg) = locked_peer.try_receive() {
-                                // serialize the message
-                                let mut buffer = Buffer::new();
-                                let raw = RawNetworkMessage { magic: self.magic, payload: msg };
-                                encode(&raw, &mut buffer)?;
-
-                                // write to peer's socket
-                                locked_peer.stream.write(buffer.into_vec().as_slice())?;
-                                trace!("sent {} to peer={}", raw.command(), pid);
-                            }
-                            // de-register for write events if channel is empty
-                            locked_peer.deregister()?;
-                            // keep registered for read events
-                            locked_peer.register_read()?;
-                        }
-                    }
-                    // is peer readable ?
-                    if event.readiness().contains(Ready::readable()) {
-                        trace!("readable peer={}", pid);
-                        // collect incoming messages here
-                        // incoming messages are collected here for processing after release
-                        // of the lock on the peer map.
-                        let mut incoming = Vec::new();
-                        // disconnect if set
-                        let mut disconnect = false;
-                        // new handshake if set
-                        let mut handshake = false;
-                        // read lock peer map and retrieve peer
-                        if let Some(peer) = self.peers.read().unwrap().get(&pid) {
-                            // lock the peer from the peer
-                            let mut locked_peer = peer.lock().unwrap();
-
-                            // read the peer's socket
-                            while let Ok(len) = locked_peer.stream.read(&mut buffer) {
-                                if disconnect || len == 0 {
-                                    break;
-                                }
-                                // accumulate in a buffer
-                                locked_peer.buffer.write(&buffer[0..len])?;
-                                // extract messages from the buffer
-                                while let Some(msg) = decode(&mut locked_peer.buffer)? {
-                                    trace!("received {} peer={}", msg.command(), pid);
-                                    // process handshake first
-                                    match locked_peer.process_handshake(&msg, node.clone())? {
-                                        HandShake::Disconnect => {
-                                            trace!("disconnecting peer={}", pid);
-                                            disconnect = true;
-                                            break;
-                                        }
-                                        HandShake::Handshake => {
-                                            handshake = true;
-                                        }
-                                        HandShake::InProgress => {},
-                                        HandShake::Process => {
-                                            // queue messages to process outside of locked scope
-                                            incoming.push(msg);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        if disconnect {
-                            if let Entry::Occupied(mut peer_entry) = self.peers.write().unwrap().entry(pid) {
-                                // get and lock the peer from the peer map entry
-                                peer_entry.get().lock().unwrap().stream.shutdown(Shutdown::Both)?;
-                                peer_entry.remove();
-                            }
-                            info!("left us peer={}", pid);
-                            node.disconnected(pid)?;
-                        }
-                        else {
-                            if handshake {
-                                info!("connected peer={}", pid);
-                                node.connected (pid)?;
-                            }
-                            for msg in incoming {
-                                trace!("processing {} for peer={}", msg.command(), pid);
-                                match node.process (&msg.payload, pid)? {
-                                    ProcessResult::Ack | ProcessResult::Ignored => {},
-                                    ProcessResult::Disconnect => {
-                                        trace!("disconnecting peer={}", pid);
-                                        if let Some(peer) = self.peers.read().unwrap().get(&pid) {
-                                            let locked_peer = peer.lock().unwrap();
-                                            locked_peer.stream.shutdown(Shutdown::Both)?;
-                                        }
-                                        info!("disconnected peer={}", pid);
-                                        node.disconnected (pid)?;
-                                    },
-                                    ProcessResult::Height(new_height) => {
-                                        if let Some(peer) = self.peers.read().unwrap().get(&pid) {
-                                            let mut locked_peer = peer.lock().unwrap();
-                                            let mut nv = locked_peer.version.clone().unwrap();
-                                            nv.start_height = new_height as i32;
-                                            locked_peer.version = Some(nv);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                if let Err(error) = self.event_processor(node.clone(), event, pid) {
+                    warn!("error {} peer={}", error.to_string(), pid);
+                    debug!("error {:?} peer={}", error, pid);
                 }
             }
         }
@@ -321,7 +326,7 @@ pub struct Peer {
 
 impl Peer {
     /// create a new peer
-    pub fn new (pid: PeerId, token: Token, poll: Arc<Poll>, addr: &SocketAddr, nonce: u64) -> Result<Peer, SPVError> {
+    pub fn new (pid: PeerId, poll: Arc<Poll>, addr: &SocketAddr, nonce: u64) -> Result<Peer, SPVError> {
 
         let stream = TcpStream::connect(addr)?;
         let (sender, receiver) = mpsc::channel();
@@ -368,7 +373,7 @@ impl Peer {
 
     // process incoming messages
     // returns true after handshake
-    fn process_handshake(&mut self, msg: &RawNetworkMessage, node: Arc<Node>) -> Result<HandShake, SPVError> {
+    fn process_handshake(&mut self, msg: &RawNetworkMessage) -> Result<HandShake, SPVError> {
         if !(self.version.is_some() && self.got_verack) {
             // before handshake complete
             match msg.payload {
