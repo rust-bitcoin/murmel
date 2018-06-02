@@ -220,10 +220,12 @@ impl P2P {
                             match locked_peer.process_handshake(&msg)? {
                                 HandShake::Disconnect => {
                                     trace!("disconnecting peer={}", pid);
+                                    // mark for disconnect outside of lock scope
                                     disconnect = true;
                                     break;
                                 }
                                 HandShake::Handshake => {
+                                    // mark for connected outside of lock scope
                                     handshake = true;
                                 }
                                 HandShake::InProgress => {},
@@ -249,6 +251,8 @@ impl P2P {
                         info!("connected peer={}", pid);
                         node.connected (pid)?;
                     }
+                    // process queued incoming messages outside lock
+                    // as process could call back to P2P
                     for msg in incoming {
                         trace!("processing {} for peer={}", msg.command(), pid);
                         match node.process (&msg.payload, pid)? {
@@ -279,7 +283,8 @@ impl P2P {
     }
 
     /// run the message dispatcher loop
-    /// this method does not return unless there is a serious networking error
+    /// this method does not return unless there is an error obtaining network events
+    /// run in its own thread, which will process all network events
     pub fn run(&self, node: Arc<Node>) -> Result<(), io::Error>{
         trace!("start mio event loop");
         loop {
@@ -302,6 +307,7 @@ impl P2P {
     }
 }
 
+// possible outcomes of the handshake with a peer
 enum HandShake {
     Disconnect,
     InProgress,
@@ -313,21 +319,27 @@ enum HandShake {
 pub struct Peer {
     /// the peer's id for log messages
     pub pid: PeerId,
+    // the event poller, shared with P2P, needed here to register for events
     poll: Arc<Poll>,
+    // the connection to remote peer
     stream: TcpStream,
+    // temporary buffer for not yet complete messages
     buffer: Buffer,
+    // did the remote peer already sent a verack?
     got_verack: bool,
+    // own id, needed here to recognise that remote is actually the local peer
     nonce: u64,
     /// the version message the peer sent to us at connect
     pub version: Option<VersionMessage>,
+    // channel into the event processing loop for outgoing messages
     sender: mpsc::Sender<NetworkMessage>,
+    // channel into the event processing loop for outgoing messages
     receiver: mpsc::Receiver<NetworkMessage>
 }
 
 impl Peer {
     /// create a new peer
     pub fn new (pid: PeerId, poll: Arc<Poll>, addr: &SocketAddr, nonce: u64) -> Result<Peer, SPVError> {
-
         let stream = TcpStream::connect(addr)?;
         let (sender, receiver) = mpsc::channel();
         let peer = Peer{pid, poll: poll.clone(), stream, buffer: Buffer::new(),
@@ -336,6 +348,7 @@ impl Peer {
         Ok(peer)
     }
 
+    // register for peer readable events
     fn register_read (&self) -> Result<(), SPVError> {
         trace!("register for mio read peer={}", self.pid);
         self.poll.register(&self.stream, self.pid.token, Ready::readable()|UnixReady::error(), PollOpt::edge())?;
@@ -344,25 +357,29 @@ impl Peer {
 
     /// send a message to P2P network
     pub fn send (&self, msg: &NetworkMessage) -> Result<(), SPVError> {
+        // send to outgoing message channel
         self.sender.send(msg.clone()).map_err(| _ | SPVError::Generic("can not send to peer queue".to_owned()))?;
         trace!("de-register mio events peer={}", self.pid);
+        // register for writable peer events since we have outgoing message
         self.deregister()?;
         self.register_write()?;
         Ok(())
     }
 
+    // de-register for peer events
     fn deregister (&self) -> Result<(), SPVError> {
         self.poll.deregister(&self.stream)?;
         Ok(())
     }
 
+    // register for peer writable events
     fn register_write (&self) -> Result<(), SPVError> {
         trace!("register for mio write peer={}", self.pid);
         self.poll.register(&self.stream, self.pid.token, Ready::writable()|UnixReady::error(), PollOpt::edge())?;
         Ok(())
     }
 
-    /// try to receive a message from node
+    /// try to receive a message from the outgoing message channel
     pub fn try_receive (&self) -> Option<NetworkMessage> {
         if let Ok (msg) = self.receiver.try_recv() {
             Some (msg)
@@ -371,8 +388,11 @@ impl Peer {
         }
     }
 
-    // process incoming messages
-    // returns true after handshake
+    // process handshake, returning:
+    // Handshake::Disconnect - for misbehaving or useless remote peers
+    // Handshake::InProgress - for handshake in progress that may still fail
+    // Handshake::Handshake - for finished handshake, this will be returned only once
+    // Handshake::Process - handshake was perfect, go ahead with regular processing
     fn process_handshake(&mut self, msg: &RawNetworkMessage) -> Result<HandShake, SPVError> {
         if !(self.version.is_some() && self.got_verack) {
             // before handshake complete
@@ -420,86 +440,118 @@ impl Peer {
     }
 }
 
+// A read buffer for not yet parsed incoming messages
+// Its speciality is that it can be rolled back and therefore reread from a previously set checkpoint
 struct Buffer {
-    content: VecDeque<Vec<u8>>,
+    // a deque of chunks
+    chunks: VecDeque<Vec<u8>>,
+    // pos.0 - current chunk
+    // pos.1 - position to read next in the current chunk
     pos: (usize, usize),
+    // a copy of pos at last checkpoint call
     checkpoint: (usize, usize)
 }
 
 impl Buffer {
+    // create new buffer
     fn new () -> Buffer {
-        Buffer{ content: VecDeque::new(), pos: (0, 0), checkpoint: (0, 0) }
+        Buffer{ chunks: VecDeque::new(), pos: (0, 0), checkpoint: (0, 0) }
     }
 
+    // save checkpoint
     fn checkpoint (&mut self) {
         self.checkpoint = self.pos;
     }
 
+    // rollback to checkpoint
     fn rollback (&mut self) {
         self.pos = self.checkpoint;
     }
 
+    // forget last checkpoint and drop already read content
     fn commit (&mut self) {
+        // drop read chunks
         for _ in 0..self.pos.0 {
-            self.content.pop_front();
+            self.chunks.pop_front();
         }
+        // current chunk is now the first
         self.pos.0 = 0;
     }
 
+    // merge chunks to a simple vec for write out
     fn into_vec (mut self) -> Vec<u8> {
         let mut merged = Vec::new();
-        for v in self.content.drain(..) {
+        for v in self.chunks.drain(..) {
             merged.extend_from_slice(v.as_slice());
         }
         merged
     }
 }
 
+// write adapter for above buffer
 impl Write for Buffer {
     fn write(&mut self, buf: &[u8]) -> Result<usize, io::Error> {
         if buf.len() > 0 {
-            if self.content.len () > 0 && self.content[self.pos.0].len() < READ_BUFFER_SIZE  {
-                self.content[self.pos.0].extend_from_slice(buf);
+            // concatenate to build chunks of at least READ_BUFFER_SIZE
+            if self.chunks.len () > 0 && self.chunks[self.pos.0].len() < READ_BUFFER_SIZE  {
+                self.chunks[self.pos.0].extend_from_slice(buf);
             }
             else {
-                self.content.push_back(buf.to_vec());
+                // if input is big enough store it in its own chunk
+                self.chunks.push_back(buf.to_vec());
             }
         }
         Ok(buf.len())
     }
+    // nop
     fn flush(&mut self) -> Result<(), io::Error> {
         Ok(())
     }
 }
 
+// read adapter for above buffer
 impl Read for Buffer {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, io::Error> {
-        if self.content.len() == 0 {
+        if self.chunks.len() == 0 {
+            // no chunks -> no content
             Ok(0)
         }
         else {
+            // number of bytes already collected for the read
             let mut have = 0;
+            // until read enough
             while have < buf.len() {
-                let current = &self.content[self.pos.0];
-                let minlen = min(buf.len() - have, current.len() - self.pos.1);
-                buf[have..have+minlen].copy_from_slice(&current[self.pos.1..self.pos.1 + minlen]);
-                self.pos.1 += minlen;
-                have += minlen;
+                // current chunk
+                let current = &self.chunks[self.pos.0];
+                // number of bytes available to read from current chunk
+                let available = min(buf.len() - have, current.len() - self.pos.1);
+                // copy those
+                buf[have..have+available].copy_from_slice(&current[self.pos.1..self.pos.1 + available]);
+                // move pointer
+                self.pos.1 += available;
+                // have more
+                have += available;
+                // if current chunk was wholly read
                 if self.pos.1 == current.len() {
-                    if self.pos.0 < self.content.len() - 1 {
+                    // there are more chunks
+                    if self.pos.0 < self.chunks.len() - 1 {
+                        // move pointer to begin of next chunk
                         self.pos.0 += 1;
                         self.pos.1 = 0;
                     }
                     else {
+                        // we can't have more now
                         break;
                     }
                 }
             }
+            // return the number of bytes that could be read
             Ok(have)
         }
     }
 }
 
+// encode a message in Bitcoin's wire format extending the given buffer
 fn encode(item: &RawNetworkMessage, dst: &mut Buffer) -> Result<(), io::Error> {
     match item.consensus_encode(&mut RawEncoder::new(dst)) {
         Ok(_) => Ok(()),
@@ -507,22 +559,30 @@ fn encode(item: &RawNetworkMessage, dst: &mut Buffer) -> Result<(), io::Error> {
     }
 }
 
+// decode a message from the buffer if possible
 fn decode(src: &mut Buffer) -> Result<Option<RawNetworkMessage>, io::Error> {
+    // set checkpoint to return to if the message is partial
     src.checkpoint ();
+
+    // attempt to decode
     let mut raw = RawDecoder::new(src);
     let decode: Result<RawNetworkMessage, util::Error> =
         ConsensusDecodable::consensus_decode(&mut raw);
     let src = raw.into_inner();
+
     match decode {
         Ok(m) => {
+            // success: free the read data in buffer and return the message
             src.commit();
             Ok(Some(m))
         }
         Err(util::Error::ByteOrder(_)) => {
+            // failure: partial message, rollback and retry later
             src.rollback();
             Ok(None)
         },
         Err(e) => {
+            // some serious error (often checksum)
             trace!("invalid data in codec: {}", e);
             Err(io::Error::new(io::ErrorKind::InvalidData, e))
         }
