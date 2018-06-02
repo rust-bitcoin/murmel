@@ -108,12 +108,13 @@ impl Node {
     /// Load headers from database
     pub fn load_headers(&self) -> Result<(), SPVError> {
         info!("loading headers from database...");
+        // always lock blockchain before db
+        let mut blockchain = self.blockchain.lock().unwrap();
         let mut db = self.db.lock().unwrap();
         let tx = db.transaction()?;
         if let Ok(tip) = tx.get_tip() {
             let mut n = 0;
             let genesis = genesis_block(self.network);
-            let mut blockchain = self.blockchain.lock().unwrap();
             info!("reading headers ...");
             let headers = tx.get_headers(&genesis.bitcoin_hash(), &tip)?;
             info!("building in-memory header chain ...");
@@ -153,16 +154,21 @@ impl Node {
         }
     }
 
+    // send a ping to peer
 	fn ping (&self, nonce: u64, peer :PeerId) -> Result<ProcessResult, SPVError> {
 		self.send(peer, &NetworkMessage::Pong(nonce))
 	}
 
+    // process headers message
 	fn headers(&self, headers: &Vec<LoneBlockHeader>, peer: PeerId) -> Result<ProcessResult, SPVError> {
 		if headers.len() > 0 {
 			// blocks we want to download
 			let mut ask_for_blocks = Vec::new();
+            // headers to unwind due to re-org
 			let mut disconnected_headers = Vec::new();
+            // current height
 			let height;
+            // some received headers were not yet known
             let mut some_new = false;
 			{
 				// new scope to limit lock
@@ -182,6 +188,7 @@ impl Node {
 						let new_tip = blockchain.best_tip_hash();
                         tip_moved = tip_moved || new_tip != old_tip;
 						let header_hash = header.header.bitcoin_hash();
+                        // ask for blocks after birth
 						if header.header.time > self.birth && new_tip == header_hash {
 							ask_for_blocks.push(new_tip);
 						}
@@ -213,6 +220,7 @@ impl Node {
                 }
 			}
 
+            // notify lightning connector of disconnected blocks
 			for header in disconnected_headers {
 				self.connector.block_disconnected(&header);
 			}
@@ -229,6 +237,7 @@ impl Node {
 		}
 	}
 
+    // process an incoming block
 	fn block (&self, block: &Block, _: PeerId)-> Result<ProcessResult, SPVError> {
 		let blockchain = self.blockchain.lock().unwrap();
 		// header should be known already, otherwise it might be spam
@@ -247,12 +256,15 @@ impl Node {
 				// send new block to lighning connector
 				self.connector.block_connected(&block, bn.height);
 			}
+            return Ok(ProcessResult::Ack)
 		}
-		Ok(ProcessResult::Ack)
+		Ok(ProcessResult::Ignored)
 	}
 
+    // process an incoming inventory announcement
 	fn inv(&self, v: &Vec<Inventory>, peer: PeerId) -> Result<ProcessResult, SPVError> {
 		for inventory in v {
+            // only care of blocks
 			if inventory.inv_type == InvType::Block
 				&& self.blockchain.lock().unwrap().get_block(inventory.hash).is_none() {
 				// ask for header(s) if observing a new block
@@ -263,7 +275,9 @@ impl Node {
 		Ok(ProcessResult::Ack)
 	}
 
+    // process incoming addr messages
 	fn addr (&self, v: &Vec<(u32, Address)>, _peer: PeerId)  -> Result<ProcessResult, SPVError> {
+        // store if interesting, that is ...
 		let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as u32;
 		let mut db = self.db.lock().unwrap();
 		let tx = db.transaction()?;
@@ -324,6 +338,10 @@ impl Node {
             sender.lock().unwrap().send(msg)?;
         }
         Ok(ProcessResult::Ack)
+    }
+    /// send a transaction to all connected peers
+    pub fn broadcast_transaction(&self, tx: &Transaction) -> Result<ProcessResult, SPVError>  {
+        self.broadcast(&NetworkMessage::Tx(tx.clone()))
     }
 
 	/// retrieve the interface for lighning network

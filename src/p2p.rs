@@ -260,7 +260,7 @@ impl P2P {
                     for msg in incoming {
                         trace!("processing {} for peer={}", msg.command(), pid);
                         match node.process (&msg.payload, pid)? {
-                            ProcessResult::Ack => { trace!("ack {} peer=>{}", msg.command(), pid); },
+                            ProcessResult::Ack => { trace!("ack {} peer={}", msg.command(), pid); },
                             ProcessResult::Ignored => { trace!("ignored {} peer={}", msg.command(), pid); }
                             ProcessResult::Disconnect => {
                                 trace!("disconnecting peer={}", pid);
