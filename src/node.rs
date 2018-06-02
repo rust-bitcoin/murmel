@@ -46,8 +46,6 @@ use std::rc::Rc;
 
 /// The node replies with this process result to messages
 pub enum ProcessResult {
-    /// Handshake in progress
-    Handshake,
     /// Acknowledgment
     Ack,
     /// Acknowledgment, dispatcher should indicate the new height in future version messages
@@ -131,7 +129,7 @@ impl Node {
     }
 
     /// called from dispatcher whenever a peer is disconnected
-    pub fn disconnected(&self, pid: &PeerId) -> Result<ProcessResult, SPVError> {
+    pub fn disconnected(&self, pid: PeerId) -> Result<ProcessResult, SPVError> {
         Ok(ProcessResult::Ack)
     }
 
