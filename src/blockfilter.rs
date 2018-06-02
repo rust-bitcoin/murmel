@@ -157,8 +157,9 @@ impl GCSFilterReader {
         // map hashes to [0, n_elements << grp]
         let mut mapped = Vec::new();
         mapped.reserve(self.query.len());
+        let nm = n_elements.0 * M;
         for h in &self.query {
-            mapped.push(map_to_range(*h, n_elements.0));
+            mapped.push(map_to_range(*h, nm));
         }
         // sort
         mapped.sort();
@@ -187,8 +188,9 @@ impl GCSFilterReader {
     }
 }
 
-fn map_to_range (hash: u64, n_elements: u64) -> u64 {
-    hash % (n_elements * M)
+// fast reduction of hash to [0, nm) range
+fn map_to_range (hash: u64, nm: u64) -> u64 {
+    ((hash as u128 * nm as u128) >> 64) as u64
 }
 
 struct GCSFilterWriter<'a> {
@@ -213,11 +215,13 @@ impl<'a> GCSFilterWriter<'a> {
         let mut encoder = RawEncoder::new(io::Cursor::new(Vec::new()));
         VarInt(self.elements.len() as u64).consensus_encode(&mut encoder).unwrap();
         let mut wrote = self.writer.write(encoder.into_inner().into_inner().as_slice())?;
-        // map hashes to [0, n_elements << grp]
+        // map hashes to [0, n_elements * M)
         let mut mapped = Vec::new();
-        mapped.reserve(self.elements.len());
+        let n = self.elements.len();
+        mapped.reserve(n);
+        let nm = n as u64 * M;
         for h in &self.elements {
-            mapped.push(map_to_range(*h, self.elements.len() as u64));
+            mapped.push(map_to_range(*h, nm));
         }
         // sort
         mapped.sort();
@@ -389,8 +393,7 @@ mod test {
             .map_err(|_| { io::Error::new(io::ErrorKind::InvalidData, "serialization error") })?)
     }
 
-    //#[test]
-    // TODO temporarily disabled: test vectors suspect.
+    #[test]
     fn test_blockfilters () {
         let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         d.push("tests/blockfilters.json");
@@ -412,6 +415,7 @@ mod test {
                 writer.basic_filter().unwrap();
                 writer.finish().unwrap();
             }
+            println!("test {}", t);
             assert_eq!(basic_filter, constructed_basic.into_inner());
         }
     }
