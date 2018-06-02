@@ -27,7 +27,8 @@ use node::Node;
 use p2p::P2P;
 use std::net::SocketAddr;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
+use p2p::PeerMap;
 
 /// The complete SPV stack
 pub struct SPV{
@@ -47,10 +48,11 @@ impl SPV {
     pub fn new(user_agent :String, network: Network, db: &Path) -> Result<SPV, SPVError> {
         let mut db = DB::new(db)?;
         let birth = create_tables(&mut db)?;
-        let p2p = Arc::new(P2P::new(user_agent, network, 0));
+        let peers = Arc::new(RwLock::new(PeerMap::new()));
+        let p2p = Arc::new(P2P::new(user_agent, network, 0, peers.clone()));
         let node = Arc::new(Node::new(p2p.clone(), network, Arc::new(Mutex::new(db)),
-                                      birth));
-        Ok(SPV{ node, p2p})
+                                      birth, peers.clone()));
+        Ok(SPV{ node, p2p })
     }
 
     /// Initialize the SPV stack and return a ChainWatchInterface
@@ -63,10 +65,11 @@ impl SPV {
     pub fn new_in_memory(user_agent :String, network: Network) -> Result<SPV, SPVError> {
         let mut db = DB::mem()?;
         let birth = create_tables(&mut db)?;
-        let p2p = Arc::new(P2P::new(user_agent, network, 0));
+        let peers = Arc::new(RwLock::new(PeerMap::new()));
+        let p2p = Arc::new(P2P::new(user_agent, network, 0, peers.clone()));
         let node = Arc::new(Node::new(p2p.clone(), network, Arc::new(Mutex::new(db)),
-                                      birth));
-        Ok(SPV{ node, p2p})
+                                      birth, peers.clone()));
+        Ok(SPV{ node, p2p })
     }
 
 	/// Start the SPV stack. This should be called AFTER registering listener of the ChainWatchInterface,
