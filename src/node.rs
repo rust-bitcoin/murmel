@@ -33,7 +33,7 @@ use bitcoin::util::hash::Sha256dHash;
 use bitcoin_chain::blockchain::Blockchain;
 use database::DB;
 use error::SPVError;
-use lightning::LightningConnector;
+use connector::LightningConnector;
 use lightning::chain::chaininterface::BroadcasterInterface;
 use p2p::{P2P, PeerId, PeerMap};
 use std::sync::Arc;

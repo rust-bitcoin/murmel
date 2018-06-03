@@ -78,6 +78,12 @@ impl <'a> BlockFilterWriter<'a> {
         Ok(())
     }
 
+    /// add an arbitary element
+    pub fn add_element (&mut self, element: &[u8]) -> Result<(), io::Error> {
+        self.writer.add_element(element);
+        Ok(())
+    }
+
     /// compile basic filter as of BIP158
     pub fn basic_filter (&mut self) -> Result<(), io::Error> {
         self.add_inputs()?;
