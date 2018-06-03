@@ -45,8 +45,8 @@ use std::sync::{Arc, mpsc, RwLock, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const READ_BUFFER_SIZE:usize = 1024;
-const EVENT_BUFFER_SIZE:usize = 10;
+const READ_BUFFER_SIZE:usize = 4*1024*1024;
+const EVENT_BUFFER_SIZE:usize = 1024;
 
 /// A peer's Id
 /// used in log messages and as key to PeerMap
@@ -209,9 +209,9 @@ impl P2P {
                     // lock the peer from the peer
                     let mut locked_peer = peer.lock().unwrap();
                     // read buffer
-                    let mut buffer = [0u8; READ_BUFFER_SIZE];
+                    let mut buffer = vec!(0u8; READ_BUFFER_SIZE);
                     // read the peer's socket
-                    while let Ok(len) = locked_peer.stream.read(&mut buffer) {
+                    while let Ok(len) = locked_peer.stream.read(buffer.as_mut_slice()) {
                         if disconnect || len == 0 {
                             break;
                         }
