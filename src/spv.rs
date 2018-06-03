@@ -42,7 +42,6 @@ impl SPV {
     ///      network - main or testnet
     ///      bootstrap - peer adresses (only tested to work with one local node for now)
     ///      db - file path to store the headers and blocks database
-    ///      birth - unix time stamp. We are interested in transactions only after this birth day
     /// The method will read previously stored headers from the database and sync up with the peers
     /// then serve the returned ChainWatchInterface
     pub fn new(user_agent :String, network: Network, db: &Path) -> Result<SPV, SPVError> {
@@ -58,7 +57,6 @@ impl SPV {
     /// Set
     ///      network - main or testnet
     ///      bootstrap - peer adresses (only tested to work with one local node for now)
-    ///      birth - unix time stamp. We are interested in transactions only after this birth day
     /// The method will start with an empty in-memory database and sync up with the peers
     /// then serve the returned ChainWatchInterface
     pub fn new_in_memory(user_agent :String, network: Network) -> Result<SPV, SPVError> {

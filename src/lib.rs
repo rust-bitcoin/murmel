@@ -40,7 +40,7 @@ extern crate siphasher;
 pub mod node;
 pub mod database;
 pub mod error;
-pub mod lighningconnector;
+pub mod lightning;
 pub mod spv;
 pub mod blockfilter;
 pub mod p2p;
