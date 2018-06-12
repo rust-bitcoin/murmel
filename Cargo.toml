@@ -14,6 +14,10 @@ readme = "README.md"
 name = "bitcoin_spv"
 path = "src/lib.rs"
 
+[[bin]]
+name = "bitcoin_spv"
+path = "src/bin/main.rs"
+
 [dependencies]
 bitcoin = "0.13"
 bitcoin-chain = { git = "https://github.com/rust-bitcoin/rust-bitcoin-chain", branch = "master" }

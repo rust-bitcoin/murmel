@@ -19,6 +19,8 @@ extern crate log;
 extern crate rand;
 extern crate simple_logger;
 
+mod args;
+
 use bitcoin::network::constants::Network;
 use bitcoin_spv::spv::SPV;
 use log::Level;
@@ -28,12 +30,10 @@ use std::env;
 
 /// simple test drive that connects to a local bitcoind
 pub fn main() {
-    let args: Vec<String> = env::args().collect();
     simple_logger::init_with_level(Level::Info).unwrap();
-    let mut peers = Vec::new();
-    peers.push(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8333));
-    if args.len() > 1 {
-        let spv = SPV::new("/rust-spv:0.1.0/".to_string(), Network::Bitcoin, Path::new(args[1].as_str())).unwrap();
+    let peers = get_peers();
+    if let Some(path) = args::find_arg("db") {
+        let spv = SPV::new("/rust-spv:0.1.0/".to_string(), Network::Bitcoin, Path::new(path.as_str())).unwrap();
         spv.run(peers, 1).unwrap();
     }
     else {
@@ -42,3 +42,8 @@ pub fn main() {
     }
 }
 
+use std::str::FromStr;
+
+fn get_peers() -> Vec<SocketAddr> {
+    args::find_args("p").iter().map(|s| SocketAddr::from_str(s).unwrap()).collect()
+}
