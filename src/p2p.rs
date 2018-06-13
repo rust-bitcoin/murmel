@@ -188,10 +188,8 @@ impl P2P {
                         locked_peer.stream.write(buffer.into_vec().as_slice())?;
                         trace!("sent {} to peer={}", raw.command(), pid);
                     }
-                    // de-register for write events if channel is empty
-                    locked_peer.deregister()?;
                     // keep registered for read events
-                    locked_peer.register_read()?;
+                    locked_peer.reregister_read()?;
                 }
             }
             // is peer readable ?
@@ -350,14 +348,14 @@ impl Peer {
         let (sender, receiver) = mpsc::channel();
         let peer = Peer{pid, poll: poll.clone(), stream, buffer: Buffer::new(),
             got_verack: false, nonce, version: None, sender, receiver};
-        peer.register_read()?;
+        peer.register_write()?;
         Ok(peer)
     }
 
     // register for peer readable events
-    fn register_read (&self) -> Result<(), SPVError> {
-        trace!("register for mio read peer={}", self.pid);
-        self.poll.register(&self.stream, self.pid.token, Ready::readable()|UnixReady::error()|UnixReady::hup(), PollOpt::edge())?;
+    fn reregister_read(&self) -> Result<(), SPVError> {
+        trace!("reregister for mio read peer={}", self.pid);
+        self.poll.reregister(&self.stream, self.pid.token, Ready::readable()|UnixReady::error()|UnixReady::hup(), PollOpt::level())?;
         Ok(())
     }
 
@@ -365,25 +363,26 @@ impl Peer {
     pub fn send (&self, msg: &NetworkMessage) -> Result<(), SPVError> {
         // send to outgoing message channel
         self.sender.send(msg.clone()).map_err(| _ | SPVError::Generic("can not send to peer queue".to_owned()))?;
-        trace!("de-register mio events peer={}", self.pid);
         // register for writable peer events since we have outgoing message
-        self.deregister()?;
-        self.register_write()?;
-        Ok(())
-    }
-
-    // de-register for peer events
-    fn deregister (&self) -> Result<(), SPVError> {
-        self.poll.deregister(&self.stream)?;
+        self.reregister_write()?;
         Ok(())
     }
 
     // register for peer writable events
-    fn register_write (&self) -> Result<(), SPVError> {
+    fn reregister_write(&self) -> Result<(), SPVError> {
+        trace!("reregister for mio write peer={}", self.pid);
+        self.poll.reregister(&self.stream, self.pid.token, Ready::writable()|UnixReady::error()|UnixReady::hup(), PollOpt::edge())?;
+        Ok(())
+    }
+
+
+    // register for peer writable events
+    fn register_write(&self) -> Result<(), SPVError> {
         trace!("register for mio write peer={}", self.pid);
         self.poll.register(&self.stream, self.pid.token, Ready::writable()|UnixReady::error()|UnixReady::hup(), PollOpt::edge())?;
         Ok(())
     }
+
 
     /// try to receive a message from the outgoing message channel
     pub fn try_receive (&self) -> Option<NetworkMessage> {
