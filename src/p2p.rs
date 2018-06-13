@@ -357,7 +357,7 @@ impl Peer {
     // register for peer readable events
     fn register_read (&self) -> Result<(), SPVError> {
         trace!("register for mio read peer={}", self.pid);
-        self.poll.register(&self.stream, self.pid.token, Ready::readable()|UnixReady::error(), PollOpt::edge())?;
+        self.poll.register(&self.stream, self.pid.token, Ready::readable()|UnixReady::error()|UnixReady::hup(), PollOpt::edge())?;
         Ok(())
     }
 
@@ -381,7 +381,7 @@ impl Peer {
     // register for peer writable events
     fn register_write (&self) -> Result<(), SPVError> {
         trace!("register for mio write peer={}", self.pid);
-        self.poll.register(&self.stream, self.pid.token, Ready::writable()|UnixReady::error(), PollOpt::edge())?;
+        self.poll.register(&self.stream, self.pid.token, Ready::writable()|UnixReady::error()|UnixReady::hup(), PollOpt::edge())?;
         Ok(())
     }
 
