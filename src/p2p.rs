@@ -238,6 +238,9 @@ impl P2P {
                             }
                         }
                     }
+                    else {
+                        disconnect = true;
+                    }
                 }
                 if disconnect {
                     if let Entry::Occupied(peer_entry) = self.peers.write().unwrap().entry(pid) {
