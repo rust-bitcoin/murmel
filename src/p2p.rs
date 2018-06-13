@@ -212,10 +212,7 @@ impl P2P {
                     // read buffer
                     let mut buffer = vec!(0u8; READ_BUFFER_SIZE);
                     // read the peer's socket
-                    while let Ok(len) = locked_peer.stream.read(buffer.as_mut_slice()) {
-                        if disconnect || len == 0 {
-                            break;
-                        }
+                    if let Ok(len) = locked_peer.stream.read(buffer.as_mut_slice()) {
                         // accumulate in a buffer
                         locked_peer.buffer.write(&buffer[0..len])?;
                         // extract messages from the buffer
