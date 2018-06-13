@@ -155,8 +155,9 @@ impl P2P {
     }
 
     fn event_processor (&self, node: Arc<Node>, event: Event, pid: PeerId) -> Result<(), SPVError> {
+        let readiness = UnixReady::from(event.readiness());
         // check for error first
-        if event.readiness().contains(Ready::hup()) {
+        if readiness.is_hup() || readiness.is_error() {
             // disconnect on error
             if let Entry::Occupied(peer_entry) = self.peers.write().unwrap().entry(pid) {
                 // get and lock the peer from the peer map entry
@@ -169,7 +170,7 @@ impl P2P {
             // check for ability to write before read, to get rid of data before buffering more read
             // token should only be registered for write if there is a need to write
             // to avoid superfluous wakeups from poll
-            if event.readiness().contains(Ready::writable()) {
+            if readiness.contains(Ready::writable()) {
                 trace!("writeable peer={}", pid);
 
                 // figure peer's entry in the peer map, provided it is still connected, ignore event if not
@@ -194,7 +195,7 @@ impl P2P {
                 }
             }
             // is peer readable ?
-            if event.readiness().contains(Ready::readable()) {
+            if readiness.contains(Ready::readable()) {
                 trace!("readable peer={}", pid);
                 // collect incoming messages here
                 // incoming messages are collected here for processing after release
