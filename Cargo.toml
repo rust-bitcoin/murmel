@@ -36,4 +36,3 @@ hex = "0.3"
 tempfile = "3.0.2"
 
 [patch.crates-io]
-bitcoin = { git = "https://github.com/tamasblummer/rust-bitcoin", branch = "master" }
