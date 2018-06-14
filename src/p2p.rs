@@ -183,18 +183,22 @@ impl P2P {
                         if let Ok(len) = locked_peer.write_buffer.read_ahead(iobuf) {
                             if len > 0 {
                                 trace!("try write {} bytes to peer={}", len, pid);
+                                // do not fetch next message until there is an unfinished write
                                 get_next = false;
                                 // try writing it out now
                                 let mut wrote = 0;
                                 while let Ok(wlen) = locked_peer.stream.write(&iobuf[wrote..len]) {
-                                    trace!("wrote {} bytes to peer={}", wlen, pid);
                                     if wlen == 0 {
+                                        trace!("would block on peer={}", pid);
                                         break;
                                     }
+                                    trace!("wrote {} bytes to peer={}", wlen, pid);
+                                    // advance buffer and drop used store
                                     locked_peer.write_buffer.advance(wlen);
                                     locked_peer.write_buffer.commit();
                                     wrote += wlen;
                                     if wrote == len {
+                                        // if completely written message, get the next
                                         get_next = true;
                                         break;
                                     }
@@ -210,7 +214,9 @@ impl P2P {
                                 // refill write buffer
                                 encode(&raw, &mut locked_peer.write_buffer)?;
                             } else {
-                                // keep registered for read events
+                                // no unfinished write and no outgoing message
+                                // keep registered only for read events
+                                trace!("done writing to peer={}", pid);
                                 locked_peer.reregister_read()?;
                                 break;
                             }
