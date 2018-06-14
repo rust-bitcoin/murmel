@@ -183,13 +183,13 @@ impl P2P {
                         if let Ok(len) = locked_peer.write_buffer.read_ahead(iobuf) {
                             if len > 0 {
                                 trace!("try write {} bytes to peer={}", len, pid);
-                                // do not fetch next message until there is an unfinished write
-                                get_next = false;
                                 // try writing it out now
                                 let mut wrote = 0;
                                 while let Ok(wlen) = locked_peer.stream.write(&iobuf[wrote..len]) {
                                     if wlen == 0 {
                                         trace!("would block on peer={}", pid);
+                                        // do not fetch next message until there is an unfinished write
+                                        get_next = false;
                                         break;
                                     }
                                     trace!("wrote {} bytes to peer={}", wlen, pid);
@@ -198,8 +198,6 @@ impl P2P {
                                     locked_peer.write_buffer.commit();
                                     wrote += wlen;
                                     if wrote == len {
-                                        // if completely written message, get the next
-                                        get_next = true;
                                         break;
                                     }
                                 }
