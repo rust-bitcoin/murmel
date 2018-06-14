@@ -158,14 +158,14 @@ impl P2P {
         let readiness = UnixReady::from(event.readiness());
         // check for error first
         if readiness.is_hup() || readiness.is_error() {
+            info!("left us peer={}", pid);
+            node.disconnected(pid)?;
             // disconnect on error
             if let Entry::Occupied(peer_entry) = self.peers.write().unwrap().entry(pid) {
                 // get and lock the peer from the peer map entry
                 peer_entry.get().lock().unwrap().stream.shutdown(Shutdown::Both).unwrap_or(());
                 peer_entry.remove();
             }
-            info!("left us peer={}", pid);
-            node.disconnected(pid)?;
         } else {
             // check for ability to write before read, to get rid of data before buffering more read
             // token should only be registered for write if there is a need to write
@@ -270,13 +270,13 @@ impl P2P {
                     }
                 }
                 if disconnect {
+                    info!("left us peer={}", pid);
+                    node.disconnected(pid)?;
                     if let Entry::Occupied(peer_entry) = self.peers.write().unwrap().entry(pid) {
                         // get and lock the peer from the peer map entry
                         peer_entry.get().lock().unwrap().stream.shutdown(Shutdown::Both)?;
                         peer_entry.remove();
                     }
-                    info!("left us peer={}", pid);
-                    node.disconnected(pid)?;
                 }
                 else {
                     if handshake {
@@ -291,13 +291,13 @@ impl P2P {
                             ProcessResult::Ack => { trace!("ack {} peer={}", msg.command(), pid); },
                             ProcessResult::Ignored => { trace!("ignored {} peer={}", msg.command(), pid); }
                             ProcessResult::Disconnect => {
-                                trace!("disconnecting peer={}", pid);
-                                if let Some(peer) = self.peers.read().unwrap().get(&pid) {
-                                    let locked_peer = peer.lock().unwrap();
-                                    locked_peer.stream.shutdown(Shutdown::Both)?;
-                                }
                                 info!("disconnected peer={}", pid);
                                 node.disconnected (pid)?;
+                                if let Entry::Occupied(peer_entry) = self.peers.write().unwrap().entry(pid) {
+                                    // get and lock the peer from the peer map entry
+                                    peer_entry.get().lock().unwrap().stream.shutdown(Shutdown::Both)?;
+                                    peer_entry.remove();
+                                }
                             },
                             ProcessResult::Height(new_height) => {
                                 if let Some(peer) = self.peers.read().unwrap().get(&pid) {
