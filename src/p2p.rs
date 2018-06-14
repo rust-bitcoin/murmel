@@ -45,7 +45,7 @@ use std::sync::{Arc, mpsc, RwLock, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const READ_BUFFER_SIZE:usize = 4*1024*1024;
+const IO_BUFFER_SIZE:usize = 4*1024*1024;
 const EVENT_BUFFER_SIZE:usize = 1024;
 
 /// A peer's Id
@@ -154,7 +154,7 @@ impl P2P {
         })
     }
 
-    fn event_processor (&self, node: Arc<Node>, event: Event, pid: PeerId) -> Result<(), SPVError> {
+    fn event_processor (&self, node: Arc<Node>, event: Event, pid: PeerId, iobuf: &mut [u8]) -> Result<(), SPVError> {
         let readiness = UnixReady::from(event.readiness());
         // check for error first
         if readiness.is_hup() || readiness.is_error() {
@@ -177,19 +177,45 @@ impl P2P {
                 if let Some(peer) = self.peers.read().unwrap().get(&pid) {
                     // get and lock the peer from the peer map entry
                     let mut locked_peer = peer.lock().unwrap();
-                    // get an outgoing message from the channel (if any)
-                    while let Some(msg) = locked_peer.try_receive() {
-                        // serialize the message
-                        let mut buffer = Buffer::new();
-                        let raw = RawNetworkMessage { magic: self.magic, payload: msg };
-                        encode(&raw, &mut buffer)?;
-
-                        // write to peer's socket
-                        locked_peer.stream.write(buffer.into_vec().as_slice())?;
-                        trace!("sent {} to peer={}", raw.command(), pid);
+                    loop {
+                        let mut get_next = true;
+                        // if there is previously unfinished write
+                        if let Ok(len) = locked_peer.write_buffer.read_ahead(iobuf) {
+                            if len > 0 {
+                                trace!("try write {} bytes to peer={}", len, pid);
+                                get_next = false;
+                                // try writing it out now
+                                let mut wrote = 0;
+                                while let Ok(wlen) = locked_peer.stream.write(&iobuf[wrote..len]) {
+                                    trace!("wrote {} bytes to peer={}", wlen, pid);
+                                    if wlen == 0 {
+                                        break;
+                                    }
+                                    locked_peer.write_buffer.advance(wlen);
+                                    locked_peer.write_buffer.commit();
+                                    wrote += wlen;
+                                    if wrote == len {
+                                        get_next = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        if get_next {
+                            // get an outgoing message from the channel (if any)
+                            if let Some(msg) = locked_peer.try_receive() {
+                                // serialize the message
+                                let raw = RawNetworkMessage { magic: self.magic, payload: msg };
+                                trace!("next message {} to peer={}", raw.command(), pid);
+                                // refill write buffer
+                                encode(&raw, &mut locked_peer.write_buffer)?;
+                            } else {
+                                // keep registered for read events
+                                locked_peer.reregister_read()?;
+                                break;
+                            }
+                        }
                     }
-                    // keep registered for read events
-                    locked_peer.reregister_read()?;
                 }
             }
             // is peer readable ?
@@ -207,14 +233,13 @@ impl P2P {
                 if let Some(peer) = self.peers.read().unwrap().get(&pid) {
                     // lock the peer from the peer
                     let mut locked_peer = peer.lock().unwrap();
-                    // read buffer
-                    let mut buffer = vec!(0u8; READ_BUFFER_SIZE);
                     // read the peer's socket
-                    if let Ok(len) = locked_peer.stream.read(buffer.as_mut_slice()) {
+                    if let Ok(len) = locked_peer.stream.read(iobuf) {
+                        trace!("received {} bytes from peer={}", len, pid);
                         // accumulate in a buffer
-                        locked_peer.buffer.write(&buffer[0..len])?;
+                        locked_peer.read_buffer.write(&iobuf[0..len])?;
                         // extract messages from the buffer
-                        while let Some(msg) = decode(&mut locked_peer.buffer)? {
+                        while let Some(msg) = decode(&mut locked_peer.read_buffer)? {
                             trace!("received {} peer={}", msg.command(), pid);
                             // process handshake first
                             match locked_peer.process_handshake(&msg)? {
@@ -294,6 +319,8 @@ impl P2P {
         loop {
             // events buffer
             let mut events = Events::with_capacity(EVENT_BUFFER_SIZE);
+            // IO buffer
+            let mut iobuf = vec!(0u8; IO_BUFFER_SIZE);
 
             // get the next batch of events
             self.poll.poll(&mut events, None)?;
@@ -302,7 +329,7 @@ impl P2P {
             for event in events.iter() {
                 // construct the id of the peer the event concerns
                 let pid = PeerId { token: event.token() };
-                if let Err(error) = self.event_processor(node.clone(), event, pid) {
+                if let Err(error) = self.event_processor(node.clone(), event, pid, iobuf.as_mut_slice()) {
                     warn!("error {} peer={}", error.to_string(), pid);
                     debug!("error {:?} peer={}", error, pid);
                 }
@@ -327,8 +354,10 @@ pub struct Peer {
     poll: Arc<Poll>,
     // the connection to remote peer
     stream: TcpStream,
-    // temporary buffer for not yet complete messages
-    buffer: Buffer,
+    // temporary buffer for not yet completely read incoming messages
+    read_buffer: Buffer,
+    // temporary buffer for not yet completely written outgoind messages
+    write_buffer: Buffer,
     // did the remote peer already sent a verack?
     got_verack: bool,
     // own id, needed here to recognise that remote is actually the local peer
@@ -346,7 +375,7 @@ impl Peer {
     pub fn new (pid: PeerId, poll: Arc<Poll>, addr: &SocketAddr, nonce: u64) -> Result<Peer, SPVError> {
         let stream = TcpStream::connect(addr)?;
         let (sender, receiver) = mpsc::channel();
-        let peer = Peer{pid, poll: poll.clone(), stream, buffer: Buffer::new(),
+        let peer = Peer{pid, poll: poll.clone(), stream, read_buffer: Buffer::new(), write_buffer: Buffer::new(),
             got_verack: false, nonce, version: None, sender, receiver};
         peer.register_write()?;
         Ok(peer)
@@ -371,7 +400,7 @@ impl Peer {
     // register for peer writable events
     fn reregister_write(&self) -> Result<(), SPVError> {
         trace!("reregister for mio write peer={}", self.pid);
-        self.poll.reregister(&self.stream, self.pid.token, Ready::writable()|UnixReady::error()|UnixReady::hup(), PollOpt::edge())?;
+        self.poll.reregister(&self.stream, self.pid.token, Ready::writable()|Ready::readable()|UnixReady::error()|UnixReady::hup(), PollOpt::level())?;
         Ok(())
     }
 
@@ -379,7 +408,7 @@ impl Peer {
     // register for peer writable events
     fn register_write(&self) -> Result<(), SPVError> {
         trace!("register for mio write peer={}", self.pid);
-        self.poll.register(&self.stream, self.pid.token, Ready::writable()|UnixReady::error()|UnixReady::hup(), PollOpt::edge())?;
+        self.poll.register(&self.stream, self.pid.token, Ready::writable()|Ready::readable()|UnixReady::error()|UnixReady::hup(), PollOpt::level())?;
         Ok(())
     }
 
@@ -483,40 +512,76 @@ impl Buffer {
         self.pos.0 = 0;
     }
 
-    // merge chunks to a simple vec for write out
-    fn into_vec (mut self) -> Vec<u8> {
-        let mut merged = Vec::new();
-        for v in self.chunks.drain(..) {
-            merged.extend_from_slice(v.as_slice());
+    fn read_ahead (&mut self, buf: &mut [u8]) -> Result<usize, io::Error> {
+        let mut pos = (self.pos.0, self.pos.1);
+        if self.chunks.len() == 0 {
+            // no chunks -> no content
+            Ok(0)
         }
-        merged
-    }
-}
-
-// write adapter for above buffer
-impl Write for Buffer {
-    fn write(&mut self, buf: &[u8]) -> Result<usize, io::Error> {
-        if buf.len() > 0 {
-            // concatenate to build chunks of at least READ_BUFFER_SIZE
-            if self.chunks.len () > 0 && self.chunks[self.pos.0].len() < READ_BUFFER_SIZE  {
-                self.chunks[self.pos.0].extend_from_slice(buf);
+        else {
+            // number of bytes already collected for the read
+            let mut have = 0;
+            // until read enough
+            while have < buf.len() {
+                // current chunk
+                let current = &self.chunks[pos.0];
+                // number of bytes available to read from current chunk
+                let available = min(buf.len() - have, current.len() - pos.1);
+                // copy those
+                buf[have..have+available].copy_from_slice(&current[pos.1..pos.1 + available]);
+                // move pointer
+                pos.1 += available;
+                // have more
+                have += available;
+                // if current chunk was wholly read
+                if pos.1 == current.len() {
+                    // there are more chunks
+                    if pos.0 < self.chunks.len() - 1 {
+                        // move pointer to begin of next chunk
+                        pos.0 += 1;
+                        pos.1 = 0;
+                    }
+                    else {
+                        // we can't have more now
+                        break;
+                    }
+                }
             }
-            else {
-                // if input is big enough store it in its own chunk
-                self.chunks.push_back(buf.to_vec());
+            // return the number of bytes that could be read
+            Ok(have)
+        }
+    }
+
+    fn advance (&mut self, len: usize) -> usize {
+        let mut have = 0;
+        // until read enough
+        while have < len {
+            // current chunk
+            let current = &self.chunks[self.pos.0];
+            // number of bytes available to read from current chunk
+            let available = min(len - have, current.len() - self.pos.1);
+            // move pointer
+            self.pos.1 += available;
+            // have more
+            have += available;
+            // if current chunk was wholly read
+            if self.pos.1 == current.len() {
+                // there are more chunks
+                if self.pos.0 < self.chunks.len() - 1 {
+                    // move pointer to begin of next chunk
+                    self.pos.0 += 1;
+                    self.pos.1 = 0;
+                } else {
+                    // we can't have more now
+                    break;
+                }
             }
         }
-        Ok(buf.len())
+        // return the number of bytes that could be read
+        have
     }
-    // nop
-    fn flush(&mut self) -> Result<(), io::Error> {
-        Ok(())
-    }
-}
 
-// read adapter for above buffer
-impl Read for Buffer {
-    fn read(&mut self, buf: &mut [u8]) -> Result<usize, io::Error> {
+    fn read_advance (&mut self, buf: &mut [u8]) -> Result<usize, io::Error> {
         if self.chunks.len() == 0 {
             // no chunks -> no content
             Ok(0)
@@ -553,6 +618,34 @@ impl Read for Buffer {
             // return the number of bytes that could be read
             Ok(have)
         }
+    }
+}
+
+// write adapter for above buffer
+impl Write for Buffer {
+    fn write(&mut self, buf: &[u8]) -> Result<usize, io::Error> {
+        if buf.len() > 0 {
+            // concatenate to build chunks of at least READ_BUFFER_SIZE
+            if self.chunks.len () > 0 && self.chunks[self.pos.0].len() < IO_BUFFER_SIZE {
+                self.chunks[self.pos.0].extend_from_slice(buf);
+            }
+            else {
+                // if input is big enough store it in its own chunk
+                self.chunks.push_back(buf.to_vec());
+            }
+        }
+        Ok(buf.len())
+    }
+    // nop
+    fn flush(&mut self) -> Result<(), io::Error> {
+        Ok(())
+    }
+}
+
+// read adapter for above buffer
+impl Read for Buffer {
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize, io::Error> {
+        self.read_advance(buf)
     }
 }
 
