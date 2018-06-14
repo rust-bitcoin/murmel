@@ -28,7 +28,6 @@ siphasher = "0.2"
 log = "0.4"
 simple_logger = "0.5.0"
 rusqlite = "0.13.0"
-libc = "0.2"
 
 [dev-dependencies]
 rustc-serialize = "0.3"
