@@ -34,7 +34,7 @@ use mio::net::TcpStream;
 use node::{Node, ProcessResult};
 use database::DB;
 use rand::{Rng, StdRng};
-use std::cmp::min;
+use std::cmp::{min, max};
 use std::collections::{HashMap, VecDeque};
 use std::collections::hash_map::Entry;
 use std::fmt::{Display, Error, Formatter};
@@ -45,7 +45,7 @@ use std::sync::{Arc, mpsc, RwLock, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const IO_BUFFER_SIZE:usize = 4*1024*1024;
+const IO_BUFFER_SIZE:usize = 1024*1024;
 const EVENT_BUFFER_SIZE:usize = 1024;
 
 /// A peer's Id
@@ -404,7 +404,7 @@ impl Peer {
     // register for peer writable events
     fn reregister_write(&self) -> Result<(), SPVError> {
         trace!("reregister for mio write peer={}", self.pid);
-        self.poll.reregister(&self.stream, self.pid.token, Ready::writable()|Ready::readable()|UnixReady::error()|UnixReady::hup(), PollOpt::level())?;
+        self.poll.reregister(&self.stream, self.pid.token, Ready::writable()|UnixReady::error()|UnixReady::hup(), PollOpt::level())?;
         Ok(())
     }
 
@@ -412,13 +412,13 @@ impl Peer {
     // register for peer writable events
     fn register_write(&self) -> Result<(), SPVError> {
         trace!("register for mio write peer={}", self.pid);
-        self.poll.register(&self.stream, self.pid.token, Ready::writable()|Ready::readable()|UnixReady::error()|UnixReady::hup(), PollOpt::level())?;
+        self.poll.register(&self.stream, self.pid.token, Ready::writable()|UnixReady::error()|UnixReady::hup(), PollOpt::level())?;
         Ok(())
     }
 
 
-    /// try to receive a message from the outgoing message channel
-    pub fn try_receive (&self) -> Option<NetworkMessage> {
+    // try to receive a message from the outgoing message channel
+    fn try_receive (&self) -> Option<NetworkMessage> {
         if let Ok (msg) = self.receiver.try_recv() {
             Some (msg)
         } else {
@@ -478,8 +478,10 @@ impl Peer {
     }
 }
 
-// A read buffer for not yet parsed incoming messages
-// Its speciality is that it can be rolled back and therefore reread from a previously set checkpoint
+// A buffer that can be:
+// * rolled back and re-read from last commit
+// * read ahead without moving read position
+// * advance position
 struct Buffer {
     // a deque of chunks
     chunks: VecDeque<Vec<u8>>,
@@ -496,26 +498,22 @@ impl Buffer {
         Buffer{ chunks: VecDeque::new(), pos: (0, 0), checkpoint: (0, 0) }
     }
 
-    // save checkpoint
-    fn checkpoint (&mut self) {
-        self.checkpoint = self.pos;
-    }
-
-    // rollback to checkpoint
+    // rollback to last commit
     fn rollback (&mut self) {
         self.pos = self.checkpoint;
     }
 
-    // forget last checkpoint and drop already read content
+    // checkpoint and drop already read content
     fn commit (&mut self) {
         // drop read chunks
-        for _ in 0..self.pos.0 {
-            self.chunks.pop_front();
-        }
+        self.chunks.drain(0 .. self.pos.0);
         // current chunk is now the first
         self.pos.0 = 0;
+        self.checkpoint = self.pos;
     }
 
+    // read without advancing position
+    // subsequent read would deliver the same data again
     fn read_ahead (&mut self, buf: &mut [u8]) -> Result<usize, io::Error> {
         let mut pos = (self.pos.0, self.pos.1);
         if self.chunks.len() == 0 {
@@ -556,6 +554,7 @@ impl Buffer {
         }
     }
 
+    // advance position by len
     fn advance (&mut self, len: usize) -> usize {
         let mut have = 0;
         // until read enough
@@ -585,6 +584,7 @@ impl Buffer {
         have
     }
 
+    // read and advance position in one step
     fn read_advance (&mut self, buf: &mut [u8]) -> Result<usize, io::Error> {
         if self.chunks.len() == 0 {
             // no chunks -> no content
@@ -629,14 +629,16 @@ impl Buffer {
 impl Write for Buffer {
     fn write(&mut self, buf: &[u8]) -> Result<usize, io::Error> {
         if buf.len() > 0 {
-            // concatenate to build chunks of at least READ_BUFFER_SIZE
-            if self.chunks.len () > 0 && self.chunks[self.pos.0].len() < IO_BUFFER_SIZE {
-                self.chunks[self.pos.0].extend_from_slice(buf);
+            // number of chunks in buffer
+            let mut nc = self.chunks.len();
+            // if no chunks or append to last chunk would create a too big chunk
+            if nc == 0 || (buf.len() + self.chunks[nc - 1].len()) > IO_BUFFER_SIZE {
+                // allocate and append a new chunk sufficient to hold buf but not smaller than IO_BUFFER_SIZE
+                self.chunks.push_back(Vec::with_capacity(max(buf.len(), IO_BUFFER_SIZE)));
+                nc += 1;
             }
-            else {
-                // if input is big enough store it in its own chunk
-                self.chunks.push_back(buf.to_vec());
-            }
+            // append buf to current chunk
+            self.chunks[nc - 1].extend_from_slice(buf);
         }
         Ok(buf.len())
     }
@@ -663,9 +665,6 @@ fn encode(item: &RawNetworkMessage, dst: &mut Buffer) -> Result<(), io::Error> {
 
 // decode a message from the buffer if possible
 fn decode(src: &mut Buffer) -> Result<Option<RawNetworkMessage>, io::Error> {
-    // set checkpoint to return to if the message is partial
-    src.checkpoint ();
-
     // attempt to decode
     let mut raw = RawDecoder::new(src);
     let decode: Result<RawNetworkMessage, util::Error> =
@@ -679,7 +678,7 @@ fn decode(src: &mut Buffer) -> Result<Option<RawNetworkMessage>, io::Error> {
             Ok(Some(m))
         }
         Err(util::Error::ByteOrder(_)) => {
-            // failure: partial message, rollback and retry later
+            // failure: partial message, rollback to last commit and retry later
             src.rollback();
             Ok(None)
         },
