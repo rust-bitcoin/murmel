@@ -42,7 +42,7 @@ use std::io;
 use std::io::{Read, Write};
 use std::net::{Shutdown, SocketAddr};
 use std::sync::{Arc, mpsc, RwLock, Mutex};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering,AtomicBool};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const IO_BUFFER_SIZE:usize = 1024*1024;
@@ -371,7 +371,9 @@ pub struct Peer {
     // channel into the event processing loop for outgoing messages
     sender: mpsc::Sender<NetworkMessage>,
     // channel into the event processing loop for outgoing messages
-    receiver: mpsc::Receiver<NetworkMessage>
+    receiver: mpsc::Receiver<NetworkMessage>,
+    // is registered for write?
+    writeable: AtomicBool
 }
 
 impl Peer {
@@ -380,15 +382,16 @@ impl Peer {
         let stream = TcpStream::connect(addr)?;
         let (sender, receiver) = mpsc::channel();
         let peer = Peer{pid, poll: poll.clone(), stream, read_buffer: Buffer::new(), write_buffer: Buffer::new(),
-            got_verack: false, nonce, version: None, sender, receiver};
+            got_verack: false, nonce, version: None, sender, receiver, writeable: AtomicBool::new(false)};
         peer.register_write()?;
         Ok(peer)
     }
 
     // register for peer readable events
     fn reregister_read(&self) -> Result<(), SPVError> {
-        trace!("reregister for mio read peer={}", self.pid);
-        self.poll.reregister(&self.stream, self.pid.token, Ready::readable()|UnixReady::error()|UnixReady::hup(), PollOpt::level())?;
+        if self.writeable.swap(false, Ordering::Acquire) {
+            self.poll.reregister(&self.stream, self.pid.token, Ready::readable() | UnixReady::error() | UnixReady::hup(), PollOpt::level())?;
+        }
         Ok(())
     }
 
@@ -403,16 +406,18 @@ impl Peer {
 
     // register for peer writable events
     fn reregister_write(&self) -> Result<(), SPVError> {
-        trace!("reregister for mio write peer={}", self.pid);
-        self.poll.reregister(&self.stream, self.pid.token, Ready::writable()|UnixReady::error()|UnixReady::hup(), PollOpt::level())?;
+        if !self.writeable.swap(true, Ordering::Acquire) {
+            self.poll.reregister(&self.stream, self.pid.token, Ready::writable() | UnixReady::error() | UnixReady::hup(), PollOpt::level())?;
+        }
         Ok(())
     }
 
 
     // register for peer writable events
     fn register_write(&self) -> Result<(), SPVError> {
-        trace!("register for mio write peer={}", self.pid);
-        self.poll.register(&self.stream, self.pid.token, Ready::writable()|UnixReady::error()|UnixReady::hup(), PollOpt::level())?;
+        if !self.writeable.swap(true, Ordering::Acquire) {
+            self.poll.register(&self.stream, self.pid.token, Ready::writable() | UnixReady::error() | UnixReady::hup(), PollOpt::level())?;
+        }
         Ok(())
     }
 
