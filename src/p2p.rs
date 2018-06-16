@@ -44,9 +44,16 @@ use std::net::{Shutdown, SocketAddr};
 use std::sync::{Arc, mpsc, RwLock, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering,AtomicBool};
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::cell::Cell;
+use futures::{Future, Async, FutureExt};
+use futures::future;
+use futures::task::{Context, Waker};
+use std::time::Duration;
+use futures_timer::Delay;
 
 const IO_BUFFER_SIZE:usize = 1024*1024;
 const EVENT_BUFFER_SIZE:usize = 1024;
+const CONNECT_TIMEOUT_SECONDS: u64 = 5;
 
 /// A peer's Id
 /// used in log messages and as key to PeerMap
@@ -109,8 +116,72 @@ impl P2P {
         }
     }
 
-    /// Add a peer
-    pub fn add_peer (&self, addr: &SocketAddr) -> Result<PeerId, SPVError> {
+    /// return a future that does not complete until the peer is connected
+    pub fn add_peer (&self, addr: &SocketAddr) -> Box<Future<Item=SocketAddr, Error=SPVError> + Send> {
+        let connect = self.connect_peer_with_timeout(addr, CONNECT_TIMEOUT_SECONDS);
+
+        let peers = self.peers.clone();
+        let address = addr.clone();
+
+        Box::new(connect.and_then (move|pid| {
+            Box::new(future::poll_fn (move | ctx | {
+                // retrieve peer from peer map
+                if let Some(peer) = peers.read().unwrap().get(&pid) {
+                    // return pid if peer is connected (handshake perfect)
+                    let mut locked_peer = peer.lock().unwrap();
+                    // store waker of this task to peer
+                    // wakeup with this will trigger a new poll
+                    locked_peer.disconnected_waker = Some(ctx.waker().clone());
+                    Ok(Async::Pending)
+                } else {
+                    Ok(Async::Ready(address))
+                }
+            }
+            ))}))
+    }
+
+    /// return a future that resolves to a connected (handshake perfect) peer or timeout
+    pub fn connect_peer_with_timeout (&self, addr: &SocketAddr, seconds: u64) -> Box<Future<Item=PeerId, Error=SPVError> + Send> {
+        use futures_timer::FutureExt;
+
+        Box::new(self.connect_peer(addr).timeout(Duration::from_secs(seconds)))
+    }
+
+    // connect a peer
+    fn connect_peer(&self, addr: &SocketAddr) -> Box<Future<Item=PeerId, Error=SPVError> + Send> {
+        let peers = self.peers.clone();
+        let socket_address = addr.clone();
+
+        // initiate connection
+        match self.initiate_connect(addr) {
+            // connection initiated, resolve to a future that polls for handshake complete
+            Ok(pid) => Box::new(
+                future::poll_fn (move |ctx|
+                    {
+                        // retrieve peer from peer map
+                        if let Some(peer) = peers.read().unwrap().get(&pid) {
+                            // return pid if peer is connected (handshake perfect)
+                            let mut locked_peer = peer.lock().unwrap();
+                            if locked_peer.connected.get() {
+                                locked_peer.connected_waker = None;
+                                Ok(Async::Ready(pid))
+                            } else {
+                                // store waker of this task to peer
+                                // wakeup with this will trigger a new poll
+                                locked_peer.connected_waker = Some(ctx.waker().clone());
+                                Ok(Async::Pending)
+                            }
+                        } else {
+                            Err(SPVError::UnknownPeer(socket_address))
+                        }
+                    })),
+            // resolve to an error returning future if initiation fails
+            Err(e) => Box::new(future::err(e))
+        }
+    }
+
+    // initiate connect to peer
+    fn initiate_connect(&self, addr: &SocketAddr) -> Result<PeerId, SPVError> {
         // new token, never re-using previously connected peer's id
         // so log messages are easier to follow
         let token = Token(self.next_peer_id.fetch_add(1, Ordering::Relaxed));
@@ -154,18 +225,27 @@ impl P2P {
         })
     }
 
+    fn disconnect (&self, pid: PeerId) {
+        if let Entry::Occupied(peer_entry) = self.peers.write().unwrap().entry(pid) {
+            {
+                let mut locked_peer = peer_entry.get().lock().unwrap();
+                if let Some(ref waker) = locked_peer.disconnected_waker {
+                    waker.wake();
+                }
+                locked_peer.disconnected_waker = None;
+                locked_peer.stream.shutdown(Shutdown::Both).unwrap_or(());
+            }
+            peer_entry.remove();
+        }
+    }
+
     fn event_processor (&self, node: Arc<Node>, event: Event, pid: PeerId, iobuf: &mut [u8]) -> Result<(), SPVError> {
         let readiness = UnixReady::from(event.readiness());
         // check for error first
         if readiness.is_hup() || readiness.is_error() {
             info!("left us peer={}", pid);
             node.disconnected(pid)?;
-            // disconnect on error
-            if let Entry::Occupied(peer_entry) = self.peers.write().unwrap().entry(pid) {
-                // get and lock the peer from the peer map entry
-                peer_entry.get().lock().unwrap().stream.shutdown(Shutdown::Both).unwrap_or(());
-                peer_entry.remove();
-            }
+            self.disconnect(pid);
         } else {
             // check for ability to write before read, to get rid of data before buffering more read
             // token should only be registered for write if there is a need to write
@@ -272,11 +352,7 @@ impl P2P {
                 if disconnect {
                     info!("left us peer={}", pid);
                     node.disconnected(pid)?;
-                    if let Entry::Occupied(peer_entry) = self.peers.write().unwrap().entry(pid) {
-                        // get and lock the peer from the peer map entry
-                        peer_entry.get().lock().unwrap().stream.shutdown(Shutdown::Both)?;
-                        peer_entry.remove();
-                    }
+                    self.disconnect(pid);
                 }
                 else {
                     if handshake {
@@ -293,11 +369,7 @@ impl P2P {
                             ProcessResult::Disconnect => {
                                 info!("disconnected peer={}", pid);
                                 node.disconnected (pid)?;
-                                if let Entry::Occupied(peer_entry) = self.peers.write().unwrap().entry(pid) {
-                                    // get and lock the peer from the peer map entry
-                                    peer_entry.get().lock().unwrap().stream.shutdown(Shutdown::Both)?;
-                                    peer_entry.remove();
-                                }
+                                self.disconnect(pid);
                             },
                             ProcessResult::Height(new_height) => {
                                 if let Some(peer) = self.peers.read().unwrap().get(&pid) {
@@ -373,7 +445,13 @@ pub struct Peer {
     // channel into the event processing loop for outgoing messages
     receiver: mpsc::Receiver<NetworkMessage>,
     // is registered for write?
-    writeable: AtomicBool
+    writeable: AtomicBool,
+    // connected and handshake complete?
+    connected: Cell<bool>,
+    // waker for handshake complete
+    connected_waker: Option<Waker>,
+    // waker for peer disconnected
+    disconnected_waker: Option<Waker>
 }
 
 impl Peer {
@@ -382,7 +460,8 @@ impl Peer {
         let stream = TcpStream::connect(addr)?;
         let (sender, receiver) = mpsc::channel();
         let peer = Peer{pid, poll: poll.clone(), stream, read_buffer: Buffer::new(), write_buffer: Buffer::new(),
-            got_verack: false, nonce, version: None, sender, receiver, writeable: AtomicBool::new(false)};
+            got_verack: false, nonce, version: None, sender, receiver, writeable: AtomicBool::new(false),
+            connected: Cell::new(false), connected_waker: None, disconnected_waker: None };
         peer.register_write()?;
         Ok(peer)
     }
@@ -469,10 +548,14 @@ impl Peer {
                 }
                 _ => {
                     trace!("misbehaving peer={}", self.pid);
-                    return Ok(HandShake::Disconnect);;
+                    return Ok(HandShake::Disconnect);
                 }
             };
             if self.version.is_some() && self.got_verack {
+                self.connected.set(true);
+                if let Some(ref waker) = self.connected_waker {
+                    waker.wake();
+                }
                 return Ok(HandShake::Handshake)
             }
             else {

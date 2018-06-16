@@ -24,9 +24,8 @@ mod args;
 use bitcoin::network::constants::Network;
 use bitcoin_spv::spv::SPV;
 use log::Level;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::path::Path;
-use std::env;
 
 /// simple test drive that connects to a local bitcoind
 pub fn main() {
@@ -34,11 +33,11 @@ pub fn main() {
     let peers = get_peers();
     if let Some(path) = args::find_arg("db") {
         let spv = SPV::new("/rust-spv:0.1.0/".to_string(), Network::Bitcoin, Path::new(path.as_str())).unwrap();
-        spv.run(peers, 1).unwrap();
+        spv.start(peers, 1);
     }
     else {
         let spv = SPV::new_in_memory("/rust-spv:0.1.0/".to_string(), Network::Bitcoin).unwrap();
-        spv.run(peers, 1).unwrap();
+        spv.start(peers, 1);
     }
 }
 

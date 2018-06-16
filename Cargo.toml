@@ -20,7 +20,7 @@ path = "src/bin/main.rs"
 
 [dependencies]
 bitcoin = "0.13"
-bitcoin-chain = { git = "https://github.com/rust-bitcoin/rust-bitcoin-chain", branch = "master" }
+bitcoin-chain = { git = "https://github.com/tamasblummer/rust-bitcoin-chain", branch = "send" }
 lightning = { git = "https://github.com/rust-bitcoin/rust-lightning", branch = "master" }
 mio = "0.6"
 rand = "0.4"
@@ -28,6 +28,8 @@ siphasher = "0.2"
 log = "0.4"
 simple_logger = "0.5.0"
 rusqlite = "0.13.0"
+futures="0.2"
+futures-timer= { git= "https://github.com/tamasblummer/futures-timer.git", branch = "master" }
 
 [dev-dependencies]
 rustc-serialize = "0.3"

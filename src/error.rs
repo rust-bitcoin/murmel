@@ -26,6 +26,7 @@ use std::error::Error;
 use std::fmt;
 use std::io;
 use std::net::SocketAddr;
+use futures::Never;
 
 /// An error class to offer a unified error interface upstream
 pub enum SPVError {
@@ -109,4 +110,9 @@ impl convert::From<rusqlite::Error> for SPVError {
     }
 }
 
-
+// this is only a helper during development
+impl convert::From<SPVError> for Never {
+    fn from(_: SPVError) -> Self {
+        unimplemented!()
+    }
+}

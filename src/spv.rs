@@ -29,11 +29,17 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
 use p2p::PeerMap;
+use futures::future;
+use futures::prelude::*;
+use futures::executor::ThreadPool;
+use futures::future::select_all;
 
 /// The complete SPV stack
 pub struct SPV{
 	node: Arc<Node>,
-	p2p: Arc<P2P>
+	p2p: Arc<P2P>,
+    thread_pool: Mutex<ThreadPool>,
+    db: Arc<Mutex<DB>>
 }
 
 impl SPV {
@@ -45,12 +51,13 @@ impl SPV {
     /// The method will read previously stored headers from the database and sync up with the peers
     /// then serve the returned ChainWatchInterface
     pub fn new(user_agent :String, network: Network, db: &Path) -> Result<SPV, SPVError> {
+        let thread_pool = Mutex::new(ThreadPool::new()?);
         let db = Arc::new(Mutex::new(DB::new(db)?));
         let birth = create_tables(db.clone())?;
         let peers = Arc::new(RwLock::new(PeerMap::new()));
         let p2p = Arc::new(P2P::new(user_agent, network, 0, peers.clone(), db.clone()));
         let node = Arc::new(Node::new(p2p.clone(), network, db.clone(), birth, peers.clone()));
-        Ok(SPV{ node, p2p })
+        Ok(SPV{ node, p2p, thread_pool, db: db.clone() })
     }
 
     /// Initialize the SPV stack and return a ChainWatchInterface
@@ -60,26 +67,118 @@ impl SPV {
     /// The method will start with an empty in-memory database and sync up with the peers
     /// then serve the returned ChainWatchInterface
     pub fn new_in_memory(user_agent :String, network: Network) -> Result<SPV, SPVError> {
+        let thread_pool = Mutex::new(ThreadPool::new()?);
         let db = Arc::new(Mutex::new(DB::mem()?));
         let birth = create_tables(db.clone())?;
         let peers = Arc::new(RwLock::new(PeerMap::new()));
         let p2p = Arc::new(P2P::new(user_agent, network, 0, peers.clone(), db.clone()));
         let node = Arc::new(Node::new(p2p.clone(), network, db.clone(), birth, peers.clone()));
-        Ok(SPV{ node, p2p })
+        Ok(SPV{ node, p2p, thread_pool, db: db.clone()})
     }
 
 	/// Start the SPV stack. This should be called AFTER registering listener of the ChainWatchInterface,
 	/// so they are called as the SPV stack catches up with the blockchain
 	/// * peers - connect to these peers at startup (might be empty)
-	/// * min_connections - initiate connections the at least this number of peers. Peers will be chosen random
+	/// * min_connections - keep connections with at least this number of peers. Peers will be chosen random
 	/// from those discovered in earlier runs
-	pub fn run (&self, peers: Vec<SocketAddr>, _min_connections: u16) -> Result<(), SPVError> {
-		self.node.load_headers()?;
+    pub fn start (&self, peers: Vec<SocketAddr>, _min_connections: u16) {
+        // read stored headers from db
+        // there is no recovery if this fails
+        self.node.load_headers().unwrap();
+
+        let mut thread_pool = self.thread_pool.lock().unwrap();
+        let p2p = self.p2p.clone();
+        let node = self.node.clone();
+
+        // start the task that runs all network communication
+        thread_pool.spawn (Box::new(future::poll_fn (move |ctx| {
+            p2p.run(node.clone()).unwrap();
+            Ok(Async::Ready(()))
+        }))).unwrap();
+
+        // the task that keeps us connected
+        thread_pool.spawn(self.keep_connected(peers, 0)).unwrap();
+    }
+
+    fn keep_connected(&self, peers: Vec<SocketAddr>, min_connections: usize) -> Box<Future<Item=(), Error=Never> + Send> {
+
+        let node = self.node.clone();
+        let p2p = self.p2p.clone();
+        let db = self.db.clone();
+
+        // add initial peers if any
+        let mut added = Vec::new();
         for addr in &peers {
-            self.p2p.add_peer(addr)?;
+            added.push(p2p.add_peer(addr));
         }
-        self.p2p.run(self.node.clone())?;
-		Ok(())
+
+        struct KeepConnected {
+            min_connections: usize,
+            added: Vec<Box<Future<Item=SocketAddr, Error=SPVError> + Send>>,
+            db: Arc<Mutex<DB>>,
+            p2p: Arc<P2P>
+        }
+
+        // this task runs until it runs out of peers
+        impl Future for KeepConnected {
+            type Item = ();
+            type Error = Never;
+
+            fn poll(&mut self, cx: &mut task::Context) -> Poll<Self::Item, Self::Error> {
+                let ref mut added = self.added;
+                // return from this loop with 'pending' if enough peers are connected
+                loop {
+                    // add further peers from db if needed
+                    {
+                        // db lock context
+                        let mut db = self.db.lock().unwrap();
+                        for _ in added.len()..self.min_connections {
+                            if let Ok(tx) = db.transaction() {
+                                // found a peer
+                                if let Ok(peer) = tx.get_a_peer() {
+                                    // have an address for it
+                                    // Note: we do not store Tor adresses, so this should always be true
+                                    if let Ok(ref sock) = peer.socket_addr() {
+                                        added.push(self.p2p.add_peer(sock));
+                                    }
+                                } else {
+                                    // no peers in db, give up here
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if added.len() == 0 {
+                        // run out of peers. this is fatal
+                        error!("no more peers to connect");
+                        return Ok(Async::Ready(()));
+                    }
+
+                    // find a finished peer
+                    let finished = added.iter_mut().enumerate().filter_map(|(i, f)| {
+                        // if any of them finished
+                        // note that poll is reusing context of this poll, so wakeups come here
+                        match f.poll(cx) {
+                            Ok(Async::Pending) => None,
+                            Ok(Async::Ready(e)) => Some((i, Ok(e))),
+                            Err(e) => Some((i, Err(e))),
+                        }
+                    }).next();
+                    match finished {
+                        Some ((i, e)) => {
+                            added.remove (i);
+                            match e {
+                                Ok(e) => info!("disconnected {}", e),
+                                Err(e) => warn!("disconnected {}", e)
+                            }
+                        },
+                        None => return Ok(Async::Pending)
+                    }
+                }
+            }
+        }
+
+        Box::new(KeepConnected{min_connections, added, db, p2p})
 	}
 
     /// Get the connector to higher level appl layers, such as Lightning
