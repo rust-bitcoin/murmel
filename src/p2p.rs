@@ -98,7 +98,9 @@ pub struct P2P {
     // atomic only for interior mutability
     next_peer_id: AtomicUsize,
     // database
-    db: Arc<Mutex<DB>>
+    db: Arc<Mutex<DB>>,
+    // waker
+    waker: Arc<Mutex<HashMap<PeerId, Waker>>>
 }
 
 impl P2P {
@@ -113,7 +115,8 @@ impl P2P {
             peers,
             poll: Arc::new(Poll::new().unwrap()),
             next_peer_id: AtomicUsize::new(0),
-            db
+            db,
+            waker: Arc::new(Mutex::new(HashMap::new()))
         }
     }
 
@@ -123,16 +126,13 @@ impl P2P {
 
         let peers = self.peers.clone();
         let address = addr.clone();
+        let waker = self.waker.clone();
 
         Box::new(connect.and_then (move|pid| {
             Box::new(future::poll_fn (move | ctx | {
                 // retrieve peer from peer map
                 if let Some(peer) = peers.read().unwrap().get(&pid) {
-                    // return pid if peer is connected (handshake perfect)
-                    let mut locked_peer = peer.lock().unwrap();
-                    // store waker of this task to peer
-                    // wakeup with this will trigger a new poll
-                    locked_peer.disconnected_waker = Some(ctx.waker().clone());
+                    waker.lock().unwrap().insert(pid, ctx.waker().clone());
                     Ok(Async::Pending)
                 } else {
                     Ok(Async::Ready(address))
@@ -173,7 +173,8 @@ impl P2P {
                                 Ok(Async::Pending)
                             }
                         } else {
-                            Err(SPVError::UnknownPeer(socket_address))
+                            // timeout will pick up
+                            Ok(Async::Pending)
                         }
                     })),
             // resolve to an error returning future if initiation fails
@@ -188,7 +189,7 @@ impl P2P {
         let token = Token(self.next_peer_id.fetch_add(1, Ordering::Relaxed));
         let pid = PeerId{token};
 
-        info!("initiating connect to {} peer={}", addr, pid);
+        info!("trying to connect to {} peer={}", addr, pid);
 
         // create lock protected peer object
         let peer = Mutex::new(Peer::new(pid, self.poll.clone(), addr, self.nonce)?);
@@ -196,13 +197,12 @@ impl P2P {
         // add peer object to peer map shared between P2P and node
         let mut peers = self.peers.write().unwrap();
 
-        // send this node's version message to peer
-        peer.lock().unwrap().send(&P2P::version(&self.user_agent, self.nonce, self.height, addr))?;
-
         // add to peer map
         peers.insert(pid, peer);
 
-        trace!("added peer={}", pid);
+        // send this node's version message to peer
+        peers.get(&pid).unwrap().lock().unwrap().send(&P2P::version(&self.user_agent, self.nonce, self.height, addr))?;
+
         Ok(pid)
     }
 
@@ -227,15 +227,11 @@ impl P2P {
     }
 
     fn disconnect (&self, pid: PeerId) {
+        if let Some(ref waker) = self.waker.lock().unwrap().get(&pid) {
+            waker.wake();
+        }
         if let Entry::Occupied(peer_entry) = self.peers.write().unwrap().entry(pid) {
-            {
-                let mut locked_peer = peer_entry.get().lock().unwrap();
-                if let Some(ref waker) = locked_peer.disconnected_waker {
-                    waker.wake();
-                }
-                locked_peer.disconnected_waker = None;
-                locked_peer.stream.shutdown(Shutdown::Both).unwrap_or(());
-            }
+            peer_entry.get().lock().unwrap().stream.shutdown(Shutdown::Both).unwrap_or(());
             peer_entry.remove();
         }
     }
@@ -373,20 +369,25 @@ impl P2P {
                                 self.disconnect(pid);
                             },
                             ProcessResult::Ban(increment) => {
-                                let mut disconnect = false;
+                                let mut disconnect = None;
                                 if let Some(peer) = self.peers.read().unwrap().get(&pid) {
                                     let mut locked_peer = peer.lock().unwrap();
                                     locked_peer.ban += increment;
                                     trace!("ban score {} for peer={}", locked_peer.ban, pid);
                                     if locked_peer.ban >= BAN {
-                                       disconnect = true;
+                                       disconnect = Some(locked_peer.stream.peer_addr()?);
                                     }
                                 }
-                                if disconnect {
+                                if disconnect.is_some() {
                                     // TODO DB update
                                     info!("banning peer={}", pid);
                                     node.disconnected(pid)?;
                                     self.disconnect(pid);
+
+                                    let mut db = self.db.lock().unwrap();
+                                    let transaction = db.transaction()?;
+                                    transaction.ban (&disconnect.unwrap())?;
+                                    transaction.commit()?;
                                 }
                             }
                             ProcessResult::Height(new_height) => {
@@ -468,8 +469,6 @@ pub struct Peer {
     connected: Cell<bool>,
     // waker for handshake complete
     connected_waker: Option<Waker>,
-    // waker for peer disconnected
-    disconnected_waker: Option<Waker>,
     // ban score
     ban: u32
 }
@@ -481,7 +480,7 @@ impl Peer {
         let (sender, receiver) = mpsc::channel();
         let peer = Peer{pid, poll: poll.clone(), stream, read_buffer: Buffer::new(), write_buffer: Buffer::new(),
             got_verack: false, nonce, version: None, sender, receiver, writeable: AtomicBool::new(false),
-            connected: Cell::new(false), connected_waker: None, disconnected_waker: None, ban: 0 };
+            connected: Cell::new(false), connected_waker: None, ban: 0 };
         peer.register_write()?;
         Ok(peer)
     }

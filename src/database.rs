@@ -38,6 +38,7 @@ use std::io::Cursor;
 use std::path::Path;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
+use std::net::SocketAddr;
 use rand;
 use rand::Rng;
 
@@ -196,6 +197,16 @@ impl<'a> DBTX<'a> {
             - 60*60*24*30;
         self.tx.execute("delete peers where last_seen < ?", &[&oldest])?;
         Ok(())
+    }
+
+    pub fn ban (&self, addr: &SocketAddr) -> Result<i32, SPVError> {
+        let address = Address::new (addr, 0);
+        let mut s = String::new();
+        for d in address.address.iter() {
+            s.push_str(format!("{:4x}",d).as_str());
+        }
+        let banned_until = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as u32 + 2*24*60;
+        Ok(self.tx.execute("update peers set banned_until = ? where address = ?", &[&banned_until, &s])?)
     }
 
     /// get a random stored peer

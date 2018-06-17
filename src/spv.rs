@@ -114,7 +114,7 @@ impl SPV {
 
         struct KeepConnected {
             min_connections: usize,
-            added: Vec<Box<Future<Item=SocketAddr, Error=SPVError> + Send>>,
+            connections: Vec<Box<Future<Item=SocketAddr, Error=SPVError> + Send>>,
             db: Arc<Mutex<DB>>,
             p2p: Arc<P2P>
         }
@@ -125,21 +125,22 @@ impl SPV {
             type Error = Never;
 
             fn poll(&mut self, cx: &mut task::Context) -> Poll<Self::Item, Self::Error> {
-                let ref mut added = self.added;
+                let ref mut connections = self.connections;
                 // return from this loop with 'pending' if enough peers are connected
                 loop {
                     // add further peers from db if needed
                     {
                         // db lock context
                         let mut db = self.db.lock().unwrap();
-                        for _ in added.len()..self.min_connections {
+
+                        while connections.len()  < self.min_connections {
                             if let Ok(tx) = db.transaction() {
                                 // found a peer
                                 if let Ok(peer) = tx.get_a_peer() {
                                     // have an address for it
                                     // Note: we do not store Tor adresses, so this should always be true
                                     if let Ok(ref sock) = peer.socket_addr() {
-                                        added.push(self.p2p.add_peer(sock));
+                                        connections.push(self.p2p.add_peer(sock));
                                     }
                                 } else {
                                     // no peers in db, give up here
@@ -148,37 +149,41 @@ impl SPV {
                             }
                         }
                     }
-                    if added.len() == 0 {
+                    if connections.len() == 0 {
                         // run out of peers. this is fatal
                         error!("no more peers to connect");
                         return Ok(Async::Ready(()));
                     }
-
-                    // find a finished peer
-                    let finished = added.iter_mut().enumerate().filter_map(|(i, f)| {
-                        // if any of them finished
-                        // note that poll is reusing context of this poll, so wakeups come here
-                        match f.poll(cx) {
-                            Ok(Async::Pending) => None,
-                            Ok(Async::Ready(e)) => Some((i, Ok(e))),
-                            Err(e) => Some((i, Err(e))),
-                        }
-                    }).next();
-                    match finished {
-                        Some ((i, e)) => {
-                            added.remove (i);
-                            match e {
-                                Ok(e) => info!("disconnected {}", e),
-                                Err(e) => warn!("disconnected {}", e)
+                    let mut removed_some = false;
+                    loop {
+                        // find a finished peer
+                        let finished = connections.iter_mut().enumerate().filter_map(|(i, f)| {
+                            // if any of them finished
+                            // note that poll is reusing context of this poll, so wakeups come here
+                            match f.poll(cx) {
+                                Ok(Async::Pending) => None,
+                                Ok(Async::Ready(e)) => Some((i, Ok(e))),
+                                Err(e) => Some((i, Err(e))),
                             }
-                        },
-                        None => return Ok(Async::Pending)
+                        }).next();
+                        match finished {
+                            Some((i, e)) => {
+                                connections.remove(i);
+                                removed_some = true;
+                            },
+                            None => if removed_some {
+                                break;
+                            }
+                            else {
+                                return Ok(Async::Pending);
+                            }
+                        }
                     }
                 }
             }
         }
 
-        Box::new(KeepConnected{min_connections, added, db, p2p})
+        Box::new(KeepConnected{min_connections, connections: added, db, p2p})
 	}
 
     /// Get the connector to higher level appl layers, such as Lightning

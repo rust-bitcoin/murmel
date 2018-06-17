@@ -268,7 +268,7 @@ impl Node {
 	fn inv(&self, v: &Vec<Inventory>, peer: PeerId) -> Result<ProcessResult, SPVError> {
 		for inventory in v {
             // only care of blocks
-			if inventory.inv_type == InvType::Block
+			if inventory.inv_type == InvType::Block || inventory.inv_type == InvType::WitnessBlock
 				&& self.blockchain.lock().unwrap().get_block(inventory.hash).is_none() {
 				// ask for header(s) if observing a new block
 				self.get_headers(peer)?;
@@ -276,6 +276,7 @@ impl Node {
 			}
             else {
                 // do not spam us with transactions
+                debug!("received unwanted inv {:?} peer={}", inventory.inv_type, peer);
                 return Ok(ProcessResult::Ban(10))
             }
 		}
