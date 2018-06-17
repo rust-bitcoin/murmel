@@ -52,6 +52,8 @@ pub enum ProcessResult {
     Disconnect,
     /// message ignored
     Ignored,
+    /// increase ban score
+    Ban(u32)
 }
 
 
@@ -150,7 +152,7 @@ impl Node {
             &NetworkMessage::Block(ref b) => self.block(b, peer),
             &NetworkMessage::Inv(ref v) => self.inv(v, peer),
             &NetworkMessage::Addr(ref v) => self.addr(v, peer),
-            _ => Ok(ProcessResult::Ignored)
+            _ => Ok(ProcessResult::Ban(1))
         }
     }
 
@@ -217,6 +219,7 @@ impl Node {
                     tx.commit()?;
                     debug!("received {} known or orphan headers from peer={}", headers.len(), peer);
                     ask_for_blocks.clear();
+                    return Ok(ProcessResult::Ban(10))
                 }
 			}
 
@@ -258,7 +261,7 @@ impl Node {
 			}
             return Ok(ProcessResult::Ack)
 		}
-		Ok(ProcessResult::Ignored)
+		Ok(ProcessResult::Ban(10))
 	}
 
     // process an incoming inventory announcement
@@ -271,6 +274,10 @@ impl Node {
 				self.get_headers(peer)?;
 				return Ok(ProcessResult::Ack);
 			}
+            else {
+                // do not spam us with transactions
+                return Ok(ProcessResult::Ban(100))
+            }
 		}
 		Ok(ProcessResult::Ignored)
 	}

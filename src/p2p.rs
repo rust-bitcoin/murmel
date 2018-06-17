@@ -54,6 +54,7 @@ use futures_timer::Delay;
 const IO_BUFFER_SIZE:usize = 1024*1024;
 const EVENT_BUFFER_SIZE:usize = 1024;
 const CONNECT_TIMEOUT_SECONDS: u64 = 5;
+const BAN :u32 = 100;
 
 /// A peer's Id
 /// used in log messages and as key to PeerMap
@@ -371,6 +372,19 @@ impl P2P {
                                 node.disconnected (pid)?;
                                 self.disconnect(pid);
                             },
+                            ProcessResult::Ban(increment) => {
+                                if let Some(peer) = self.peers.read().unwrap().get(&pid) {
+                                    let mut locked_peer = peer.lock().unwrap();
+                                    locked_peer.ban += increment;
+                                    trace!("ban score {} for peer={}", locked_peer.ban, pid);
+                                    if locked_peer.ban >= BAN {
+                                        info!("banning peer={}", pid);
+                                        // TODO DB update
+                                        node.disconnected (pid)?;
+                                        self.disconnect(pid);
+                                    }
+                                }
+                            }
                             ProcessResult::Height(new_height) => {
                                 if let Some(peer) = self.peers.read().unwrap().get(&pid) {
                                     let mut locked_peer = peer.lock().unwrap();
@@ -451,7 +465,9 @@ pub struct Peer {
     // waker for handshake complete
     connected_waker: Option<Waker>,
     // waker for peer disconnected
-    disconnected_waker: Option<Waker>
+    disconnected_waker: Option<Waker>,
+    // ban score
+    ban: u32
 }
 
 impl Peer {
@@ -461,7 +477,7 @@ impl Peer {
         let (sender, receiver) = mpsc::channel();
         let peer = Peer{pid, poll: poll.clone(), stream, read_buffer: Buffer::new(), write_buffer: Buffer::new(),
             got_verack: false, nonce, version: None, sender, receiver, writeable: AtomicBool::new(false),
-            connected: Cell::new(false), connected_waker: None, disconnected_waker: None };
+            connected: Cell::new(false), connected_waker: None, disconnected_waker: None, ban: 0 };
         peer.register_write()?;
         Ok(peer)
     }
