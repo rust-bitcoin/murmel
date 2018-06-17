@@ -284,6 +284,7 @@ impl Node {
 
     // process incoming addr messages
 	fn addr (&self, v: &Vec<(u32, Address)>, peer: PeerId)  -> Result<ProcessResult, SPVError> {
+        let mut result = ProcessResult::Ignored;
         // store if interesting, that is ...
 		let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as u32;
 		let mut db = self.db.lock().unwrap();
@@ -294,12 +295,13 @@ impl Node {
                 // if segwit full node and not older than 3 hours
                 if a.1.services & 9 == 9 && a.0 > now - 3 * 60 * 30 {
                     tx.store_peer(&a.1, a.0, 0)?;
+                    result = ProcessResult::Ack;
                     info!("stored address {:?} peer={}", a.1.socket_addr()?, peer);
                 }
             }
 		}
 		tx.commit()?;
-		Ok(ProcessResult::Ack)
+		Ok(result)
 	}
 
     /// get the blocks we are interested in

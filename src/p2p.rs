@@ -485,6 +485,7 @@ impl Peer {
     // register for peer readable events
     fn reregister_read(&self) -> Result<(), SPVError> {
         if self.writeable.swap(false, Ordering::Acquire) {
+            trace!("re-register for read peer={}", self.pid);
             self.poll.reregister(&self.stream, self.pid.token, Ready::readable() | UnixReady::error() | UnixReady::hup(), PollOpt::level())?;
         }
         Ok(())
@@ -502,6 +503,7 @@ impl Peer {
     // register for peer writable events
     fn reregister_write(&self) -> Result<(), SPVError> {
         if !self.writeable.swap(true, Ordering::Acquire) {
+            trace!("re-register for write peer={}", self.pid);
             self.poll.reregister(&self.stream, self.pid.token, Ready::writable() | UnixReady::error() | UnixReady::hup(), PollOpt::level())?;
         }
         Ok(())
@@ -511,6 +513,7 @@ impl Peer {
     // register for peer writable events
     fn register_write(&self) -> Result<(), SPVError> {
         if !self.writeable.swap(true, Ordering::Acquire) {
+            trace!("register for write peer={}", self.pid);
             self.poll.register(&self.stream, self.pid.token, Ready::writable() | UnixReady::error() | UnixReady::hup(), PollOpt::level())?;
         }
         Ok(())
