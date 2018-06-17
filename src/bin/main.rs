@@ -29,7 +29,19 @@ use std::path::Path;
 
 /// simple test drive that connects to a local bitcoind
 pub fn main() {
-    simple_logger::init_with_level(Level::Trace).unwrap();
+    if let Some (log) = args::find_arg("log") {
+        match log.as_str() {
+            "error" => simple_logger::init_with_level(Level::Error).unwrap(),
+            "warn" => simple_logger::init_with_level(Level::Warn).unwrap(),
+            "info" => simple_logger::init_with_level(Level::Info).unwrap(),
+            "debug" => simple_logger::init_with_level(Level::Debug).unwrap(),
+            "trace" => simple_logger::init_with_level(Level::Trace).unwrap(),
+            _ => simple_logger::init_with_level(Level::Info).unwrap()
+        }
+    }
+    else {
+        simple_logger::init_with_level(Level::Info).unwrap();
+    }
     let peers = get_peers();
     let mut connections = 1;
     if let Some(numstring) = args::find_arg("connections") {
@@ -48,5 +60,5 @@ pub fn main() {
 use std::str::FromStr;
 
 fn get_peers() -> Vec<SocketAddr> {
-    args::find_args("p").iter().map(|s| SocketAddr::from_str(s).unwrap()).collect()
+    args::find_args("peer").iter().map(|s| SocketAddr::from_str(s).unwrap()).collect()
 }
