@@ -276,7 +276,7 @@ impl Node {
 			}
             else {
                 // do not spam us with transactions
-                return Ok(ProcessResult::Ban(100))
+                return Ok(ProcessResult::Ban(10))
             }
 		}
 		Ok(ProcessResult::Ignored)

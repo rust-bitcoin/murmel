@@ -373,22 +373,20 @@ impl P2P {
                                 self.disconnect(pid);
                             },
                             ProcessResult::Ban(increment) => {
+                                let mut disconnect = false;
                                 if let Some(peer) = self.peers.read().unwrap().get(&pid) {
-                                    let mut disconnect = false;
-                                    {
-                                        let mut locked_peer = peer.lock().unwrap();
-                                        locked_peer.ban += increment;
-                                        trace!("ban score {} for peer={}", locked_peer.ban, pid);
-                                        if locked_peer.ban >= BAN {
-                                           disconnect = true;
-                                        }
+                                    let mut locked_peer = peer.lock().unwrap();
+                                    locked_peer.ban += increment;
+                                    trace!("ban score {} for peer={}", locked_peer.ban, pid);
+                                    if locked_peer.ban >= BAN {
+                                       disconnect = true;
                                     }
-                                    if disconnect {
-                                        // TODO DB update
-                                        info!("banning peer={}", pid);
-                                        node.disconnected(pid)?;
-                                        self.disconnect(pid);
-                                    }
+                                }
+                                if disconnect {
+                                    // TODO DB update
+                                    info!("banning peer={}", pid);
+                                    node.disconnected(pid)?;
+                                    self.disconnect(pid);
                                 }
                             }
                             ProcessResult::Height(new_height) => {
