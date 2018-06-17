@@ -374,13 +374,19 @@ impl P2P {
                             },
                             ProcessResult::Ban(increment) => {
                                 if let Some(peer) = self.peers.read().unwrap().get(&pid) {
-                                    let mut locked_peer = peer.lock().unwrap();
-                                    locked_peer.ban += increment;
-                                    trace!("ban score {} for peer={}", locked_peer.ban, pid);
-                                    if locked_peer.ban >= BAN {
-                                        info!("banning peer={}", pid);
+                                    let mut disconnect = false;
+                                    {
+                                        let mut locked_peer = peer.lock().unwrap();
+                                        locked_peer.ban += increment;
+                                        trace!("ban score {} for peer={}", locked_peer.ban, pid);
+                                        if locked_peer.ban >= BAN {
+                                           disconnect = true;
+                                        }
+                                    }
+                                    if disconnect {
                                         // TODO DB update
-                                        node.disconnected (pid)?;
+                                        info!("banning peer={}", pid);
+                                        node.disconnected(pid)?;
                                         self.disconnect(pid);
                                     }
                                 }
