@@ -81,7 +81,7 @@ impl SPV {
 	/// * peers - connect to these peers at startup (might be empty)
 	/// * min_connections - keep connections with at least this number of peers. Peers will be chosen random
 	/// from those discovered in earlier runs
-    pub fn start (&self, peers: Vec<SocketAddr>, _min_connections: u16) {
+    pub fn start (&self, peers: Vec<SocketAddr>, min_connections: usize) {
         // read stored headers from db
         // there is no recovery if this fails
         self.node.load_headers().unwrap();
@@ -97,7 +97,7 @@ impl SPV {
         }))).unwrap();
 
         // the task that keeps us connected
-        thread_pool.spawn(self.keep_connected(peers, 0)).unwrap();
+        thread_pool.run(self.keep_connected(peers, min_connections)).unwrap();
     }
 
     fn keep_connected(&self, peers: Vec<SocketAddr>, min_connections: usize) -> Box<Future<Item=(), Error=Never> + Send> {

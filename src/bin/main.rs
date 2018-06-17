@@ -29,15 +29,19 @@ use std::path::Path;
 
 /// simple test drive that connects to a local bitcoind
 pub fn main() {
-    simple_logger::init_with_level(Level::Info).unwrap();
+    simple_logger::init_with_level(Level::Trace).unwrap();
     let peers = get_peers();
+    let mut connections = 1;
+    if let Some(numstring) = args::find_arg("connections") {
+        connections = numstring.parse().unwrap();
+    }
     if let Some(path) = args::find_arg("db") {
         let spv = SPV::new("/rust-spv:0.1.0/".to_string(), Network::Bitcoin, Path::new(path.as_str())).unwrap();
-        spv.start(peers, 1);
+        spv.start(peers, connections);
     }
     else {
         let spv = SPV::new_in_memory("/rust-spv:0.1.0/".to_string(), Network::Bitcoin).unwrap();
-        spv.start(peers, 1);
+        spv.start(peers, connections);
     }
 }
 

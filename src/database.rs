@@ -203,6 +203,10 @@ impl<'a> DBTX<'a> {
         let n_peers: i64 = self.tx.query_row(
             "select count(*) from peers", &[], | row | { row.get(0) })?;
 
+        if n_peers == 0 {
+            return Err(SPVError::Generic("no peers in the database".to_owned()));
+        }
+
         let mut rng = rand::thread_rng();
         loop {
             let rowid = (rng.next_u64() as i64) % n_peers;
