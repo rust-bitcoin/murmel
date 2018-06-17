@@ -207,15 +207,15 @@ impl Node {
 				let new_tip = blockchain.best_tip_hash();
 				height = blockchain.get_block(new_tip).unwrap().height;
 
-				tx.set_tip(&new_tip)?;
-
-				tx.commit()?;
-
                 if tip_moved {
+                    tx.set_tip(&new_tip)?;
+
+                    tx.commit()?;
                     info!("received {} headers new tip={} from peer={}", headers.len(),
                           blockchain.best_tip_hash(), peer);
                 } else {
-                    debug!("received {} orphan headers from peer={}", headers.len(), peer);
+                    tx.commit()?;
+                    debug!("received {} known or orphan headers from peer={}", headers.len(), peer);
                     ask_for_blocks.clear();
                 }
 			}
@@ -269,14 +269,14 @@ impl Node {
 				&& self.blockchain.lock().unwrap().get_block(inventory.hash).is_none() {
 				// ask for header(s) if observing a new block
 				self.get_headers(peer)?;
-				break;
+				return Ok(ProcessResult::Ack);
 			}
 		}
-		Ok(ProcessResult::Ack)
+		Ok(ProcessResult::Ignored)
 	}
 
     // process incoming addr messages
-	fn addr (&self, v: &Vec<(u32, Address)>, _peer: PeerId)  -> Result<ProcessResult, SPVError> {
+	fn addr (&self, v: &Vec<(u32, Address)>, peer: PeerId)  -> Result<ProcessResult, SPVError> {
         // store if interesting, that is ...
 		let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as u32;
 		let mut db = self.db.lock().unwrap();
@@ -287,7 +287,7 @@ impl Node {
                 // if segwit full node and not older than 3 hours
                 if a.1.services & 9 == 9 && a.0 > now - 3 * 60 * 30 {
                     tx.store_peer(&a.1, a.0, 0)?;
-                    info!("stored address {:?}", a.1.socket_addr()?);
+                    info!("stored address {:?} peer={}", a.1.socket_addr()?, peer);
                 }
             }
 		}
