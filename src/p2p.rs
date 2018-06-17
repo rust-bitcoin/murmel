@@ -469,6 +469,7 @@ impl Peer {
     // register for peer readable events
     fn reregister_read(&self) -> Result<(), SPVError> {
         if self.writeable.swap(false, Ordering::Acquire) {
+            trace!("re-register for read peer={}", self.pid);
             self.poll.reregister(&self.stream, self.pid.token, Ready::readable() | UnixReady::error() | UnixReady::hup(), PollOpt::level())?;
         }
         Ok(())
@@ -486,6 +487,7 @@ impl Peer {
     // register for peer writable events
     fn reregister_write(&self) -> Result<(), SPVError> {
         if !self.writeable.swap(true, Ordering::Acquire) {
+            trace!("re-register for write peer={}", self.pid);
             self.poll.reregister(&self.stream, self.pid.token, Ready::writable() | UnixReady::error() | UnixReady::hup(), PollOpt::level())?;
         }
         Ok(())
@@ -495,6 +497,7 @@ impl Peer {
     // register for peer writable events
     fn register_write(&self) -> Result<(), SPVError> {
         if !self.writeable.swap(true, Ordering::Acquire) {
+            trace!("register for write peer={}", self.pid);
             self.poll.register(&self.stream, self.pid.token, Ready::writable() | UnixReady::error() | UnixReady::hup(), PollOpt::level())?;
         }
         Ok(())
@@ -527,8 +530,8 @@ impl Peer {
                     if version.nonce == self.nonce {
                         return Ok(HandShake::Disconnect);
                     } else {
-                        // want to connect to full nodes upporting segwit
-                        if version.services & 9 != 9 || version.version < 70013 {
+                        // want to connect to full nodes upporting segwit and have the chain
+                        if version.services & 9 != 9 || version.version < 70013 || version.start_height < self.version?.start_height - 2*2016 {
                             return Ok(HandShake::Disconnect);
                         } else {
                             // acknowledge version message received
