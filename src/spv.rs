@@ -33,6 +33,8 @@ use futures::future;
 use futures::prelude::*;
 use futures::executor::ThreadPool;
 use futures::future::select_all;
+use dns::dns_seed;
+use rand::{thread_rng, Rng};
 
 /// The complete SPV stack
 pub struct SPV{
@@ -116,7 +118,8 @@ impl SPV {
             min_connections: usize,
             connections: Vec<Box<Future<Item=SocketAddr, Error=SPVError> + Send>>,
             db: Arc<Mutex<DB>>,
-            p2p: Arc<P2P>
+            p2p: Arc<P2P>,
+            dns: Vec<SocketAddr>
         }
 
         // this task runs until it runs out of peers
@@ -143,8 +146,17 @@ impl SPV {
                                         connections.push(self.p2p.add_peer(sock));
                                     }
                                 } else {
-                                    // no peers in db, give up here
-                                    break;
+                                    if self.dns.len () == 0 {
+                                        self.dns = dns_seed();
+                                    }
+                                    if self.dns.len () == 0 {
+                                        // give up: no db no dns
+                                        break;
+                                    }
+                                    else {
+                                        let mut rng = thread_rng();
+                                        connections.push (self.p2p.add_peer(&self.dns[(rng.next_u64() as usize)%self.dns.len()]));
+                                    }
                                 }
                             }
                         }
@@ -183,7 +195,7 @@ impl SPV {
             }
         }
 
-        Box::new(KeepConnected{min_connections, connections: added, db, p2p})
+        Box::new(KeepConnected{min_connections, connections: added, db, p2p, dns: Vec::new() })
 	}
 
     /// Get the connector to higher level appl layers, such as Lightning

@@ -45,3 +45,4 @@ mod connector;
 pub mod spv;
 mod blockfilter;
 mod p2p;
+mod dns;
