@@ -146,19 +146,19 @@ impl SPV {
                                         connections.push(self.p2p.add_peer(sock));
                                     }
                                 } else {
-                                    if self.dns.len () == 0 {
-                                        self.dns = dns_seed(self.p2p.network);
-                                    }
-                                    if self.dns.len () == 0 {
-                                        // give up: no db no dns
-                                        break;
-                                    }
-                                    else {
-                                        let mut rng = thread_rng();
-                                        connections.push (self.p2p.add_peer(&self.dns[(rng.next_u64() as usize)%self.dns.len()]));
-                                    }
+                                    break;
                                 }
                             }
+                        }
+                    }
+                    // DNS lookup
+                    while connections.len()  < self.min_connections {
+                        if self.dns.len() == 0 {
+                            self.dns = dns_seed(self.p2p.network);
+                        }
+                        if self.dns.len() >0 {
+                            let mut rng = thread_rng();
+                            connections.push(self.p2p.add_peer(&self.dns[(rng.next_u64() as usize) % self.dns.len()]));
                         }
                     }
                     if connections.len() == 0 {
