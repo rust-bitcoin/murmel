@@ -147,7 +147,7 @@ impl SPV {
                                     }
                                 } else {
                                     if self.dns.len () == 0 {
-                                        self.dns = dns_seed();
+                                        self.dns = dns_seed(self.p2p.network);
                                     }
                                     if self.dns.len () == 0 {
                                         // give up: no db no dns

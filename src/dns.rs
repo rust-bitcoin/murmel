@@ -23,8 +23,9 @@
 //!
 
 use std::net::{SocketAddr, ToSocketAddrs};
+use bitcoin::network::constants::Network;
 
-const SEEDER : [&str;5] = [
+const MAIN_SEEDER: [&str;5] = [
     "seed.bitcoin.sipa.be",
     "dnsseed.bluematt.me",
     "dnsseed.bitcoin.dashjr.org",
@@ -32,19 +33,41 @@ const SEEDER : [&str;5] = [
     "seed.btc.petertodd.org"
 ];
 
-pub fn dns_seed () -> Vec<SocketAddr> {
-    info!("reaching out for DNS seed...");
+const TEST_SEEDER: [&str;4] = [
+    "testnet-seed.bitcoin.jonasschnelli.ch",
+    "seed.tbtc.petertodd.org",
+    "seed.testnet.bitcoin.sprovoost.nl",
+    "testnet-seed.bluematt.me"
+];
+
+
+pub fn dns_seed (network: Network) -> Vec<SocketAddr> {
     let mut seeds = Vec::new ();
-    for seedhost in SEEDER.iter() {
-        if let Ok(lookup) = (*seedhost, 8333).to_socket_addrs() {
-            for host in lookup {
-                seeds.push(host);
+    if network == Network::Bitcoin {
+        info!("reaching out for DNS seed...");
+        for seedhost in MAIN_SEEDER.iter() {
+            if let Ok(lookup) = (*seedhost, 8333).to_socket_addrs() {
+                for host in lookup {
+                    seeds.push(host);
+                }
+            } else {
+                trace!("{} did not answer", seedhost);
             }
         }
-        else {
-            trace!("{} did not answer", seedhost);
-        }
+        info!("received {} DNS seeds", seeds.len());
     }
-    info!("received {} DNS seeds", seeds.len());
+    if network == Network::Testnet {
+        info!("reaching out for DNS seed...");
+        for seedhost in TEST_SEEDER.iter() {
+            if let Ok(lookup) = (*seedhost, 18333).to_socket_addrs() {
+                for host in lookup {
+                    seeds.push(host);
+                }
+            } else {
+                trace!("{} did not answer", seedhost);
+            }
+        }
+        info!("received {} DNS seeds", seeds.len());
+    }
     seeds
 }

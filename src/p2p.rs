@@ -80,6 +80,7 @@ pub type PeerMap = HashMap<PeerId, Mutex<Peer>>;
 
 /// The P2P network layer
 pub struct P2P {
+    pub network: Network,
     // network specific message prefix
     magic: u32,
     // This node's identifier on the network (random)
@@ -108,6 +109,7 @@ impl P2P {
     pub fn new(user_agent: String, network: Network, height: u32, peers: Arc<RwLock<PeerMap>>, db: Arc<Mutex<DB>>) -> P2P {
         let mut rng = StdRng::new().unwrap();
         P2P {
+            network: network,
             magic: magic(network),
             nonce: rng.next_u64(),
             height,
