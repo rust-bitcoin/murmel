@@ -126,13 +126,11 @@ impl P2P {
 
         let peers = self.peers.clone();
         let address = addr.clone();
-        let waker = self.waker.clone();
 
         Box::new(connect.and_then (move|pid| {
             Box::new(future::poll_fn (move | ctx | {
                 // retrieve peer from peer map
                 if let Some(peer) = peers.read().unwrap().get(&pid) {
-                    waker.lock().unwrap().insert(pid, ctx.waker().clone());
                     Ok(Async::Pending)
                 } else {
                     Ok(Async::Ready(address))
@@ -152,6 +150,7 @@ impl P2P {
     fn connect_peer(&self, addr: &SocketAddr) -> Box<Future<Item=PeerId, Error=SPVError> + Send> {
         let peers = self.peers.clone();
         let socket_address = addr.clone();
+        let waker = self.waker.clone();
 
         // initiate connection
         match self.initiate_connect(addr) {
@@ -162,14 +161,10 @@ impl P2P {
                         // retrieve peer from peer map
                         if let Some(peer) = peers.read().unwrap().get(&pid) {
                             // return pid if peer is connected (handshake perfect)
-                            let mut locked_peer = peer.lock().unwrap();
-                            if locked_peer.connected.get() {
-                                locked_peer.connected_waker = None;
+                            if peer.lock().unwrap().connected.get() {
                                 Ok(Async::Ready(pid))
                             } else {
-                                // store waker of this task to peer
-                                // wakeup with this will trigger a new poll
-                                locked_peer.connected_waker = Some(ctx.waker().clone());
+                                waker.lock().unwrap().insert(pid, ctx.waker().clone());
                                 Ok(Async::Pending)
                             }
                         } else {
@@ -355,6 +350,9 @@ impl P2P {
                     if handshake {
                         info!("connected peer={}", pid);
                         node.connected (pid)?;
+                        if let Some(w) = self.waker.lock().unwrap().get(&pid) {
+                            w.wake();
+                        }
                     }
                     // process queued incoming messages outside lock
                     // as process could call back to P2P
@@ -467,8 +465,6 @@ pub struct Peer {
     writeable: AtomicBool,
     // connected and handshake complete?
     connected: Cell<bool>,
-    // waker for handshake complete
-    connected_waker: Option<Waker>,
     // ban score
     ban: u32
 }
@@ -480,7 +476,7 @@ impl Peer {
         let (sender, receiver) = mpsc::channel();
         let peer = Peer{pid, poll: poll.clone(), stream, read_buffer: Buffer::new(), write_buffer: Buffer::new(),
             got_verack: false, nonce, version: None, sender, receiver, writeable: AtomicBool::new(false),
-            connected: Cell::new(false), connected_waker: None, ban: 0 };
+            connected: Cell::new(false), ban: 0 };
         peer.register_write()?;
         Ok(peer)
     }
@@ -575,9 +571,6 @@ impl Peer {
             };
             if self.version.is_some() && self.got_verack {
                 self.connected.set(true);
-                if let Some(ref waker) = self.connected_waker {
-                    waker.wake();
-                }
                 return Ok(HandShake::Handshake)
             }
             else {
