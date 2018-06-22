@@ -39,7 +39,7 @@ use rand::{thread_rng, Rng};
 pub struct SPV{
 	node: Arc<Node>,
 	p2p: Arc<P2P>,
-    thread_pool: Arc<Mutex<ThreadPool>>,
+    thread_pool: ThreadPool,
     db: Arc<Mutex<DB>>
 }
 
@@ -52,12 +52,12 @@ impl SPV {
     /// The method will read previously stored headers from the database and sync up with the peers
     /// then serve the returned ChainWatchInterface
     pub fn new(user_agent :String, network: Network, db: &Path) -> Result<SPV, SPVError> {
-        let thread_pool = Arc::new(Mutex::new(ThreadPool::new()?));
+        let thread_pool = ThreadPool::new()?;
         let db = Arc::new(Mutex::new(DB::new(db)?));
         let birth = create_tables(db.clone())?;
         let peers = Arc::new(RwLock::new(PeerMap::new()));
         let p2p = Arc::new(P2P::new(user_agent, network, 0, peers.clone(), db.clone()));
-        let node = Arc::new(Node::new(p2p.clone(), network, db.clone(), birth, peers.clone(), thread_pool.clone()));
+        let node = Arc::new(Node::new(p2p.clone(), network, db.clone(), birth, peers.clone()));
         Ok(SPV{ node, p2p, thread_pool, db: db.clone() })
     }
 
@@ -68,12 +68,12 @@ impl SPV {
     /// The method will start with an empty in-memory database and sync up with the peers
     /// then serve the returned ChainWatchInterface
     pub fn new_in_memory(user_agent :String, network: Network) -> Result<SPV, SPVError> {
-        let thread_pool = Arc::new(Mutex::new(ThreadPool::new()?));
+        let thread_pool = ThreadPool::new()?;
         let db = Arc::new(Mutex::new(DB::mem()?));
         let birth = create_tables(db.clone())?;
         let peers = Arc::new(RwLock::new(PeerMap::new()));
         let p2p = Arc::new(P2P::new(user_agent, network, 0, peers.clone(), db.clone()));
-        let node = Arc::new(Node::new(p2p.clone(), network, db.clone(), birth, peers.clone(), thread_pool.clone()));
+        let node = Arc::new(Node::new(p2p.clone(), network, db.clone(), birth, peers.clone()));
         Ok(SPV{ node, p2p, thread_pool, db: db.clone()})
     }
 
@@ -82,23 +82,24 @@ impl SPV {
 	/// * peers - connect to these peers at startup (might be empty)
 	/// * min_connections - keep connections with at least this number of peers. Peers will be chosen random
 	/// from those discovered in earlier runs
-    pub fn start (&self, peers: Vec<SocketAddr>, min_connections: usize) {
+    pub fn start (&mut self, peers: Vec<SocketAddr>, min_connections: usize) {
         // read stored headers from db
         // there is no recovery if this fails
         self.node.load_headers().unwrap();
 
-        let mut thread_pool = self.thread_pool.lock().unwrap();
         let p2p = self.p2p.clone();
         let node = self.node.clone();
 
         // start the task that runs all network communication
-        thread_pool.spawn (Box::new(future::poll_fn (move |_| {
-            p2p.run(node.clone()).unwrap();
+        self.thread_pool.spawn (Box::new(future::poll_fn (move |ctx| {
+            p2p.run(node.clone(), ctx).unwrap();
             Ok(Async::Ready(()))
         }))).unwrap();
 
+        let connector = self.keep_connected(peers, min_connections);
+
         // the task that keeps us connected
-        thread_pool.run(self.keep_connected(peers, min_connections)).unwrap();
+        self.thread_pool.run(connector).unwrap();
     }
 
     fn keep_connected(&self, peers: Vec<SocketAddr>, min_connections: usize) -> Box<Future<Item=(), Error=Never> + Send> {

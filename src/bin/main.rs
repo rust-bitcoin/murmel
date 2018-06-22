@@ -48,11 +48,11 @@ pub fn main() {
         connections = numstring.parse().unwrap();
     }
     if let Some(path) = args::find_arg("db") {
-        let spv = SPV::new("/rust-spv:0.1.0/".to_string(), Network::Bitcoin, Path::new(path.as_str())).unwrap();
+        let mut spv = SPV::new("/rust-spv:0.1.0/".to_string(), Network::Bitcoin, Path::new(path.as_str())).unwrap();
         spv.start(peers, connections);
     }
     else {
-        let spv = SPV::new_in_memory("/rust-spv:0.1.0/".to_string(), Network::Bitcoin).unwrap();
+        let mut spv = SPV::new_in_memory("/rust-spv:0.1.0/".to_string(), Network::Bitcoin).unwrap();
         spv.start(peers, connections);
     }
 }

@@ -42,16 +42,14 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use std::sync::{RwLock, Mutex};
 use std::collections::HashMap;
-use futures::executor::ThreadPool;
-use futures::{Future, Async};
-use futures::future;
+use futures::Never;
 use futures_timer::Interval;
+use futures::task::Context;
 use std::time::Duration;
-use futures::executor::Executor;
 
 // peer is considered stale and banned if not
-// sending valuable data within below number of minutes.
-const STALE_PEER_MINUTES: u64 = 5;
+// sending valuable data within below number of seconds.
+const STALE_PEER_SECONDS: u64 = 300;
 
 /// The node replies with this process result to messages
 pub enum ProcessResult {
@@ -99,16 +97,13 @@ pub struct Node {
     connector: Arc<LightningConnector>,
     // unix time stamp of birth. Do not process blocks before this time point, but strictly after.
 	birth: u32,
-    // thread pool for tasks
-    thread_pool: Arc<Mutex<ThreadPool>>,
     // last talked to peer
     last_talked: Arc<Mutex<HashMap<PeerId, u64>>>
 }
 
 impl Node {
     /// Create a new local node
-    pub fn new(p2p: Arc<P2P>, network: Network, db: Arc<Mutex<DB>>, birth: u32, peers: Arc<RwLock<PeerMap>>,
-        thread_pool: Arc<Mutex<ThreadPool>>) -> Node {
+    pub fn new(p2p: Arc<P2P>, network: Network, db: Arc<Mutex<DB>>, birth: u32, peers: Arc<RwLock<PeerMap>>) -> Node {
         let connector = LightningConnector::new(Arc::new(Broadcaster{peers: peers.clone ()}));
         Node {
             p2p,
@@ -118,7 +113,6 @@ impl Node {
             db,
             connector: Arc::new(connector),
 	        birth,
-            thread_pool,
             last_talked: Arc::new(Mutex::new(HashMap::new()))
         }
     }
@@ -150,8 +144,9 @@ impl Node {
     }
 
 	/// called from dispatcher whenever a new peer is connected (after handshake is successful)
-    pub fn connected(&self, pid: PeerId) -> Result<ProcessResult, SPVError> {
+    pub fn connected(&self, pid: PeerId, ctx: &mut Context) -> Result<ProcessResult, SPVError> {
         use futures::StreamExt;
+        use futures::FutureExt;
 
         self.get_headers(pid)?;
 
@@ -159,47 +154,46 @@ impl Node {
         let p2p = self.p2p.clone();
 
         let stale_watcher = Box::new(
-            future::poll_fn (move |ctx| {
-                let lt = last_talked.clone();
-                let p2p2 = p2p.clone();
-                Interval::new(Duration::from_secs(STALE_PEER_MINUTES * 60))
-                    .for_each(move |_| {
-                        if let Some (last_seen) = lt.lock().unwrap().get(&pid) {
-                            if *last_seen < now () - STALE_PEER_MINUTES * 60 {
-                                info! ("stale peer banned peer={}", pid);
-                                p2p2.ban(pid).unwrap_or(());
-                            }
-                        }
-                        Ok(())
-                    }).poll(ctx).unwrap();
-                Ok(Async::Pending)
-            }));
+            Interval::new(Duration::from_secs(STALE_PEER_SECONDS))
+                .fold((),move |_, _| {
+                if let Some (last_seen) = last_talked.lock().unwrap().get(&pid) {
+                    if *last_seen < now () - STALE_PEER_SECONDS {
+                        info! ("stale peer banned peer={}", pid);
+                        p2p.ban(pid).unwrap_or(());
+                    }
+                }
+                Ok(())
+            }).or_else(|_| -> Result<(), Never> {Ok(())}));
 
 
-        self.thread_pool.lock().unwrap().spawn(stale_watcher)
-            .map_err (|_| SPVError::Generic("can not spawn tasks".to_owned()))?;
+        ctx.executor().spawn(stale_watcher).unwrap();
 
         Ok(ProcessResult::Ack)
     }
 
     /// called from dispatcher whenever a peer is disconnected
-    pub fn disconnected(&self, _pid: PeerId) -> Result<ProcessResult, SPVError> {
+    pub fn disconnected(&self, pid: PeerId) -> Result<ProcessResult, SPVError> {
+        self.last_talked.lock().unwrap().remove(&pid);
         Ok(ProcessResult::Ack)
     }
 
     /// Process incoming messages
     pub fn process(&self, msg: &NetworkMessage, peer: PeerId) -> Result<ProcessResult, SPVError> {
+        let mut valueable = false;
+
         let ret = match msg {
             &NetworkMessage::Ping(nonce) => self.ping(nonce, peer),
-            &NetworkMessage::Headers(ref v) => self.headers(v, peer),
-            &NetworkMessage::Block(ref b) => self.block(b, peer),
-            &NetworkMessage::Inv(ref v) => self.inv(v, peer),
-            &NetworkMessage::Addr(ref v) => self.addr(v, peer),
+            &NetworkMessage::Headers(ref v) => { valueable = true; self.headers(v, peer) },
+            &NetworkMessage::Block(ref b) => { valueable = true; self.block(b, peer)} ,
+            &NetworkMessage::Inv(ref v) => { valueable = true; self.inv(v, peer) } ,
+            &NetworkMessage::Addr(ref v) => { valueable = true; self.addr(v, peer) },
             _ => Ok(ProcessResult::Ban(1))
         };
         match ret {
            Ok(ProcessResult::Ack) => {
-               self.last_talked.lock().unwrap().insert(peer, now ());
+               if valueable {
+                   self.last_talked.lock().unwrap().insert(peer, now());
+               }
            },
             _ => {}
         }

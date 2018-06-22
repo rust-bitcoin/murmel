@@ -46,6 +46,7 @@ use std::sync::atomic::{AtomicUsize, Ordering,AtomicBool};
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::cell::Cell;
 use futures::{Future, Async, FutureExt};
+use futures::task::Context;
 use futures::future;
 use futures::task::Waker;
 use std::time::Duration;
@@ -272,7 +273,7 @@ impl P2P {
         }
     }
 
-    fn event_processor (&self, node: Arc<Node>, event: Event, pid: PeerId, iobuf: &mut [u8]) -> Result<(), SPVError> {
+    fn event_processor (&self, node: Arc<Node>, event: Event, pid: PeerId, iobuf: &mut [u8], ctx: &mut Context) -> Result<(), SPVError> {
         let readiness = UnixReady::from(event.readiness());
         // check for error first
         if readiness.is_hup() || readiness.is_error() {
@@ -390,7 +391,7 @@ impl P2P {
                 else {
                     if handshake {
                         info!("connected peer={}", pid);
-                        node.connected (pid)?;
+                        node.connected (pid, ctx)?;
                         if let Some(w) = self.waker.lock().unwrap().get(&pid) {
                             trace!("waking for handshake");
                             w.wake();
@@ -437,7 +438,7 @@ impl P2P {
     /// run the message dispatcher loop
     /// this method does not return unless there is an error obtaining network events
     /// run in its own thread, which will process all network events
-    pub fn run(&self, node: Arc<Node>) -> Result<(), io::Error>{
+    pub fn run(&self, node: Arc<Node>, ctx: &mut Context) -> Result<(), io::Error>{
         trace!("start mio event loop");
         loop {
             // events buffer
@@ -452,7 +453,7 @@ impl P2P {
             for event in events.iter() {
                 // construct the id of the peer the event concerns
                 let pid = PeerId { token: event.token() };
-                if let Err(error) = self.event_processor(node.clone(), event, pid, iobuf.as_mut_slice()) {
+                if let Err(error) = self.event_processor(node.clone(), event, pid, iobuf.as_mut_slice(), ctx) {
                     warn!("error {} peer={}", error.to_string(), pid);
                     debug!("error {:?} peer={}", error, pid);
                 }
