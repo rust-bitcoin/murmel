@@ -42,10 +42,12 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use std::sync::{RwLock, Mutex};
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use futures::Never;
 use futures_timer::Interval;
 use futures::task::Context;
 use std::time::Duration;
+use std::io;
 
 // peer is considered stale and banned if not
 // sending valuable data within below number of seconds.
@@ -174,12 +176,16 @@ impl Node {
         let stale_watcher = Box::new(
             Interval::new(Duration::from_secs(STALE_PEER_SECONDS))
                 .fold((),move |_, _| {
-                if let Some (last_seen) = last_talked.lock().unwrap().get(&pid) {
-                    if *last_seen < now () - STALE_PEER_SECONDS {
-                        info! ("stale peer banned peer={}", pid);
-                        p2p.ban(pid).unwrap_or(());
+                    if let Entry::Occupied(seen_entry) = last_talked.lock().unwrap().entry(pid) {
+                        if *seen_entry.get() < now() - STALE_PEER_SECONDS {
+                            info!("banned stale peer={}", pid);
+                            p2p.ban(pid).unwrap_or(());
+                        }
+                        seen_entry.remove();
                     }
-                }
+                    else {
+                        return Err(io::Error::from(io::ErrorKind::NotFound))
+                    }
                 Ok(())
             }).or_else(|_| -> Result<(), Never> {Ok(())}));
 
