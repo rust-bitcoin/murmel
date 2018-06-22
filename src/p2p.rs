@@ -86,7 +86,7 @@ pub struct P2P {
     // This node's identifier on the network (random)
     nonce: u64,
     // height of the blockchain tree trunk
-    height: u32,
+    height: AtomicUsize,
     // This node's human readable type identification
     user_agent: String,
     // The collection of connected peers
@@ -114,7 +114,7 @@ impl P2P {
             network: network,
             magic: magic(network),
             nonce: rng.next_u64(),
-            height,
+            height: AtomicUsize::new(height as usize),
             user_agent,
             peers,
             poll: Arc::new(Poll::new().unwrap()),
@@ -222,7 +222,9 @@ impl P2P {
         peers.insert(pid, peer);
 
         // send this node's version message to peer
-        peers.get(&pid).unwrap().lock().unwrap().send(&P2P::version(&self.user_agent, self.nonce, self.height, addr))?;
+        peers.get(&pid).unwrap().lock().unwrap().send(&P2P::version(&self.user_agent, self.nonce,
+                                                                    self.height.load(Ordering::Relaxed) as u32,
+                                                                    addr))?;
 
         Ok(pid)
     }
@@ -390,7 +392,7 @@ impl P2P {
                 }
                 else {
                     if handshake {
-                        info!("connected peer={}", pid);
+                        info!("handshake peer={}", pid);
                         node.connected (pid, ctx)?;
                         if let Some(w) = self.waker.lock().unwrap().get(&pid) {
                             trace!("waking for handshake");
@@ -420,12 +422,7 @@ impl P2P {
                                 }
                             }
                             ProcessResult::Height(new_height) => {
-                                if let Some(peer) = self.peers.read().unwrap().get(&pid) {
-                                    let mut locked_peer = peer.lock().unwrap();
-                                    let mut nv = locked_peer.version.clone().unwrap();
-                                    nv.start_height = new_height as i32;
-                                    locked_peer.version = Some(nv);
-                                }
+                                self.height.store(new_height as usize, Ordering::Relaxed);
                             }
                         }
                     }
@@ -583,7 +580,7 @@ impl Peer {
                             // acknowledge version message received
                             self.send(&NetworkMessage::Verack)?;
                             // all right, remember this peer
-                            info!("Connected {} height: {} peer={}", version.user_agent, version.start_height, self.pid);
+                            info!("client {} height: {} peer={}", version.user_agent, version.start_height, self.pid);
                             self.version = Some(version.clone());
                         }
                     }

@@ -143,8 +143,26 @@ impl Node {
         Ok(())
     }
 
+    // check if the newly connected peer is lagging behind, ban if behaind with more than 100 blocks
+    fn behind(&self, pid: PeerId) -> bool {
+        let height = self.blockchain.lock().unwrap().best_tip_height();
+        if height > 100 {
+            if let Some(peer) = self.peers.read().unwrap().get(&pid) {
+                let locked_peer = peer.lock().unwrap();
+                return (locked_peer.version.clone().unwrap().start_height as u32) < height - 100;
+            }
+            return true;
+        }
+        return false;
+    }
+
 	/// called from dispatcher whenever a new peer is connected (after handshake is successful)
     pub fn connected(&self, pid: PeerId, ctx: &mut Context) -> Result<ProcessResult, SPVError> {
+        if self.behind(pid) {
+            info!("banning lagging peer={}", pid);
+            return Ok(ProcessResult::Ban(100));
+        }
+
         use futures::StreamExt;
         use futures::FutureExt;
 
@@ -217,6 +235,7 @@ impl Node {
 			let height;
             // some received headers were not yet known
             let mut some_new = false;
+            let mut tip_moved = false;
 			{
 				// new scope to limit lock
 
@@ -225,7 +244,6 @@ impl Node {
 
 				let mut db = self.db.lock().unwrap();
 				let tx = db.transaction()?;
-                let mut tip_moved = false;
 
 				for header in headers {
 					let old_tip = blockchain.best_tip_hash();
@@ -286,9 +304,14 @@ impl Node {
             if some_new {
                 self.get_headers(peer)?;
             }
-			Ok(ProcessResult::Height(height))
+            if tip_moved {
+                Ok(ProcessResult::Height(height))
+            }
+            else {
+                Ok(ProcessResult::Ack)
+            }
 		} else {
-			Ok(ProcessResult::Ack)
+			Ok(ProcessResult::Ignored)
 		}
 	}
 
