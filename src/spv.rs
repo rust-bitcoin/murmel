@@ -32,7 +32,6 @@ use p2p::PeerMap;
 use futures::future;
 use futures::prelude::*;
 use futures::executor::ThreadPool;
-use futures::future::select_all;
 use dns::dns_seed;
 use rand::{thread_rng, Rng};
 
@@ -40,7 +39,7 @@ use rand::{thread_rng, Rng};
 pub struct SPV{
 	node: Arc<Node>,
 	p2p: Arc<P2P>,
-    thread_pool: Mutex<ThreadPool>,
+    thread_pool: Arc<Mutex<ThreadPool>>,
     db: Arc<Mutex<DB>>
 }
 
@@ -53,12 +52,12 @@ impl SPV {
     /// The method will read previously stored headers from the database and sync up with the peers
     /// then serve the returned ChainWatchInterface
     pub fn new(user_agent :String, network: Network, db: &Path) -> Result<SPV, SPVError> {
-        let thread_pool = Mutex::new(ThreadPool::new()?);
+        let thread_pool = Arc::new(Mutex::new(ThreadPool::new()?));
         let db = Arc::new(Mutex::new(DB::new(db)?));
         let birth = create_tables(db.clone())?;
         let peers = Arc::new(RwLock::new(PeerMap::new()));
         let p2p = Arc::new(P2P::new(user_agent, network, 0, peers.clone(), db.clone()));
-        let node = Arc::new(Node::new(p2p.clone(), network, db.clone(), birth, peers.clone()));
+        let node = Arc::new(Node::new(p2p.clone(), network, db.clone(), birth, peers.clone(), thread_pool.clone()));
         Ok(SPV{ node, p2p, thread_pool, db: db.clone() })
     }
 
@@ -69,12 +68,12 @@ impl SPV {
     /// The method will start with an empty in-memory database and sync up with the peers
     /// then serve the returned ChainWatchInterface
     pub fn new_in_memory(user_agent :String, network: Network) -> Result<SPV, SPVError> {
-        let thread_pool = Mutex::new(ThreadPool::new()?);
+        let thread_pool = Arc::new(Mutex::new(ThreadPool::new()?));
         let db = Arc::new(Mutex::new(DB::mem()?));
         let birth = create_tables(db.clone())?;
         let peers = Arc::new(RwLock::new(PeerMap::new()));
         let p2p = Arc::new(P2P::new(user_agent, network, 0, peers.clone(), db.clone()));
-        let node = Arc::new(Node::new(p2p.clone(), network, db.clone(), birth, peers.clone()));
+        let node = Arc::new(Node::new(p2p.clone(), network, db.clone(), birth, peers.clone(), thread_pool.clone()));
         Ok(SPV{ node, p2p, thread_pool, db: db.clone()})
     }
 
@@ -93,7 +92,7 @@ impl SPV {
         let node = self.node.clone();
 
         // start the task that runs all network communication
-        thread_pool.spawn (Box::new(future::poll_fn (move |ctx| {
+        thread_pool.spawn (Box::new(future::poll_fn (move |_| {
             p2p.run(node.clone()).unwrap();
             Ok(Async::Ready(()))
         }))).unwrap();
@@ -104,7 +103,6 @@ impl SPV {
 
     fn keep_connected(&self, peers: Vec<SocketAddr>, min_connections: usize) -> Box<Future<Item=(), Error=Never> + Send> {
 
-        let node = self.node.clone();
         let p2p = self.p2p.clone();
         let db = self.db.clone();
 
@@ -155,7 +153,7 @@ impl SPV {
                         }
                     }).next();
                     match finished {
-                        Some((i, e)) => self.connections.remove(i),
+                        Some((i, _)) => self.connections.remove(i),
                         None => return Ok(Async::Pending)
                     };
                 }

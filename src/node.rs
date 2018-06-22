@@ -41,7 +41,17 @@ use std::sync::Arc;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use std::sync::{RwLock, Mutex};
+use std::collections::HashMap;
+use futures::executor::ThreadPool;
+use futures::{Future, Async};
+use futures::future;
+use futures_timer::Interval;
+use std::time::Duration;
+use futures::executor::Executor;
 
+// peer is considered stale and banned if not
+// sending valuable data within below number of minutes.
+const STALE_PEER_MINUTES: u64 = 5;
 
 /// The node replies with this process result to messages
 pub enum ProcessResult {
@@ -49,8 +59,6 @@ pub enum ProcessResult {
     Ack,
     /// Acknowledgment, P2P should indicate the new height in future version messages
     Height(u32),
-    /// The node really does not like the message (or ban score limit reached), disconnect this rouge peer
-    Disconnect,
     /// message ignored
     Ignored,
     /// increase ban score
@@ -90,12 +98,17 @@ pub struct Node {
     // connector serving Layer 2 network
     connector: Arc<LightningConnector>,
     // unix time stamp of birth. Do not process blocks before this time point, but strictly after.
-	birth: u32
+	birth: u32,
+    // thread pool for tasks
+    thread_pool: Arc<Mutex<ThreadPool>>,
+    // last talked to peer
+    last_talked: Arc<Mutex<HashMap<PeerId, u64>>>
 }
 
 impl Node {
     /// Create a new local node
-    pub fn new(p2p: Arc<P2P>, network: Network, db: Arc<Mutex<DB>>, birth: u32, peers: Arc<RwLock<PeerMap>>) -> Node {
+    pub fn new(p2p: Arc<P2P>, network: Network, db: Arc<Mutex<DB>>, birth: u32, peers: Arc<RwLock<PeerMap>>,
+        thread_pool: Arc<Mutex<ThreadPool>>) -> Node {
         let connector = LightningConnector::new(Arc::new(Broadcaster{peers: peers.clone ()}));
         Node {
             p2p,
@@ -104,7 +117,9 @@ impl Node {
             blockchain: Mutex::new(Blockchain::new(network)),
             db,
             connector: Arc::new(connector),
-	        birth
+	        birth,
+            thread_pool,
+            last_talked: Arc::new(Mutex::new(HashMap::new()))
         }
     }
 
@@ -136,7 +151,34 @@ impl Node {
 
 	/// called from dispatcher whenever a new peer is connected (after handshake is successful)
     pub fn connected(&self, pid: PeerId) -> Result<ProcessResult, SPVError> {
+        use futures::StreamExt;
+
         self.get_headers(pid)?;
+
+        let last_talked = self.last_talked.clone();
+        let p2p = self.p2p.clone();
+
+        let stale_watcher = Box::new(
+            future::poll_fn (move |ctx| {
+                let lt = last_talked.clone();
+                let p2p2 = p2p.clone();
+                Interval::new(Duration::from_secs(STALE_PEER_MINUTES * 60))
+                    .for_each(move |_| {
+                        if let Some (last_seen) = lt.lock().unwrap().get(&pid) {
+                            if *last_seen < now () - STALE_PEER_MINUTES * 60 {
+                                info! ("stale peer banned peer={}", pid);
+                                p2p2.ban(pid).unwrap_or(());
+                            }
+                        }
+                        Ok(())
+                    }).poll(ctx).unwrap();
+                Ok(Async::Pending)
+            }));
+
+
+        self.thread_pool.lock().unwrap().spawn(stale_watcher)
+            .map_err (|_| SPVError::Generic("can not spawn tasks".to_owned()))?;
+
         Ok(ProcessResult::Ack)
     }
 
@@ -147,18 +189,26 @@ impl Node {
 
     /// Process incoming messages
     pub fn process(&self, msg: &NetworkMessage, peer: PeerId) -> Result<ProcessResult, SPVError> {
-        match msg {
+        let ret = match msg {
             &NetworkMessage::Ping(nonce) => self.ping(nonce, peer),
             &NetworkMessage::Headers(ref v) => self.headers(v, peer),
             &NetworkMessage::Block(ref b) => self.block(b, peer),
             &NetworkMessage::Inv(ref v) => self.inv(v, peer),
             &NetworkMessage::Addr(ref v) => self.addr(v, peer),
             _ => Ok(ProcessResult::Ban(1))
+        };
+        match ret {
+           Ok(ProcessResult::Ack) => {
+               self.last_talked.lock().unwrap().insert(peer, now ());
+           },
+            _ => {}
         }
+        ret
     }
 
-    // send a ping to peer
+    // received ping
 	fn ping (&self, nonce: u64, peer :PeerId) -> Result<ProcessResult, SPVError> {
+        // send pong
 		self.send(peer, &NetworkMessage::Pong(nonce))
 	}
 
@@ -351,6 +401,7 @@ impl Node {
     }
 
     /// send the same message to all connected peers
+    #[allow(dead_code)]
     fn broadcast(&self, msg: &NetworkMessage) -> Result<ProcessResult, SPVError> {
         for (_, sender) in self.peers.read().unwrap().iter() {
             sender.lock().unwrap().send(msg)?;
@@ -358,6 +409,7 @@ impl Node {
         Ok(ProcessResult::Ack)
     }
     /// send a transaction to all connected peers
+    #[allow(dead_code)]
     pub fn broadcast_transaction(&self, tx: &Transaction) -> Result<ProcessResult, SPVError>  {
         self.broadcast(&NetworkMessage::Tx(tx.clone()))
     }
@@ -368,8 +420,13 @@ impl Node {
     }
 
 	/// retrieve the interface a higher application layer e.g. lighning may use to send transactions to the network
+    #[allow(dead_code)]
     pub fn get_broadcaster (&self) -> Arc<Broadcaster> {
         self.connector.get_broadcaster()
     }
 }
 
+#[inline]
+fn now () -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+}

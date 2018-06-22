@@ -41,8 +41,10 @@ extern crate futures_timer;
 mod node;
 mod database;
 mod error;
+#[allow(dead_code)]
 mod connector;
 pub mod spv;
+#[allow(dead_code)]
 mod blockfilter;
 mod p2p;
 mod dns;

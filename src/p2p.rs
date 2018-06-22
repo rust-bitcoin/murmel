@@ -47,13 +47,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use std::cell::Cell;
 use futures::{Future, Async, FutureExt};
 use futures::future;
-use futures::task::{Context, Waker};
+use futures::task::Waker;
 use std::time::Duration;
-use futures_timer::Delay;
 
 const IO_BUFFER_SIZE:usize = 1024*1024;
 const EVENT_BUFFER_SIZE:usize = 1024;
-const CONNECT_TIMEOUT_SECONDS: u64 = 5;
+const CONNECT_TIMEOUT_SECONDS: u64 = 10;
 const BAN :u32 = 100;
 
 /// A peer's Id
@@ -133,22 +132,27 @@ impl P2P {
         let peers2 = self.peers.clone();
         let address = addr.clone();
         let candidates = self.candidates.clone();
+        let db = self.db.clone();
 
         Box::new(connect
             .map_err (move |e| {
                 // timeout or error before handshake
                 if let Entry::Occupied(pid_entry) = candidates.lock().unwrap().entry(address) {
                     // remove peers and candidates entry
-                    trace!("timeout on handshake peer={}", pid_entry.get());
+                    info!("timeout on handshake peer={}", pid_entry.get());
                     peers2.write().unwrap().remove(pid_entry.get());
                     pid_entry.remove();
+                    let mut db = db.lock().unwrap();
+                    let transaction = db.transaction().unwrap();
+                    transaction.remove_peer (&address).unwrap_or(0);
+                    transaction.commit().unwrap();
                 }
                 e
             })
             .and_then (move|pid| {
-            Box::new(future::poll_fn (move | ctx | {
+            Box::new(future::poll_fn (move | _ | {
                 // retrieve peer from peer map
-                if let Some(peer) = peers.read().unwrap().get(&pid) {
+                if let Some(_) = peers.read().unwrap().get(&pid) {
                     Ok(Async::Pending)
                 } else {
                     trace!("peer {} finished", address);
@@ -168,7 +172,6 @@ impl P2P {
     // connect a peer
     fn connect_peer(&self, addr: &SocketAddr) -> Box<Future<Item=PeerId, Error=SPVError> + Send> {
         let peers = self.peers.clone();
-        let socket_address = addr.clone();
         let waker = self.waker.clone();
 
         // initiate connection
@@ -241,6 +244,20 @@ impl P2P {
             start_height: height as i32,
             relay: false,
         })
+    }
+
+    /// ban a peer
+    pub fn ban (&self, pid: PeerId) -> Result<(), SPVError> {
+        info!("banning peer={}", pid);
+        if let Some(peer) = self.peers.read().unwrap().get(&pid) {
+            let locked_peer = peer.lock().unwrap();
+            let mut db = self.db.lock().unwrap();
+            let transaction = db.transaction()?;
+            transaction.ban (&(locked_peer.stream.peer_addr()?))?;
+            transaction.commit()?;
+        }
+        self.disconnect(pid);
+        Ok(())
     }
 
     fn disconnect (&self, pid: PeerId) {
@@ -386,31 +403,19 @@ impl P2P {
                         match node.process (&msg.payload, pid)? {
                             ProcessResult::Ack => { trace!("ack {} peer={}", msg.command(), pid); },
                             ProcessResult::Ignored => { trace!("ignored {} peer={}", msg.command(), pid); }
-                            ProcessResult::Disconnect => {
-                                info!("disconnected peer={}", pid);
-                                node.disconnected (pid)?;
-                                self.disconnect(pid);
-                            },
                             ProcessResult::Ban(increment) => {
-                                let mut disconnect = None;
+                                let mut disconnect = false;
                                 if let Some(peer) = self.peers.read().unwrap().get(&pid) {
                                     let mut locked_peer = peer.lock().unwrap();
                                     locked_peer.ban += increment;
                                     trace!("ban score {} for peer={}", locked_peer.ban, pid);
                                     if locked_peer.ban >= BAN {
-                                       disconnect = Some(locked_peer.stream.peer_addr()?);
+                                       disconnect = true;
                                     }
                                 }
-                                if disconnect.is_some() {
-                                    // TODO DB update
-                                    info!("banning peer={}", pid);
+                                if disconnect {
                                     node.disconnected(pid)?;
-                                    self.disconnect(pid);
-
-                                    let mut db = self.db.lock().unwrap();
-                                    let transaction = db.transaction()?;
-                                    transaction.ban (&disconnect.unwrap())?;
-                                    transaction.commit()?;
+                                    self.ban (pid)?;
                                 }
                             }
                             ProcessResult::Height(new_height) => {

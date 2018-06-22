@@ -191,14 +191,6 @@ impl<'a> DBTX<'a> {
         Ok(())
     }
 
-    /// delete peers not seen in this month
-    pub fn discard_old_peers (&self)-> Result<(), SPVError> {
-        let oldest = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as u32
-            - 60*60*24*30;
-        self.tx.execute("delete peers where last_seen < ?", &[&oldest])?;
-        Ok(())
-    }
-
     pub fn ban (&self, addr: &SocketAddr) -> Result<i32, SPVError> {
         let address = Address::new (addr, 0);
         let mut s = String::new();
@@ -207,6 +199,15 @@ impl<'a> DBTX<'a> {
         }
         let banned_until = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as u32 + 2*24*60;
         Ok(self.tx.execute("update peers set banned_until = ? where address = ?", &[&banned_until, &s])?)
+    }
+
+    pub fn remove_peer (&self, addr: &SocketAddr) -> Result<i32, SPVError> {
+        let address = Address::new (addr, 0);
+        let mut s = String::new();
+        for d in address.address.iter() {
+            s.push_str(format!("{:4x}",d).as_str());
+        }
+        Ok(self.tx.execute("delete from peers where address = ?", &[&s])?)
     }
 
     /// get a random stored peer
@@ -321,6 +322,7 @@ impl<'a> DBTX<'a> {
     }
 
     /// Retrieve a stored transaction. This method will return an error if the transaction was not stored
+    #[allow(dead_code)]
     pub fn get_transaction(&self, hash: &Sha256dHash) -> Result<Transaction, SPVError> {
         let id = self.get_id(hash)?;
         decode(self.tx.query_row("select data from tx where id = ?",
@@ -344,6 +346,7 @@ impl<'a> DBTX<'a> {
     }
 
     /// Retrieve a block
+    #[allow(dead_code)]
     pub fn get_block(&self, hash: &Sha256dHash) -> Result<Block, SPVError> {
         let bid = self.get_id(hash)?;
         let header = self.get_header(hash)?;
@@ -354,11 +357,6 @@ impl<'a> DBTX<'a> {
             txdata.push(decode(data?)?);
         }
         Ok(Block { header, txdata })
-    }
-
-    /// Return an reverse height order iterator for the headers [tip, genesis)
-    pub fn get_headers_iterator(&self, genesis: &Sha256dHash, tip: &Sha256dHash) -> HeadersIterator {
-        HeadersIterator { genesis: *genesis, current: *tip, tx: &self }
     }
 
     /// Return headers in ascending hight order. (genesis, tip]
@@ -374,31 +372,6 @@ impl<'a> DBTX<'a> {
         Ok(result)
     }
 }
-
-/// A helper to iterate over header
-pub struct HeadersIterator<'a> {
-    genesis: Sha256dHash,
-    current: Sha256dHash,
-    tx: &'a DBTX<'a>,
-}
-
-impl<'a> Iterator for HeadersIterator<'a> {
-    type Item = BlockHeader;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.current == self.genesis {
-            None
-        } else {
-            if let Result::Ok(header) = self.tx.get_header(&self.current) {
-                self.current = header.prev_blockhash;
-                Some(header)
-            } else {
-                None
-            }
-        }
-    }
-}
-
 
 fn decode<T: ? Sized>(data: Vec<u8>) -> Result<T, SPVError>
     where T: ConsensusDecodable<RawDecoder<Cursor<Vec<u8>>>> {
