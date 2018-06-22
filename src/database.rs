@@ -219,8 +219,8 @@ impl<'a> DBTX<'a> {
         }
 
         let mut rng = rand::thread_rng();
-        loop {
-            let rowid = (rng.next_u64() as i64) % n_peers;
+        for _ in 0 .. 100 { // give up after 100 attempts
+            let rowid = (rng.next_u64() as i64) % n_peers + 1;
             let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as u32;
             let address:Result<(String, u16, i64), Error> = self.tx.query_row(
                 "select address, port, services from peers where rowid = ? and banned_until < ? ", &[&(rowid as i64), &now], |row| {
@@ -240,6 +240,7 @@ impl<'a> DBTX<'a> {
                 })
             }
         }
+        Err(SPVError::Generic("no useful peers in the database".to_owned()))
     }
 
     /// get the integer proxy for a hash. All tables use integers mapped here for better performance.

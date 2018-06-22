@@ -101,7 +101,9 @@ pub struct P2P {
     // database
     db: Arc<Mutex<DB>>,
     // waker
-    waker: Arc<Mutex<HashMap<PeerId, Waker>>>
+    waker: Arc<Mutex<HashMap<PeerId, Waker>>>,
+    // candidates without handshake
+    candidates: Arc<Mutex<HashMap<SocketAddr, PeerId>>>
 }
 
 impl P2P {
@@ -118,7 +120,8 @@ impl P2P {
             poll: Arc::new(Poll::new().unwrap()),
             next_peer_id: AtomicUsize::new(0),
             db,
-            waker: Arc::new(Mutex::new(HashMap::new()))
+            waker: Arc::new(Mutex::new(HashMap::new())),
+            candidates: Arc::new(Mutex::new(HashMap::new()))
         }
     }
 
@@ -127,14 +130,28 @@ impl P2P {
         let connect = self.connect_peer_with_timeout(addr, CONNECT_TIMEOUT_SECONDS);
 
         let peers = self.peers.clone();
+        let peers2 = self.peers.clone();
         let address = addr.clone();
+        let candidates = self.candidates.clone();
 
-        Box::new(connect.and_then (move|pid| {
+        Box::new(connect
+            .map_err (move |e| {
+                // timeout or error before handshake
+                if let Entry::Occupied(pid_entry) = candidates.lock().unwrap().entry(address) {
+                    // remove peers and candidates entry
+                    trace!("timeout on handshake peer={}", pid_entry.get());
+                    peers2.write().unwrap().remove(pid_entry.get());
+                    pid_entry.remove();
+                }
+                e
+            })
+            .and_then (move|pid| {
             Box::new(future::poll_fn (move | ctx | {
                 // retrieve peer from peer map
                 if let Some(peer) = peers.read().unwrap().get(&pid) {
                     Ok(Async::Pending)
                 } else {
+                    trace!("peer {} finished", address);
                     Ok(Async::Ready(address))
                 }
             }
@@ -164,6 +181,7 @@ impl P2P {
                         if let Some(peer) = peers.read().unwrap().get(&pid) {
                             // return pid if peer is connected (handshake perfect)
                             if peer.lock().unwrap().connected.get() {
+                                trace!("woke up to handshake");
                                 Ok(Async::Ready(pid))
                             } else {
                                 waker.lock().unwrap().insert(pid, ctx.waker().clone());
@@ -185,6 +203,8 @@ impl P2P {
         // so log messages are easier to follow
         let token = Token(self.next_peer_id.fetch_add(1, Ordering::Relaxed));
         let pid = PeerId{token};
+
+        self.candidates.lock().unwrap().insert(addr.clone(), pid);
 
         info!("trying to connect to {} peer={}", addr, pid);
 
@@ -224,8 +244,10 @@ impl P2P {
     }
 
     fn disconnect (&self, pid: PeerId) {
-        if let Some(ref waker) = self.waker.lock().unwrap().get(&pid) {
-            waker.wake();
+        if let Entry::Occupied(waker_entry) = self.waker.lock().unwrap().entry(pid) {
+            trace!("waking for disconnect");
+            waker_entry.get().wake ();
+            waker_entry.remove();
         }
         if let Entry::Occupied(peer_entry) = self.peers.write().unwrap().entry(pid) {
             peer_entry.get().lock().unwrap().stream.shutdown(Shutdown::Both).unwrap_or(());
@@ -353,6 +375,7 @@ impl P2P {
                         info!("connected peer={}", pid);
                         node.connected (pid)?;
                         if let Some(w) = self.waker.lock().unwrap().get(&pid) {
+                            trace!("waking for handshake");
                             w.wake();
                         }
                     }

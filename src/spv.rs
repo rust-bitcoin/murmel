@@ -128,68 +128,72 @@ impl SPV {
             type Error = Never;
 
             fn poll(&mut self, cx: &mut task::Context) -> Poll<Self::Item, Self::Error> {
-                let ref mut connections = self.connections;
                 // return from this loop with 'pending' if enough peers are connected
                 loop {
                     // add further peers from db if needed
-                    {
-                        // db lock context
-                        let mut db = self.db.lock().unwrap();
+                    self.peers_from_db ();
+                    self.dns_lookup();
 
-                        while connections.len()  < self.min_connections {
-                            if let Ok(tx) = db.transaction() {
-                                // found a peer
-                                if let Ok(peer) = tx.get_a_peer() {
-                                    // have an address for it
-                                    // Note: we do not store Tor adresses, so this should always be true
-                                    if let Ok(ref sock) = peer.socket_addr() {
-                                        connections.push(self.p2p.add_peer(sock));
-                                    }
-                                } else {
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    // DNS lookup
-                    while connections.len()  < self.min_connections {
-                        if self.dns.len() == 0 {
-                            self.dns = dns_seed(self.p2p.network);
-                        }
-                        if self.dns.len() >0 {
-                            let mut rng = thread_rng();
-                            connections.push(self.p2p.add_peer(&self.dns[(rng.next_u64() as usize) % self.dns.len()]));
-                        }
-                    }
-                    if connections.len() == 0 {
+                    if self.connections.len() == 0 {
                         // run out of peers. this is fatal
                         error!("no more peers to connect");
                         return Ok(Async::Ready(()));
                     }
-                    let mut removed_some = false;
-                    loop {
-                        // find a finished peer
-                        let finished = connections.iter_mut().enumerate().filter_map(|(i, f)| {
-                            // if any of them finished
-                            // note that poll is reusing context of this poll, so wakeups come here
-                            match f.poll(cx) {
-                                Ok(Async::Pending) => None,
-                                Ok(Async::Ready(e)) => Some((i, Ok(e))),
-                                Err(e) => Some((i, Err(e))),
-                            }
-                        }).next();
-                        match finished {
-                            Some((i, e)) => {
-                                connections.remove(i);
-                                removed_some = true;
+                    // find a finished peer
+                    let finished = self.connections.iter_mut().enumerate().filter_map(|(i, f)| {
+                        // if any of them finished
+                        // note that poll is reusing context of this poll, so wakeups come here
+                        match f.poll(cx) {
+                            Ok(Async::Pending) => None,
+                            Ok(Async::Ready(e)) => {
+                                trace!("woke up to lost peer");
+                                Some((i, Ok(e)))},
+                            Err(e) => {
+                                trace!("woke up to peer error");
+                                Some((i, Err(e)))
                             },
-                            None => if removed_some {
+                        }
+                    }).next();
+                    match finished {
+                        Some((i, e)) => self.connections.remove(i),
+                        None => return Ok(Async::Pending)
+                    };
+                }
+            }
+        }
+
+        impl KeepConnected {
+            fn peers_from_db (&mut self) {
+                let mut db = self.db.lock().unwrap();
+
+                while self.connections.len()  < self.min_connections {
+                    if let Ok(tx) = db.transaction() {
+                        // found a peer
+                        if let Ok(peer) = tx.get_a_peer() {
+                            // have an address for it
+                            // Note: we do not store Tor adresses, so this should always be true
+                            if let Ok(ref sock) = peer.socket_addr() {
+                                self.connections.push(self.p2p.add_peer(sock));
+                            } else {
                                 break;
                             }
-                            else {
-                                return Ok(Async::Pending);
-                            }
+                        } else {
+                            break;
                         }
+                    } else {
+                        break;
+                    }
+                }
+            }
+
+            fn dns_lookup (&mut self) {
+                while self.connections.len()  < self.min_connections {
+                    if self.dns.len() == 0 {
+                        self.dns = dns_seed(self.p2p.network);
+                    }
+                    if self.dns.len() >0 {
+                        let mut rng = thread_rng();
+                        self.connections.push(self.p2p.add_peer(&self.dns[(rng.next_u64() as usize) % self.dns.len()]));
                     }
                 }
             }
@@ -202,7 +206,10 @@ impl SPV {
     pub fn get_chain_watch_interface (&self) -> Arc<ChainWatchInterface> {
         return self.node.get_chain_watch_interface();
     }
+
 }
+
+
 
 /// create tables (if not already there) in the database
 fn create_tables(db: Arc<Mutex<DB>>) -> Result<u32, SPVError> {
