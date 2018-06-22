@@ -19,7 +19,7 @@ extern crate log;
 extern crate rand;
 extern crate simple_logger;
 
-mod args;
+use std::env::args;
 
 use bitcoin::network::constants::Network;
 use bitcoin_spv::spv::SPV;
@@ -29,7 +29,21 @@ use std::path::Path;
 
 /// simple test drive that connects to a local bitcoind
 pub fn main() {
-    if let Some (log) = args::find_arg("log") {
+    if find_opt("help") {
+        println!("{} [--help] [--log trace|debug|info|warn|error] [--connections n] [--peer ip_address] [--db database_file] [--network main|test]", args().next().unwrap());
+        println!("--log level: level is one of trace|debug|info|warn|error");
+        println!("--connections n: maintain at least n connections");
+        println!("--peer ip_address: connect to the given peer at start. You may use more than one --peer option.");
+        println!("--db file: store data in the given sqlite datbase file. Created if does not exist.");
+        println!("--network net: net is one of main|test for corresponding Bitcoin networks");
+        println!("defaults:");
+        println!("--log info");
+        println!("--connections 1");
+        println!("--network main");
+        println!("in memory database");
+        return;
+    }
+    if let Some (log) = find_arg("log") {
         match log.as_str() {
             "error" => simple_logger::init_with_level(Level::Error).unwrap(),
             "warn" => simple_logger::init_with_level(Level::Warn).unwrap(),
@@ -42,17 +56,27 @@ pub fn main() {
     else {
         simple_logger::init_with_level(Level::Info).unwrap();
     }
+
+    let mut network = Network::Bitcoin;
+    if let Some(net) = find_arg("network") {
+        match net.as_str() {
+            "main" => network = Network::Bitcoin,
+            "test" => network = Network::Testnet,
+            _ => network = Network::Bitcoin
+        }
+    }
+
     let peers = get_peers();
     let mut connections = 1;
-    if let Some(numstring) = args::find_arg("connections") {
+    if let Some(numstring) = find_arg("connections") {
         connections = numstring.parse().unwrap();
     }
-    if let Some(path) = args::find_arg("db") {
-        let mut spv = SPV::new("/rust-spv:0.1.0/".to_string(), Network::Bitcoin, Path::new(path.as_str())).unwrap();
+    if let Some(path) = find_arg("db") {
+        let mut spv = SPV::new("/rust-spv:0.1.0/".to_string(), network, Path::new(path.as_str())).unwrap();
         spv.start(peers, connections);
     }
     else {
-        let mut spv = SPV::new_in_memory("/rust-spv:0.1.0/".to_string(), Network::Bitcoin).unwrap();
+        let mut spv = SPV::new_in_memory("/rust-spv:0.1.0/".to_string(), network).unwrap();
         spv.start(peers, connections);
     }
 }
@@ -60,5 +84,25 @@ pub fn main() {
 use std::str::FromStr;
 
 fn get_peers() -> Vec<SocketAddr> {
-    args::find_args("peer").iter().map(|s| SocketAddr::from_str(s).unwrap()).collect()
+    find_args("peer").iter().map(|s| SocketAddr::from_str(s).unwrap()).collect()
+}
+
+// Returns key-value zipped iterator.
+fn zipped_args() -> impl Iterator<Item = (String, String)> {
+    let key_args = args().filter(|arg| arg.starts_with("--")).map(|mut arg| arg.split_off(2));
+    let val_args = args().skip(1).filter(|arg| !arg.starts_with("--"));
+    key_args.zip(val_args)
+}
+
+fn find_opt(key: &str) -> bool {
+    let mut key_args = args().filter(|arg| arg.starts_with("--")).map(|mut arg| arg.split_off(2));
+    key_args.find(|ref k| k.as_str() == key).is_some()
+}
+
+fn find_arg(key: &str) -> Option<String> {
+    zipped_args().find(|&(ref k, _)| k.as_str() == key).map(|(_, v)| v)
+}
+
+fn find_args(key: &str) -> Vec<String> {
+    zipped_args().filter(|&(ref k, _)| k.as_str() == key).map(|(_, v)| v).collect()
 }
