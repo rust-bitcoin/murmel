@@ -30,6 +30,7 @@ use bitcoin::network::message::NetworkMessage;
 use bitcoin::network::message_blockdata::*;
 use bitcoin::network::serialize::BitcoinHash;
 use bitcoin::util::hash::Sha256dHash;
+use bitcoin::util;
 use bitcoin_chain::blockchain::Blockchain;
 use database::DB;
 use error::SPVError;
@@ -185,26 +186,33 @@ impl Node {
 				for header in headers {
 					let old_tip = blockchain.best_tip_hash();
 					// add to in-memory blockchain - this also checks proof of work
-					if blockchain.add_header(header.header).is_ok() {
-						// this is a new header, not previously stored
-						let new_tip = blockchain.best_tip_hash();
-                        tip_moved = tip_moved || new_tip != old_tip;
-						let header_hash = header.header.bitcoin_hash();
-                        // ask for blocks after birth
-						if header.header.time > self.birth && new_tip == header_hash {
-							ask_for_blocks.push(new_tip);
-						}
+                    match blockchain.add_header(header.header) {
+                        Ok(_) => {
+                            // this is a new header, not previously stored
+                            let new_tip = blockchain.best_tip_hash();
+                            tip_moved = tip_moved || new_tip != old_tip;
+                            let header_hash = header.header.bitcoin_hash();
+                            // ask for blocks after birth
+                            if header.header.time > self.birth && new_tip == header_hash {
+                                ask_for_blocks.push(new_tip);
+                            }
 
-						tx.insert_header(&header.header)?;
-                        some_new = true;
+                            tx.insert_header(&header.header)?;
+                            some_new = true;
 
-						if header_hash == new_tip && header.header.prev_blockhash != old_tip {
-							// this is a re-org. Compute headers to unwind
-							for orphan_block in blockchain.rev_stale_iter(old_tip) {
-								disconnected_headers.push(orphan_block.header);
-							}
-						}
-					}
+                            if header_hash == new_tip && header.header.prev_blockhash != old_tip {
+                                // this is a re-org. Compute headers to unwind
+                                for orphan_block in blockchain.rev_stale_iter(old_tip) {
+                                    disconnected_headers.push(orphan_block.header);
+                                }
+                            }
+                        }
+                        Err(util::Error::SpvBadProofOfWork) => {
+                            info!("Incorrect POW, banning peer={}", peer);
+                            return Ok(ProcessResult::Ban(100))
+                        },
+                        Err(_) => return Ok(ProcessResult::Ignored)
+                    }
 				}
 				let new_tip = blockchain.best_tip_hash();
 				height = blockchain.get_block(new_tip).unwrap().height;
@@ -219,7 +227,7 @@ impl Node {
                     tx.commit()?;
                     debug!("received {} known or orphan headers from peer={}", headers.len(), peer);
                     ask_for_blocks.clear();
-                    return Ok(ProcessResult::Ban(10))
+                    return Ok(ProcessResult::Ban(5))
                 }
 			}
 
