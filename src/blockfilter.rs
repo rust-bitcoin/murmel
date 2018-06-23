@@ -61,10 +61,8 @@ impl <'a> BlockFilterWriter<'a> {
     fn add_output_scripts (&mut self) {
         for transaction in &self.block.txdata {
             for output in &transaction.output {
-                // TODO: replace with script.is_op_return() as soon as https://github.com/rust-bitcoin/rust-bitcoin/pull/101 is merged
-                let data = output.script_pubkey.data();
-                if !BlockFilterWriter::is_op_return(&data) {
-                    self.writer.add_element(data.as_slice());
+                if !output.script_pubkey.is_op_return() {
+                    self.writer.add_element(output.script_pubkey.data().as_slice());
                 }
             }
         }
@@ -76,11 +74,7 @@ impl <'a> BlockFilterWriter<'a> {
             if !transaction.is_coin_base() {
                 for input in &transaction.input {
                     let tx = tx_accessor.get_tx(&input.prev_hash)?;
-                    let script = tx.output[input.prev_index as usize].script_pubkey.data();
-                    // TODO: replace with script.is_op_return() as soon as https://github.com/rust-bitcoin/rust-bitcoin/pull/101 is merged
-                    if !BlockFilterWriter::is_op_return(&script) {
-                        self.writer.add_element(script.as_slice());
-                    }
+                    self.writer.add_element(tx.output[input.prev_index as usize].script_pubkey.data().as_slice());
                 }
             }
         }
