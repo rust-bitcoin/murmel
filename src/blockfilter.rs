@@ -24,6 +24,7 @@
 use bitcoin;
 use bitcoin::blockdata::block::Block;
 use bitcoin::blockdata::transaction::Transaction;
+use bitcoin::blockdata::opcodes::All::OP_RETURN;
 use bitcoin::network::encodable::{ConsensusDecodable, ConsensusEncodable};
 use bitcoin::network::encodable::VarInt;
 use bitcoin::network::serialize::{RawDecoder, RawEncoder};
@@ -52,65 +53,44 @@ impl <'a> BlockFilterWriter<'a> {
         BlockFilterWriter { block, writer }
     }
 
-    /// Add consumed inputs of the block
-    pub fn add_inputs (&mut self) -> Result<(), io::Error> {
-        for transaction in &self.block.txdata {
-            // if not coin base
-            if !transaction.is_coin_base() {
-                for input in &transaction.input {
-                    let mut outpoint =  encode (&input.prev_hash)?;
-                    let serialized_previndex = encode(&input.prev_index)?;
-                    outpoint.extend(serialized_previndex);
-
-                    self.writer.add_element(outpoint.as_slice());
-                }
-            }
-        }
-        Ok(())
+    fn is_op_return (script: &Vec<u8>) -> bool {
+        (script.len() > 0) && (script[0] == OP_RETURN as u8)
     }
 
     /// Add output scripts of the block - excluding OP_RETURN scripts
-    pub fn add_output_scripts (&mut self) -> Result<(), io::Error> {
+    fn add_output_scripts (&mut self) {
         for transaction in &self.block.txdata {
             for output in &transaction.output {
+                // TODO: replace with script.is_op_return() as soon as https://github.com/rust-bitcoin/rust-bitcoin/pull/101 is merged
                 let data = output.script_pubkey.data();
-                //if data.len() > 0 && data[0] != bitcoin::blockdata::opcodes::All::OP_RETURN as u8 {
+                if !BlockFilterWriter::is_op_return(&data) {
                     self.writer.add_element(data.as_slice());
-                //}
-            }
-        }
-        Ok(())
-    }
-
-    /// Add consumed output scripts of a block to filter
-    pub fn add_consumed_scripts (&mut self, tx_accessor: impl TxAccessor) -> Result<(), io::Error> {
-        for transaction in &self.block.txdata {
-            if !transaction.is_coin_base() {
-                for input in &transaction.input {
-                    let tx = tx_accessor.get(&input.prev_hash)?;
-                    self.add_element(tx.output[input.prev_index as usize].script_pubkey.data().as_slice())?;
                 }
             }
         }
-        Ok(())
     }
 
-    /// add an arbitary element
-    pub fn add_element (&mut self, element: &[u8]) -> Result<(), io::Error> {
-        self.writer.add_element(element);
+    /// Add consumed output scripts of a block to filter
+    fn add_consumed_scripts (&mut self, tx_accessor: impl TxAccessor) -> Result<(), io::Error> {
+        for transaction in &self.block.txdata {
+            if !transaction.is_coin_base() {
+                for input in &transaction.input {
+                    let tx = tx_accessor.get_tx(&input.prev_hash)?;
+                    let script = tx.output[input.prev_index as usize].script_pubkey.data();
+                    // TODO: replace with script.is_op_return() as soon as https://github.com/rust-bitcoin/rust-bitcoin/pull/101 is merged
+                    if !BlockFilterWriter::is_op_return(&script) {
+                        self.writer.add_element(script.as_slice());
+                    }
+                }
+            }
+        }
         Ok(())
     }
 
     /// compile a filter useful for wallets
-    pub fn add_wallet_filter (&mut self, tx_accessor: impl TxAccessor) -> Result<(), io::Error> {
-        self.add_inputs()?;
+    pub fn wallet_filter (&mut self, tx_accessor: impl TxAccessor) -> Result<(), io::Error> {
+        self.add_output_scripts();
         self.add_consumed_scripts(tx_accessor)
-    }
-
-    /// compile basic filter as of BIP158
-    pub fn basic_filter (&mut self) -> Result<(), io::Error> {
-        self.add_inputs()?;
-        self.add_output_scripts()
     }
 
     /// Write block filter
@@ -120,7 +100,7 @@ impl <'a> BlockFilterWriter<'a> {
 }
 
 pub trait TxAccessor {
-    fn get (&self, txid: &Sha256dHash) -> Result<Transaction, io::Error>;
+    fn get_tx(&self, txid: &Sha256dHash) -> Result<Transaction, io::Error>;
 }
 
 fn encode<T: ? Sized>(data: &T) -> Result<Vec<u8>, io::Error>
@@ -427,6 +407,18 @@ mod test {
             .map_err(|_| { io::Error::new(io::ErrorKind::InvalidData, "serialization error") })?)
     }
 
+    impl TxAccessor for HashMap<Sha256dHash, Transaction> {
+        fn get_tx(&self, txid: &Sha256dHash) -> Result<Transaction, io::Error> {
+            if let Some (tx) = self.get(txid) {
+                Ok(tx.clone())
+            }
+            else {
+                println!("missing {}", txid);
+                Err(io::Error::from(io::ErrorKind::NotFound))
+            }
+        }
+    }
+
     #[test]
     fn test_blockfilters () {
         let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -450,23 +442,23 @@ mod test {
             for tx in &block.txdata {
                 txmap.insert(tx.txid(), tx.clone());
             }
-            for i in 1 .. 8 {
+            for i in 1 .. 9 {
                 let line = txs[i].as_array().unwrap();
                 let tx: Transaction = decode(hex::decode(line[1].as_string().unwrap()).unwrap()).unwrap();
                 assert_eq!(tx.txid().to_string(), line[0].as_string().unwrap());
                 txmap.insert(tx.txid(), tx);
             }
 
-            let basic_filter = hex::decode(test_case[4].as_string().unwrap()).unwrap();
-            let mut constructed_basic = Cursor::new(Vec::new());
+            let test_filter = hex::decode(test_case[4].as_string().unwrap()).unwrap();
+            let mut constructed_filter = Cursor::new(Vec::new());
             {
-                let mut writer = BlockFilterWriter::new(&mut constructed_basic, &block);
-                writer.basic_filter().unwrap();
+                let mut writer = BlockFilterWriter::new(&mut constructed_filter, &block);
+                writer.wallet_filter(txmap).unwrap();
                 writer.finish().unwrap();
             }
 
-            let filter = constructed_basic.into_inner();
-            assert_eq!(basic_filter, filter);
+            let filter = constructed_filter.into_inner();
+            assert_eq!(test_filter, filter);
             let filter_hash = Sha256dHash::from_data(filter.as_slice());
             let mut header_data = [0u8; 64];
             header_data[0..32].copy_from_slice(&filter_hash.data()[0..32]);
