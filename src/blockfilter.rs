@@ -23,6 +23,7 @@
 
 use bitcoin;
 use bitcoin::blockdata::block::Block;
+use bitcoin::blockdata::transaction::Transaction;
 use bitcoin::network::encodable::{ConsensusDecodable, ConsensusEncodable};
 use bitcoin::network::encodable::VarInt;
 use bitcoin::network::serialize::{RawDecoder, RawEncoder};
@@ -68,11 +69,27 @@ impl <'a> BlockFilterWriter<'a> {
         Ok(())
     }
 
-    /// Add output scripts of the block
+    /// Add output scripts of the block - excluding OP_RETURN scripts
     pub fn add_output_scripts (&mut self) -> Result<(), io::Error> {
         for transaction in &self.block.txdata {
             for output in &transaction.output {
-                self.writer.add_element(output.script_pubkey.data().as_slice());
+                let data = output.script_pubkey.data();
+                //if data.len() > 0 && data[0] != bitcoin::blockdata::opcodes::All::OP_RETURN as u8 {
+                    self.writer.add_element(data.as_slice());
+                //}
+            }
+        }
+        Ok(())
+    }
+
+    /// Add consumed output scripts of a block to filter
+    pub fn add_consumed_scripts (&mut self, tx_accessor: impl TxAccessor) -> Result<(), io::Error> {
+        for transaction in &self.block.txdata {
+            if !transaction.is_coin_base() {
+                for input in &transaction.input {
+                    let tx = tx_accessor.get(&input.prev_hash)?;
+                    self.add_element(tx.output[input.prev_index as usize].script_pubkey.data().as_slice())?;
+                }
             }
         }
         Ok(())
@@ -82,6 +99,12 @@ impl <'a> BlockFilterWriter<'a> {
     pub fn add_element (&mut self, element: &[u8]) -> Result<(), io::Error> {
         self.writer.add_element(element);
         Ok(())
+    }
+
+    /// compile a filter useful for wallets
+    pub fn add_wallet_filter (&mut self, tx_accessor: impl TxAccessor) -> Result<(), io::Error> {
+        self.add_inputs()?;
+        self.add_consumed_scripts(tx_accessor)
     }
 
     /// compile basic filter as of BIP158
@@ -94,6 +117,10 @@ impl <'a> BlockFilterWriter<'a> {
     pub fn finish(&mut self) -> Result<usize, io::Error> {
         self.writer.finish()
     }
+}
+
+pub trait TxAccessor {
+    fn get (&self, txid: &Sha256dHash) -> Result<Transaction, io::Error>;
 }
 
 fn encode<T: ? Sized>(data: &T) -> Result<Vec<u8>, io::Error>
@@ -386,6 +413,7 @@ mod test {
     use std::io::Cursor;
     use std::io::Read;
     use std::path::PathBuf;
+    use std::collections::HashMap;
     use super::*;
 
     extern crate rustc_serialize;
@@ -408,11 +436,26 @@ mod test {
         file.read_to_string(&mut data).unwrap();
 
         let json = Json::from_str(&data).unwrap();
+        let blocks = json[0].as_array().unwrap();
+        let txs = json[1].as_array().unwrap();
         for t in 1..8 {
-            let test_case = json [t].as_array().unwrap();
+            let mut txmap = HashMap::new();
+            let test_case = blocks [t].as_array().unwrap();
             let block_hash = Sha256dHash::from_hex(test_case [1].as_string().unwrap()).unwrap();
+            let previous_header_hash = Sha256dHash::from_hex(test_case [3].as_string().unwrap()).unwrap();
+            let header_hash = Sha256dHash::from_hex(test_case[5].as_string().unwrap()).unwrap();
             let block :Block = decode (hex::decode(test_case[2].as_string().unwrap()).unwrap()).unwrap();
             assert_eq!(block.bitcoin_hash(), block_hash);
+
+            for tx in &block.txdata {
+                txmap.insert(tx.txid(), tx.clone());
+            }
+            for i in 1 .. 8 {
+                let line = txs[i].as_array().unwrap();
+                let tx: Transaction = decode(hex::decode(line[1].as_string().unwrap()).unwrap()).unwrap();
+                assert_eq!(tx.txid().to_string(), line[0].as_string().unwrap());
+                txmap.insert(tx.txid(), tx);
+            }
 
             let basic_filter = hex::decode(test_case[4].as_string().unwrap()).unwrap();
             let mut constructed_basic = Cursor::new(Vec::new());
@@ -421,8 +464,15 @@ mod test {
                 writer.basic_filter().unwrap();
                 writer.finish().unwrap();
             }
-            println!("test {}", t);
-            assert_eq!(basic_filter, constructed_basic.into_inner());
+
+            let filter = constructed_basic.into_inner();
+            assert_eq!(basic_filter, filter);
+            let filter_hash = Sha256dHash::from_data(filter.as_slice());
+            let mut header_data = [0u8; 64];
+            header_data[0..32].copy_from_slice(&filter_hash.data()[0..32]);
+            header_data[32..64].copy_from_slice(&previous_header_hash.data()[0..32]);
+            let filter_header_hash = Sha256dHash::from_data(&header_data);
+            assert_eq!(filter_header_hash, header_hash);
         }
     }
 
@@ -499,6 +549,17 @@ mod test {
             assert_eq!(reader.read(7).unwrap(), 7);
             // 4 bits remained
             assert!(reader.read(5).is_err());
+        }
+    }
+
+    #[test]
+    fn foo () {
+        let block :Block = decode (hex::decode("0100000020782a005255b657696ea057d5b98f34defcf75196f64f6eeac8026c0000000041ba5afc532aae03151b8aa87b65e1594f97504a768e010c98c0add79216247186e7494dffff001d058dc2b60101000000010000000000000000000000000000000000000000000000000000000000000000ffffffff0e0486e7494d0151062f503253482fffffffff0100f2052a01000000232103f6d9ff4c12959445ca5549c811683bf9c88e637b222dd2e0311154c4c85cf423ac00000000").unwrap()).unwrap();
+        println!("{}", block.header.bitcoin_hash());
+        for t in block.txdata {
+            for i in t.input {
+                println!("{}", i.prev_hash);
+            }
         }
     }
 }
