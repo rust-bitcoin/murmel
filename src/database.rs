@@ -216,7 +216,7 @@ impl<'a> DBTX<'a> {
             "select count(*) from peers", &[], | row | { row.get(0) })?;
 
         if n_peers == 0 {
-            return Err(SPVError::Generic("no peers in the database".to_owned()));
+            return Err(SPVError::Generic("no peers in the database"));
         }
 
         let mut rng = rand::thread_rng();
@@ -241,7 +241,7 @@ impl<'a> DBTX<'a> {
                 })
             }
         }
-        Err(SPVError::Generic("no useful peers in the database".to_owned()))
+        Err(SPVError::Generic("no useful peers in the database"))
     }
 
     /// get the integer proxy for a hash. All tables use integers mapped here for better performance.
