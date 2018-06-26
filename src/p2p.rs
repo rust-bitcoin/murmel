@@ -397,21 +397,56 @@ impl P2P {
                                 incoming.push(msg);
                             }
                             else {
-                                match locked_peer.process_handshake(&msg)? {
-                                    HandShake::Disconnect => {
-                                        trace!("disconnecting peer={}", pid);
-                                        // mark for disconnect outside of lock scope
-                                        disconnect = true;
-                                        break;
-                                    }
-                                    HandShake::Handshake => {
-                                        // mark for connected outside of lock scope
+                                // have to get both version and verack to complete handhsake
+                                if !(locked_peer.version.is_some() && locked_peer.got_verack) {
+                                    // before handshake complete
+                                    match msg.payload {
+                                        NetworkMessage::Version(ref version) => {
+                                            if locked_peer.version.is_some() {
+                                                // repeated version
+                                                disconnect = true;
+                                                break;
+                                            }
+                                            if version.nonce == self.nonce {
+                                                // connect to myself
+                                                disconnect = true;
+                                                break;
+                                            } else {
+                                                // want to connect to full nodes supporting segwit
+                                                if version.services & 9 != 9 || version.version < 70013 {
+                                                    disconnect = true;
+                                                    break;
+                                                } else {
+                                                    if !locked_peer.outgoing {
+                                                        // send own version message to incoming peer
+                                                    }
+                                                    // acknowledge version message received
+                                                    locked_peer.send(&NetworkMessage::Verack)?;
+                                                    // all right, remember this peer
+                                                    info!("client {} height: {} peer={}", version.user_agent, version.start_height, pid);
+                                                    locked_peer.version = Some(version.clone());
+                                                }
+                                            }
+                                        }
+                                        NetworkMessage::Verack => {
+                                            if locked_peer.got_verack {
+                                                // repeated verack
+                                                disconnect = true;
+                                                break;
+                                            }
+                                            trace!("got verack peer={}", pid);
+                                            locked_peer.got_verack = true;
+                                        }
+                                        _ => {
+                                            trace!("misbehaving peer={}", pid);
+                                            // some other message before handshake
+                                            disconnect = true;
+                                            break;
+                                        }
+                                    };
+                                    if locked_peer.version.is_some() && locked_peer.got_verack {
+                                        locked_peer.connected.set(true);
                                         handshake = true;
-                                    }
-                                    HandShake::InProgress => {},
-                                    HandShake::Process => {
-                                        // queue messages to process outside of locked scope
-                                        incoming.push(msg);
                                     }
                                 }
                             }
@@ -509,14 +544,6 @@ impl P2P {
         }
         None
     }
-}
-
-// possible outcomes of the handshake with a peer
-enum HandShake {
-    Disconnect,
-    InProgress,
-    Handshake,
-    Process
 }
 
 /// a peer
@@ -619,61 +646,6 @@ impl Peer {
         } else {
             None
         }
-    }
-
-    // process handshake, returning:
-    // Handshake::Disconnect - for misbehaving or useless remote peers
-    // Handshake::InProgress - for handshake in progress that may still fail
-    // Handshake::Handshake - for finished handshake, this will be returned only once
-    // Handshake::Process - handshake was perfect, go ahead with regular processing
-    fn process_handshake(&mut self, msg: &RawNetworkMessage) -> Result<HandShake, SPVError> {
-        if !(self.version.is_some() && self.got_verack) {
-            // before handshake complete
-            match msg.payload {
-                NetworkMessage::Version(ref version) => {
-                    if self.version.is_some() {
-                        return Ok(HandShake::Disconnect);
-                    }
-
-                    if version.nonce == self.nonce {
-                        return Ok(HandShake::Disconnect);
-                    } else {
-                        // want to connect to full nodes supporting segwit
-                        if version.services & 9 != 9 || version.version < 70013 {
-                            return Ok(HandShake::Disconnect);
-                        } else {
-                            if !self.outgoing {
-                                // send own version message to incoming peer
-                            }
-                            // acknowledge version message received
-                            self.send(&NetworkMessage::Verack)?;
-                            // all right, remember this peer
-                            info!("client {} height: {} peer={}", version.user_agent, version.start_height, self.pid);
-                            self.version = Some(version.clone());
-                        }
-                    }
-                }
-                NetworkMessage::Verack => {
-                    if self.got_verack {
-                        return Ok(HandShake::Disconnect);
-                    }
-                    trace!("got verack peer={}", self.pid);
-                    self.got_verack = true;
-                }
-                _ => {
-                    trace!("misbehaving peer={}", self.pid);
-                    return Ok(HandShake::Disconnect);
-                }
-            };
-            if self.version.is_some() && self.got_verack {
-                self.connected.set(true);
-                return Ok(HandShake::Handshake)
-            }
-            else {
-                return Ok(HandShake::InProgress)
-            }
-        }
-        Ok(HandShake::Process)
     }
 }
 
