@@ -241,7 +241,7 @@ impl P2P {
         };
 
         // create lock protected peer object
-        let peer = Mutex::new(Peer::new(pid, stream,self.poll.clone(), self.nonce, outgoing)?);
+        let peer = Mutex::new(Peer::new(pid, stream,self.poll.clone(), outgoing)?);
 
         // add peer object to peer map shared between P2P and node
         let mut peers = self.peers.write().unwrap();
@@ -391,7 +391,6 @@ impl P2P {
                         // extract messages from the buffer
                         while let Some(msg) = decode(&mut locked_peer.read_buffer)? {
                             trace!("received {} peer={}", msg.command(), pid);
-                            // process handshake first
                             if locked_peer.connected.get() {
                                 // regular processing after handshake
                                 incoming.push(msg);
@@ -419,6 +418,9 @@ impl P2P {
                                                 } else {
                                                     if !locked_peer.outgoing {
                                                         // send own version message to incoming peer
+                                                        let addr = locked_peer.stream.peer_addr()?;
+                                                        let version = self.version (&addr);
+                                                        locked_peer.send(&version)?;
                                                     }
                                                     // acknowledge version message received
                                                     locked_peer.send(&NetworkMessage::Verack)?;
@@ -560,8 +562,6 @@ pub struct Peer {
     write_buffer: Buffer,
     // did the remote peer already sent a verack?
     got_verack: bool,
-    // own id, needed here to recognise that remote is actually the local peer
-    nonce: u64,
     /// the version message the peer sent to us at connect
     pub version: Option<VersionMessage>,
     // channel into the event processing loop for outgoing messages
@@ -580,10 +580,10 @@ pub struct Peer {
 
 impl Peer {
     /// create a new peer
-    pub fn new (pid: PeerId, stream: TcpStream, poll: Arc<Poll>, nonce: u64, outgoing: bool) -> Result<Peer, SPVError> {
+    pub fn new (pid: PeerId, stream: TcpStream, poll: Arc<Poll>, outgoing: bool) -> Result<Peer, SPVError> {
         let (sender, receiver) = mpsc::channel();
         let peer = Peer{pid, poll: poll.clone(), stream, read_buffer: Buffer::new(), write_buffer: Buffer::new(),
-            got_verack: false, nonce, version: None, sender, receiver, writeable: AtomicBool::new(false),
+            got_verack: false, version: None, sender, receiver, writeable: AtomicBool::new(false),
             connected: Cell::new(false), ban: 0, outgoing };
         if outgoing {
             peer.register_write()?;
