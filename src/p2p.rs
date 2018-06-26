@@ -30,7 +30,7 @@ use bitcoin::util;
 use error::SPVError;
 use mio::*;
 use mio::unix::UnixReady;
-use mio::net::TcpStream;
+use mio::net::{TcpStream, TcpListener};
 use node::{Node, ProcessResult};
 use database::DB;
 use rand::{Rng, StdRng};
@@ -48,6 +48,7 @@ use std::cell::Cell;
 use futures::{Future, Async, FutureExt};
 use futures::task::Context;
 use futures::future;
+use futures::future::Either;
 use futures::task::Waker;
 use std::time::Duration;
 
@@ -102,8 +103,8 @@ pub struct P2P {
     db: Arc<Mutex<DB>>,
     // waker
     waker: Arc<Mutex<HashMap<PeerId, Waker>>>,
-    // candidates without handshake
-    candidates: Arc<Mutex<HashMap<SocketAddr, PeerId>>>
+    // server
+    listener: Arc<Mutex<HashMap<Token, Arc<TcpListener>>>>
 }
 
 impl P2P {
@@ -121,42 +122,43 @@ impl P2P {
             next_peer_id: AtomicUsize::new(0),
             db,
             waker: Arc::new(Mutex::new(HashMap::new())),
-            candidates: Arc::new(Mutex::new(HashMap::new()))
+            listener: Arc::new(Mutex::new(HashMap::new()))
         }
     }
 
     /// return a future that does not complete until the peer is connected
-    pub fn add_peer (&self, addr: &SocketAddr) -> Box<Future<Item=SocketAddr, Error=SPVError> + Send> {
-        let connect = self.connect_peer_with_timeout(addr, CONNECT_TIMEOUT_SECONDS);
+    pub fn add_peer (&self, source: Either<SocketAddr, Arc<TcpListener>>) -> Box<Future<Item=SocketAddr, Error=SPVError> + Send> {
+        // new token, never re-using previously connected peer's id
+        // so log messages are easier to follow
+        let token = Token(self.next_peer_id.fetch_add(1, Ordering::Relaxed));
+        let pid = PeerId{token};
+
+        let connect = self.connect_peer_with_timeout(pid,CONNECT_TIMEOUT_SECONDS, source.clone());
 
         let peers = self.peers.clone();
         let peers2 = self.peers.clone();
-        let address = addr.clone();
-        let candidates = self.candidates.clone();
         let db = self.db.clone();
 
         Box::new(connect
             .map_err (move |e| {
-                // timeout or error before handshake
-                if let Entry::Occupied(pid_entry) = candidates.lock().unwrap().entry(address) {
-                    // remove peers and candidates entry
-                    info!("timeout on handshake peer={}", pid_entry.get());
-                    peers2.write().unwrap().remove(pid_entry.get());
-                    pid_entry.remove();
+                // remove peers and candidates entry
+                info!("timeout on handshake peer={}", pid);
+                peers2.write().unwrap().remove(&pid);
+                if let Either::Left(address) = source {
                     let mut db = db.lock().unwrap();
                     let transaction = db.transaction().unwrap();
-                    transaction.remove_peer (&address).unwrap_or(0);
+                    transaction.remove_peer(&address).unwrap_or(0);
                     transaction.commit().unwrap();
                 }
                 e
             })
-            .and_then (move|pid| {
+            .and_then (move|address| {
             Box::new(future::poll_fn (move | _ | {
                 // retrieve peer from peer map
                 if let Some(_) = peers.read().unwrap().get(&pid) {
                     Ok(Async::Pending)
                 } else {
-                    trace!("peer {} finished", address);
+                    trace!("peer {:?} finished", address);
                     Ok(Async::Ready(address))
                 }
             }
@@ -164,21 +166,21 @@ impl P2P {
     }
 
     /// return a future that resolves to a connected (handshake perfect) peer or timeout
-    pub fn connect_peer_with_timeout (&self, addr: &SocketAddr, seconds: u64) -> Box<Future<Item=PeerId, Error=SPVError> + Send> {
+    pub fn connect_peer_with_timeout (&self, pid: PeerId, seconds: u64, source: Either<SocketAddr, Arc<TcpListener>>) -> Box<Future<Item=SocketAddr, Error=SPVError> + Send> {
         use futures_timer::FutureExt;
 
-        Box::new(self.connect_peer(addr).timeout(Duration::from_secs(seconds)))
+        Box::new(self.connect_peer(pid, source).timeout(Duration::from_secs(seconds)))
     }
 
     // connect a peer
-    fn connect_peer(&self, addr: &SocketAddr) -> Box<Future<Item=PeerId, Error=SPVError> + Send> {
+    fn connect_peer(&self, pid: PeerId, source: Either<SocketAddr, Arc<TcpListener>>) -> Box<Future<Item=SocketAddr, Error=SPVError> + Send> {
         let peers = self.peers.clone();
         let waker = self.waker.clone();
 
         // initiate connection
-        match self.initiate_connect(addr) {
+        match self.initiate_connect(pid,source) {
             // connection initiated, resolve to a future that polls for handshake complete
-            Ok(pid) => Box::new(
+            Ok(addr) => Box::new(
                 future::poll_fn (move |ctx|
                     {
                         // retrieve peer from peer map
@@ -186,7 +188,7 @@ impl P2P {
                             // return pid if peer is connected (handshake perfect)
                             if peer.lock().unwrap().connected.get() {
                                 trace!("woke up to handshake");
-                                Ok(Async::Ready(pid))
+                                Ok(Async::Ready(addr))
                             } else {
                                 waker.lock().unwrap().insert(pid, ctx.waker().clone());
                                 Ok(Async::Pending)
@@ -201,19 +203,28 @@ impl P2P {
         }
     }
 
-    // initiate connect to peer
-    fn initiate_connect(&self, addr: &SocketAddr) -> Result<PeerId, SPVError> {
-        // new token, never re-using previously connected peer's id
-        // so log messages are easier to follow
-        let token = Token(self.next_peer_id.fetch_add(1, Ordering::Relaxed));
-        let pid = PeerId{token};
+    // initiate outgoing connection to peer
+    fn initiate_connect(&self, pid: PeerId, source: Either<SocketAddr, Arc<TcpListener>>) -> Result<SocketAddr, SPVError> {
+        let outgoing = source.is_left();
 
-        self.candidates.lock().unwrap().insert(addr.clone(), pid);
+        let addr;
+        let stream;
+        if outgoing {
+            addr = source.left().unwrap();
+            info!("trying outgoing connect to {} peer={}", addr, pid);
+            stream = TcpStream::connect(&addr)?;
 
-        info!("trying to connect to {} peer={}", addr, pid);
+        }
+        else {
+            let (s, a) = source.right().unwrap().accept()?;
+            addr = a;
+            stream = s;
+            info!("trying incoming connect to {} peer={}", addr, pid);
+        }
+
 
         // create lock protected peer object
-        let peer = Mutex::new(Peer::new(pid, self.poll.clone(), addr, self.nonce)?);
+        let peer = Mutex::new(Peer::new(pid, stream,self.poll.clone(), self.nonce, outgoing)?);
 
         // add peer object to peer map shared between P2P and node
         let mut peers = self.peers.write().unwrap();
@@ -221,12 +232,14 @@ impl P2P {
         // add to peer map
         peers.insert(pid, peer);
 
-        // send this node's version message to peer
-        peers.get(&pid).unwrap().lock().unwrap().send(&P2P::version(&self.user_agent, self.nonce,
-                                                                    self.height.load(Ordering::Relaxed) as u32,
-                                                                    addr))?;
+        if outgoing {
+            // send this node's version message to peer
+            peers.get(&pid).unwrap().lock().unwrap().send(&P2P::version(&self.user_agent, self.nonce,
+                                                                        self.height.load(Ordering::Relaxed) as u32,
+                                                                        &addr))?;
+        }
 
-        Ok(pid)
+        Ok(addr)
     }
 
     // compile this node's version message
@@ -432,6 +445,14 @@ impl P2P {
         Ok(())
     }
 
+    pub fn add_listener (&self, bind: &SocketAddr) -> Result<(), io::Error> {
+        let listener = TcpListener::bind(bind)?;
+        let token = Token(self.next_peer_id.fetch_add(1, Ordering::Relaxed));
+        self.poll.register(&listener, token, Ready::readable(), PollOpt::edge())?;
+        self.listener.lock().unwrap().insert(token, Arc::new(listener));
+        Ok(())
+    }
+
     /// run the message dispatcher loop
     /// this method does not return unless there is an error obtaining network events
     /// run in its own thread, which will process all network events
@@ -448,14 +469,30 @@ impl P2P {
 
             // iterate over events
             for event in events.iter() {
-                // construct the id of the peer the event concerns
-                let pid = PeerId { token: event.token() };
-                if let Err(error) = self.event_processor(node.clone(), event, pid, iobuf.as_mut_slice(), ctx) {
-                    warn!("error {} peer={}", error.to_string(), pid);
-                    debug!("error {:?} peer={}", error, pid);
+                // check for listener
+                if let Some(server) = self.is_listener(event.token()) {
+                    ctx.executor().spawn(
+                        Box::new(self.add_peer(Either::Right(server))
+                        .map(|_|()).or_else(|_|Ok(()))))
+                        .expect("can not spawn task for incoming connection");
+                }
+                else {
+                    // construct the id of the peer the event concerns
+                    let pid = PeerId { token: event.token() };
+                    if let Err(error) = self.event_processor(node.clone(), event, pid, iobuf.as_mut_slice(), ctx) {
+                        warn!("error {} peer={}", error.to_string(), pid);
+                        debug!("error {:?} peer={}", error, pid);
+                    }
                 }
             }
         }
+    }
+
+    fn is_listener(&self, token: Token) -> Option<Arc<TcpListener>> {
+        if let Some(server) = self.listener.lock().unwrap().get(&token) {
+            return Some(server.clone())
+        }
+        None
     }
 }
 
@@ -494,26 +531,40 @@ pub struct Peer {
     // connected and handshake complete?
     connected: Cell<bool>,
     // ban score
-    ban: u32
+    ban: u32,
+    // outgoing or incoming connection
+    outgoing: bool
 }
 
 impl Peer {
     /// create a new peer
-    pub fn new (pid: PeerId, poll: Arc<Poll>, addr: &SocketAddr, nonce: u64) -> Result<Peer, SPVError> {
-        let stream = TcpStream::connect(addr)?;
+    pub fn new (pid: PeerId, stream: TcpStream, poll: Arc<Poll>, nonce: u64, outgoing: bool) -> Result<Peer, SPVError> {
         let (sender, receiver) = mpsc::channel();
         let peer = Peer{pid, poll: poll.clone(), stream, read_buffer: Buffer::new(), write_buffer: Buffer::new(),
             got_verack: false, nonce, version: None, sender, receiver, writeable: AtomicBool::new(false),
-            connected: Cell::new(false), ban: 0 };
-        peer.register_write()?;
+            connected: Cell::new(false), ban: 0, outgoing };
+        if outgoing {
+            peer.register_write()?;
+        } else {
+            peer.register_read()?;
+        }
         Ok(peer)
     }
 
-    // register for peer readable events
+    // re-register for peer readable events
     fn reregister_read(&self) -> Result<(), SPVError> {
         if self.writeable.swap(false, Ordering::Acquire) {
             trace!("re-register for read peer={}", self.pid);
             self.poll.reregister(&self.stream, self.pid.token, Ready::readable() | UnixReady::error() | UnixReady::hup(), PollOpt::level())?;
+        }
+        Ok(())
+    }
+
+    // register for peer readable events
+    fn register_read(&self) -> Result<(), SPVError> {
+        if self.writeable.swap(false, Ordering::Acquire) {
+            trace!("register for read peer={}", self.pid);
+            self.poll.register(&self.stream, self.pid.token, Ready::readable() | UnixReady::error() | UnixReady::hup(), PollOpt::level())?;
         }
         Ok(())
     }
@@ -535,7 +586,6 @@ impl Peer {
         }
         Ok(())
     }
-
 
     // register for peer writable events
     fn register_write(&self) -> Result<(), SPVError> {
