@@ -30,12 +30,13 @@ use std::path::Path;
 /// simple test drive that connects to a local bitcoind
 pub fn main() {
     if find_opt("help") {
-        println!("{} [--help] [--log trace|debug|info|warn|error] [--connections n] [--peer ip_address] [--db database_file] [--network main|test]", args().next().unwrap());
+        println!("{} [--help] [--log trace|debug|info|warn|error] [--connections n] [--peer ip_address:port] [--db database_file] [--network main|test]", args().next().unwrap());
         println!("--log level: level is one of trace|debug|info|warn|error");
         println!("--connections n: maintain at least n connections");
         println!("--peer ip_address: connect to the given peer at start. You may use more than one --peer option.");
         println!("--db file: store data in the given sqlite datbase file. Created if does not exist.");
         println!("--network net: net is one of main|test for corresponding Bitcoin networks");
+        println!("--listen ip_address:port : accept incoming connection requests");
         println!("defaults:");
         println!("--log info");
         println!("--connections 1");
@@ -71,14 +72,17 @@ pub fn main() {
     if let Some(numstring) = find_arg("connections") {
         connections = numstring.parse().unwrap();
     }
+    let mut spv;
     if let Some(path) = find_arg("db") {
-        let mut spv = SPV::new("/rust-spv:0.1.0/".to_string(), network, Path::new(path.as_str())).unwrap();
-        spv.start(peers, connections);
+        spv = SPV::new("/rust-spv:0.1.0/".to_string(), network, Path::new(path.as_str())).unwrap();
     }
     else {
-        let mut spv = SPV::new_in_memory("/rust-spv:0.1.0/".to_string(), network).unwrap();
-        spv.start(peers, connections);
+        spv = SPV::new_in_memory("/rust-spv:0.1.0/".to_string(), network).unwrap();
     }
+    for bind in get_listeners() {
+        spv.listen(&bind).expect(format!("can not listen to {:?}", bind).as_str());
+    }
+    spv.start(peers, connections);
 }
 
 use std::str::FromStr;
@@ -86,6 +90,11 @@ use std::str::FromStr;
 fn get_peers() -> Vec<SocketAddr> {
     find_args("peer").iter().map(|s| SocketAddr::from_str(s).unwrap()).collect()
 }
+
+fn get_listeners() -> Vec<SocketAddr> {
+    find_args("listener").iter().map(|s| SocketAddr::from_str(s).unwrap()).collect()
+}
+
 
 // Returns key-value zipped iterator.
 fn zipped_args() -> impl Iterator<Item = (String, String)> {

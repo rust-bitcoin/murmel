@@ -79,6 +79,11 @@ impl SPV {
         Ok(SPV{ node, p2p, thread_pool, db: db.clone()})
     }
 
+    /// add a listener of incoming connection requests
+    pub fn listen (&self, addr: &SocketAddr) -> Result<(), SPVError> {
+        Ok(self.p2p.add_listener(addr)?)
+    }
+
 	/// Start the SPV stack. This should be called AFTER registering listener of the ChainWatchInterface,
 	/// so they are called as the SPV stack catches up with the blockchain
 	/// * peers - connect to these peers at startup (might be empty)
