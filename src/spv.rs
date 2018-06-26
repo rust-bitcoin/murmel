@@ -28,9 +28,8 @@ use p2p::P2P;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
-use p2p::PeerMap;
+use p2p::{PeerMap, PeerSource};
 use futures::future;
-use futures::future::Either;
 use futures::prelude::*;
 use futures::executor::ThreadPool;
 use dns::dns_seed;
@@ -111,7 +110,7 @@ impl SPV {
         // add initial peers if any
         let mut added = Vec::new();
         for addr in &peers {
-            added.push(p2p.add_peer(Either::Left(addr.clone())));
+            added.push(p2p.add_peer(PeerSource::Outgoing(addr.clone())));
         }
 
         struct KeepConnected {
@@ -173,7 +172,7 @@ impl SPV {
                             // have an address for it
                             // Note: we do not store Tor adresses, so this should always be true
                             if let Ok(ref sock) = peer.socket_addr() {
-                                self.connections.push(self.p2p.add_peer(Either::Left(sock.clone())));
+                                self.connections.push(self.p2p.add_peer(PeerSource::Outgoing(sock.clone())));
                             } else {
                                 break;
                             }
@@ -194,7 +193,7 @@ impl SPV {
                     if self.dns.len() >0 {
                         let mut rng = thread_rng();
                         let addr = self.dns[(rng.next_u64() as usize) % self.dns.len()];
-                        self.connections.push(self.p2p.add_peer(Either::Left(addr)));
+                        self.connections.push(self.p2p.add_peer(PeerSource::Outgoing(addr)));
                     }
                 }
             }

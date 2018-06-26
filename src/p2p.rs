@@ -48,7 +48,6 @@ use std::cell::Cell;
 use futures::{Future, Async, FutureExt};
 use futures::task::Context;
 use futures::future;
-use futures::future::Either;
 use futures::task::Waker;
 use std::time::Duration;
 
@@ -70,6 +69,12 @@ impl Display for PeerId {
         write!(f, "{}", self.token.0)?;
         Ok(())
     }
+}
+
+#[derive(Clone)]
+pub enum PeerSource {
+    Outgoing(SocketAddr),
+    Incoming(Arc<TcpListener>)
 }
 
 /// a map of peer id to peers
@@ -127,7 +132,7 @@ impl P2P {
     }
 
     /// return a future that does not complete until the peer is connected
-    pub fn add_peer (&self, source: Either<SocketAddr, Arc<TcpListener>>) -> Box<Future<Item=SocketAddr, Error=SPVError> + Send> {
+    pub fn add_peer (&self, source: PeerSource) -> Box<Future<Item=SocketAddr, Error=SPVError> + Send> {
         // new token, never re-using previously connected peer's id
         // so log messages are easier to follow
         let token = Token(self.next_peer_id.fetch_add(1, Ordering::Relaxed));
@@ -144,7 +149,7 @@ impl P2P {
                 // remove peers and candidates entry
                 info!("timeout on handshake peer={}", pid);
                 peers2.write().unwrap().remove(&pid);
-                if let Either::Left(address) = source {
+                if let PeerSource::Outgoing(address) = source {
                     let mut db = db.lock().unwrap();
                     let transaction = db.transaction().unwrap();
                     transaction.remove_peer(&address).unwrap_or(0);
@@ -166,14 +171,14 @@ impl P2P {
     }
 
     /// return a future that resolves to a connected (handshake perfect) peer or timeout
-    pub fn connect_peer_with_timeout (&self, pid: PeerId, seconds: u64, source: Either<SocketAddr, Arc<TcpListener>>) -> Box<Future<Item=SocketAddr, Error=SPVError> + Send> {
+    pub fn connect_peer_with_timeout (&self, pid: PeerId, seconds: u64, source: PeerSource) -> Box<Future<Item=SocketAddr, Error=SPVError> + Send> {
         use futures_timer::FutureExt;
 
         Box::new(self.connect_peer(pid, source).timeout(Duration::from_secs(seconds)))
     }
 
     // connect a peer
-    fn connect_peer(&self, pid: PeerId, source: Either<SocketAddr, Arc<TcpListener>>) -> Box<Future<Item=SocketAddr, Error=SPVError> + Send> {
+    fn connect_peer(&self, pid: PeerId, source: PeerSource) -> Box<Future<Item=SocketAddr, Error=SPVError> + Send> {
         let peers = self.peers.clone();
         let waker = self.waker.clone();
 
@@ -204,24 +209,25 @@ impl P2P {
     }
 
     // initiate outgoing connection to peer
-    fn initiate_connect(&self, pid: PeerId, source: Either<SocketAddr, Arc<TcpListener>>) -> Result<SocketAddr, SPVError> {
-        let outgoing = source.is_left();
-
+    fn initiate_connect(&self, pid: PeerId, source: PeerSource) -> Result<SocketAddr, SPVError> {
+        let outgoing;
         let addr;
         let stream;
-        if outgoing {
-            addr = source.left().unwrap();
-            info!("trying outgoing connect to {} peer={}", addr, pid);
-            stream = TcpStream::connect(&addr)?;
-
-        }
-        else {
-            let (s, a) = source.right().unwrap().accept()?;
-            addr = a;
-            stream = s;
-            info!("trying incoming connect to {} peer={}", addr, pid);
-        }
-
+        match source {
+            PeerSource::Outgoing(a) => {
+                addr = a;
+                outgoing = true;
+                info!("trying outgoing connect to {} peer={}", addr, pid);
+                stream = TcpStream::connect(&addr)?;
+            },
+            PeerSource::Incoming(listener) => {
+                let (s, a) = listener.accept()?;
+                addr = a;
+                stream = s;
+                info!("trying incoming connect to {} peer={}", addr, pid);
+                outgoing = false;
+            }
+        };
 
         // create lock protected peer object
         let peer = Mutex::new(Peer::new(pid, stream,self.poll.clone(), self.nonce, outgoing)?);
@@ -472,7 +478,7 @@ impl P2P {
                 // check for listener
                 if let Some(server) = self.is_listener(event.token()) {
                     ctx.executor().spawn(
-                        Box::new(self.add_peer(Either::Right(server))
+                        Box::new(self.add_peer(PeerSource::Incoming(server))
                         .map(|_|()).or_else(|_|Ok(()))))
                         .expect("can not spawn task for incoming connection");
                 }
