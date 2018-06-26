@@ -131,6 +131,14 @@ impl P2P {
         }
     }
 
+    pub fn add_listener (&self, bind: &SocketAddr) -> Result<(), io::Error> {
+        let listener = TcpListener::bind(bind)?;
+        let token = Token(self.next_peer_id.fetch_add(1, Ordering::Relaxed));
+        self.poll.register(&listener, token, Ready::readable(), PollOpt::edge())?;
+        self.listener.lock().unwrap().insert(token, Arc::new(listener));
+        Ok(())
+    }
+
     /// return a future that does not complete until the peer is connected
     pub fn add_peer (&self, source: PeerSource) -> Box<Future<Item=SocketAddr, Error=SPVError> + Send> {
         // new token, never re-using previously connected peer's id
@@ -240,30 +248,30 @@ impl P2P {
 
         if outgoing {
             // send this node's version message to peer
-            peers.get(&pid).unwrap().lock().unwrap().send(&P2P::version(&self.user_agent, self.nonce,
-                                                                        self.height.load(Ordering::Relaxed) as u32,
-                                                                        &addr))?;
+            peers.get(&pid).unwrap().lock().unwrap().send(&self.version(&addr))?;
         }
 
         Ok(addr)
     }
 
     // compile this node's version message
-    fn version (user_agent: &String, nonce: u64, height: u32, remote: &SocketAddr) -> NetworkMessage {
+    fn version (&self, remote: &SocketAddr) -> NetworkMessage {
         // now in unix time
         let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
+
+        let services = if self.listener.lock().unwrap().is_empty() { 0 } else { 9 };
 
         // build message
         NetworkMessage::Version(VersionMessage {
             version: 70001, // used only to be able to disable tx relay
-            services: 0, // NODE_NONE this SPV implementation does not serve anything
+            services,
             timestamp,
             receiver: Address::new(remote, 1),
-            // TODO: sender is only dummy
+            // sender is only dummy
             sender: Address::new(remote, 1),
-            nonce: nonce,
-            user_agent: user_agent.clone(),
-            start_height: height as i32,
+            nonce: self.nonce,
+            user_agent: self.user_agent.clone(),
+            start_height: self.height.load(Ordering::Relaxed) as i32,
             relay: false,
         })
     }
@@ -381,21 +389,27 @@ impl P2P {
                         while let Some(msg) = decode(&mut locked_peer.read_buffer)? {
                             trace!("received {} peer={}", msg.command(), pid);
                             // process handshake first
-                            match locked_peer.process_handshake(&msg)? {
-                                HandShake::Disconnect => {
-                                    trace!("disconnecting peer={}", pid);
-                                    // mark for disconnect outside of lock scope
-                                    disconnect = true;
-                                    break;
-                                }
-                                HandShake::Handshake => {
-                                    // mark for connected outside of lock scope
-                                    handshake = true;
-                                }
-                                HandShake::InProgress => {},
-                                HandShake::Process => {
-                                    // queue messages to process outside of locked scope
-                                    incoming.push(msg);
+                            if locked_peer.connected.get() {
+                                // regular processing after handshake
+                                incoming.push(msg);
+                            }
+                            else {
+                                match locked_peer.process_handshake(&msg)? {
+                                    HandShake::Disconnect => {
+                                        trace!("disconnecting peer={}", pid);
+                                        // mark for disconnect outside of lock scope
+                                        disconnect = true;
+                                        break;
+                                    }
+                                    HandShake::Handshake => {
+                                        // mark for connected outside of lock scope
+                                        handshake = true;
+                                    }
+                                    HandShake::InProgress => {},
+                                    HandShake::Process => {
+                                        // queue messages to process outside of locked scope
+                                        incoming.push(msg);
+                                    }
                                 }
                             }
                         }
@@ -448,14 +462,6 @@ impl P2P {
                 }
             }
         }
-        Ok(())
-    }
-
-    pub fn add_listener (&self, bind: &SocketAddr) -> Result<(), io::Error> {
-        let listener = TcpListener::bind(bind)?;
-        let token = Token(self.next_peer_id.fetch_add(1, Ordering::Relaxed));
-        self.poll.register(&listener, token, Ready::readable(), PollOpt::edge())?;
-        self.listener.lock().unwrap().insert(token, Arc::new(listener));
         Ok(())
     }
 
@@ -629,10 +635,13 @@ impl Peer {
                     if version.nonce == self.nonce {
                         return Ok(HandShake::Disconnect);
                     } else {
-                        // want to connect to full nodes upporting segwit
+                        // want to connect to full nodes supporting segwit
                         if version.services & 9 != 9 || version.version < 70013 {
                             return Ok(HandShake::Disconnect);
                         } else {
+                            if !self.outgoing {
+                                // send own version message to incoming peer
+                            }
                             // acknowledge version message received
                             self.send(&NetworkMessage::Verack)?;
                             // all right, remember this peer
