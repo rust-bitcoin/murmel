@@ -248,6 +248,13 @@ impl P2P {
         // add to peer map
         peers.insert(pid, peer);
 
+        let stored_peer = peers.get(&pid).unwrap();
+
+        if outgoing {
+            stored_peer.lock().unwrap().register_write()?;
+        } else {
+            stored_peer.lock().unwrap().register_read()?;
+        }
         if outgoing {
             // send this node's version message to peer
             peers.get(&pid).unwrap().lock().unwrap().send(&self.version(&addr, self.max_protocol_version))?;
@@ -411,13 +418,14 @@ impl P2P {
                                                 break;
                                             } else {
                                                 // want to connect to full nodes supporting segwit
-                                                if version.services & 9 != 9 || version.version < 70013 {
+                                                if false {// version.services & 9 != 9 || version.version < 70013 {
                                                     disconnect = true;
                                                     break;
                                                 } else {
                                                     if !locked_peer.outgoing {
                                                         // send own version message to incoming peer
                                                         let addr = locked_peer.stream.peer_addr()?;
+                                                        trace!("send version to incoming connection {}", addr);
                                                         // do not show higher version than the peer speaks
                                                         let version = self.version (&addr, version.version);
                                                         locked_peer.send(&version)?;
@@ -526,6 +534,7 @@ impl P2P {
             for event in events.iter() {
                 // check for listener
                 if let Some(server) = self.is_listener(event.token()) {
+                    trace!("incoming connection request");
                     ctx.executor().spawn(
                         Box::new(self.add_peer(PeerSource::Incoming(server))
                         .map(|_|()).or_else(|_|Ok(()))))
@@ -588,11 +597,6 @@ impl Peer {
         let peer = Peer{pid, poll: poll.clone(), stream, read_buffer: Buffer::new(), write_buffer: Buffer::new(),
             got_verack: false, version: None, sender, receiver, writeable: AtomicBool::new(false),
             connected: false, ban: 0, outgoing };
-        if outgoing {
-            peer.register_write()?;
-        } else {
-            peer.register_read()?;
-        }
         Ok(peer)
     }
 

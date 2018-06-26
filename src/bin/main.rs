@@ -37,6 +37,7 @@ pub fn main() {
         println!("--db file: store data in the given sqlite datbase file. Created if does not exist.");
         println!("--network net: net is one of main|test for corresponding Bitcoin networks");
         println!("--listen ip_address:port : accept incoming connection requests");
+        println!("--nodns : do not use dns seed");
         println!("defaults:");
         println!("--log info");
         println!("--connections 1");
@@ -82,7 +83,7 @@ pub fn main() {
     for bind in get_listeners() {
         spv.listen(&bind).expect(format!("can not listen to {:?}", bind).as_str());
     }
-    spv.start(peers, connections);
+    spv.start(peers, connections, find_opt("nodns"));
 }
 
 use std::str::FromStr;
@@ -92,7 +93,7 @@ fn get_peers() -> Vec<SocketAddr> {
 }
 
 fn get_listeners() -> Vec<SocketAddr> {
-    find_args("listener").iter().map(|s| SocketAddr::from_str(s).unwrap()).collect()
+    find_args("listen").iter().map(|s| SocketAddr::from_str(s).unwrap()).collect()
 }
 
 

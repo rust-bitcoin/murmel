@@ -89,7 +89,7 @@ impl SPV {
 	/// * peers - connect to these peers at startup (might be empty)
 	/// * min_connections - keep connections with at least this number of peers. Peers will be chosen random
 	/// from those discovered in earlier runs
-    pub fn start (&mut self, peers: Vec<SocketAddr>, min_connections: usize) {
+    pub fn start (&mut self, peers: Vec<SocketAddr>, min_connections: usize, nodns: bool) {
         // read stored headers from db
         // there is no recovery if this fails
         self.node.load_headers().unwrap();
@@ -103,13 +103,13 @@ impl SPV {
             Ok(Async::Ready(()))
         }))).unwrap();
 
-        let connector = self.keep_connected(peers, min_connections);
+        let connector = self.keep_connected(peers, min_connections, nodns);
 
         // the task that keeps us connected
         self.thread_pool.run(connector).unwrap();
     }
 
-    fn keep_connected(&self, peers: Vec<SocketAddr>, min_connections: usize) -> Box<Future<Item=(), Error=Never> + Send> {
+    fn keep_connected(&self, peers: Vec<SocketAddr>, min_connections: usize, nodns: bool) -> Box<Future<Item=(), Error=Never> + Send> {
 
         let p2p = self.p2p.clone();
         let db = self.db.clone();
@@ -125,7 +125,8 @@ impl SPV {
             connections: Vec<Box<Future<Item=SocketAddr, Error=SPVError> + Send>>,
             db: Arc<Mutex<DB>>,
             p2p: Arc<P2P>,
-            dns: Vec<SocketAddr>
+            dns: Vec<SocketAddr>,
+            nodns: bool
         }
 
         // this task runs until it runs out of peers
@@ -138,7 +139,9 @@ impl SPV {
                 loop {
                     // add further peers from db if needed
                     self.peers_from_db ();
-                    self.dns_lookup();
+                    if !self.nodns {
+                        self.dns_lookup();
+                    }
 
                     if self.connections.len() == 0 {
                         // run out of peers. this is fatal
@@ -206,7 +209,7 @@ impl SPV {
             }
         }
 
-        Box::new(KeepConnected{min_connections, connections: added, db, p2p, dns: Vec::new() })
+        Box::new(KeepConnected{min_connections, connections: added, db, p2p, dns: Vec::new(), nodns })
 	}
 
     /// Get the connector to higher level appl layers, such as Lightning

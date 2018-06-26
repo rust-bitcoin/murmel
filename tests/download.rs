@@ -83,7 +83,7 @@ fn download() {
     peers.push(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 28333));
     thread::spawn(|| {
         let mut spv = SPV::new_in_memory("/rust-spv:0.1.0/".to_string(), Network::Regtest).unwrap();
-        spv.start(peers, 1);
+        spv.start(peers, 1, true);
     });
     thread::sleep(time::Duration::from_secs(5));
 }
