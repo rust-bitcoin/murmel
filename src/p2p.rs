@@ -251,14 +251,14 @@ impl P2P {
 
         if outgoing {
             // send this node's version message to peer
-            peers.get(&pid).unwrap().lock().unwrap().send(&self.version(&addr))?;
+            peers.get(&pid).unwrap().lock().unwrap().send(&self.version(&addr, self.max_protocol_version))?;
         }
 
         Ok(addr)
     }
 
     // compile this node's version message for outgoing connections
-    fn version (&self, remote: &SocketAddr) -> NetworkMessage {
+    fn version (&self, remote: &SocketAddr, max_protocol_version: u32) -> NetworkMessage {
         // now in unix time
         let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
 
@@ -266,7 +266,7 @@ impl P2P {
 
         // build message
         NetworkMessage::Version(VersionMessage {
-            version: self.max_protocol_version,
+            version: min(max_protocol_version, self.max_protocol_version),
             services,
             timestamp,
             receiver: Address::new(remote, 1),
@@ -419,7 +419,7 @@ impl P2P {
                                                     if !locked_peer.outgoing {
                                                         // send own version message to incoming peer
                                                         let addr = locked_peer.stream.peer_addr()?;
-                                                        let version = self.version (&addr);
+                                                        let version = self.version (&addr, version.version);
                                                         locked_peer.send(&version)?;
                                                     }
                                                     // acknowledge version message received
