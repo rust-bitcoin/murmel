@@ -418,6 +418,7 @@ impl P2P {
                                                     if !locked_peer.outgoing {
                                                         // send own version message to incoming peer
                                                         let addr = locked_peer.stream.peer_addr()?;
+                                                        // do not show higher version than the peer speaks
                                                         let version = self.version (&addr, version.version);
                                                         locked_peer.send(&version)?;
                                                     }
@@ -425,7 +426,10 @@ impl P2P {
                                                     locked_peer.send(&NetworkMessage::Verack)?;
                                                     // all right, remember this peer
                                                     info!("client {} height: {} peer={}", version.user_agent, version.start_height, pid);
-                                                    locked_peer.version = Some(version.clone());
+                                                    let mut vm = version.clone();
+                                                    // reduce protocol version to our capabilities
+                                                    vm.version = min (vm.version, self.max_protocol_version);
+                                                    locked_peer.version = Some(vm);
                                                 }
                                             }
                                         }
