@@ -35,6 +35,8 @@ use futures::executor::ThreadPool;
 use dns::dns_seed;
 use rand::{thread_rng, Rng};
 
+const MAX_PROTOCOL_VERSION :u32 = 70001;
+
 /// The complete SPV stack
 pub struct SPV{
 	node: Arc<Node>,
@@ -56,7 +58,7 @@ impl SPV {
         let db = Arc::new(Mutex::new(DB::new(db)?));
         let birth = create_tables(db.clone())?;
         let peers = Arc::new(RwLock::new(PeerMap::new()));
-        let p2p = Arc::new(P2P::new(user_agent, network, 0, peers.clone(), db.clone()));
+        let p2p = Arc::new(P2P::new(user_agent, network, 0, peers.clone(), db.clone(), MAX_PROTOCOL_VERSION));
         let node = Arc::new(Node::new(p2p.clone(), network, db.clone(), birth, peers.clone()));
         Ok(SPV{ node, p2p, thread_pool, db: db.clone() })
     }
@@ -72,7 +74,7 @@ impl SPV {
         let db = Arc::new(Mutex::new(DB::mem()?));
         let birth = create_tables(db.clone())?;
         let peers = Arc::new(RwLock::new(PeerMap::new()));
-        let p2p = Arc::new(P2P::new(user_agent, network, 0, peers.clone(), db.clone()));
+        let p2p = Arc::new(P2P::new(user_agent, network, 0, peers.clone(), db.clone(), MAX_PROTOCOL_VERSION));
         let node = Arc::new(Node::new(p2p.clone(), network, db.clone(), birth, peers.clone()));
         Ok(SPV{ node, p2p, thread_pool, db: db.clone()})
     }

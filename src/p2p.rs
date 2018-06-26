@@ -109,12 +109,14 @@ pub struct P2P {
     // waker
     waker: Arc<Mutex<HashMap<PeerId, Waker>>>,
     // server
-    listener: Arc<Mutex<HashMap<Token, Arc<TcpListener>>>>
+    listener: Arc<Mutex<HashMap<Token, Arc<TcpListener>>>>,
+    // this node's maximum protocol version
+    max_protocol_version: u32,
 }
 
 impl P2P {
     /// create a new P2P network controller
-    pub fn new(user_agent: String, network: Network, height: u32, peers: Arc<RwLock<PeerMap>>, db: Arc<Mutex<DB>>) -> P2P {
+    pub fn new(user_agent: String, network: Network, height: u32, peers: Arc<RwLock<PeerMap>>, db: Arc<Mutex<DB>>, max_protocol_version: u32) -> P2P {
         let mut rng = StdRng::new().unwrap();
         P2P {
             network: network,
@@ -127,7 +129,8 @@ impl P2P {
             next_peer_id: AtomicUsize::new(0),
             db,
             waker: Arc::new(Mutex::new(HashMap::new())),
-            listener: Arc::new(Mutex::new(HashMap::new()))
+            listener: Arc::new(Mutex::new(HashMap::new())),
+            max_protocol_version: max_protocol_version
         }
     }
 
@@ -254,7 +257,7 @@ impl P2P {
         Ok(addr)
     }
 
-    // compile this node's version message
+    // compile this node's version message for outgoing connections
     fn version (&self, remote: &SocketAddr) -> NetworkMessage {
         // now in unix time
         let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
@@ -263,7 +266,7 @@ impl P2P {
 
         // build message
         NetworkMessage::Version(VersionMessage {
-            version: 70001, // used only to be able to disable tx relay
+            version: self.max_protocol_version,
             services,
             timestamp,
             receiver: Address::new(remote, 1),
@@ -272,7 +275,7 @@ impl P2P {
             nonce: self.nonce,
             user_agent: self.user_agent.clone(),
             start_height: self.height.load(Ordering::Relaxed) as i32,
-            relay: false,
+            relay: false, // there is no mempool here therefore no use for inv's of transactions
         })
     }
 
