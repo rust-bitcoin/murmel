@@ -44,7 +44,6 @@ use std::net::{Shutdown, SocketAddr};
 use std::sync::{Arc, mpsc, RwLock, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering,AtomicBool};
 use std::time::{SystemTime, UNIX_EPOCH};
-use std::cell::Cell;
 use futures::{Future, Async, FutureExt};
 use futures::task::Context;
 use futures::future;
@@ -202,7 +201,7 @@ impl P2P {
                         // retrieve peer from peer map
                         if let Some(peer) = peers.read().unwrap().get(&pid) {
                             // return pid if peer is connected (handshake perfect)
-                            if peer.lock().unwrap().connected.get() {
+                            if peer.lock().unwrap().connected {
                                 trace!("woke up to handshake");
                                 Ok(Async::Ready(addr))
                             } else {
@@ -391,7 +390,7 @@ impl P2P {
                         // extract messages from the buffer
                         while let Some(msg) = decode(&mut locked_peer.read_buffer)? {
                             trace!("received {} peer={}", msg.command(), pid);
-                            if locked_peer.connected.get() {
+                            if locked_peer.connected {
                                 // regular processing after handshake
                                 incoming.push(msg);
                             }
@@ -447,7 +446,7 @@ impl P2P {
                                         }
                                     };
                                     if locked_peer.version.is_some() && locked_peer.got_verack {
-                                        locked_peer.connected.set(true);
+                                        locked_peer.connected = true;
                                         handshake = true;
                                     }
                                 }
@@ -571,7 +570,7 @@ pub struct Peer {
     // is registered for write?
     writeable: AtomicBool,
     // connected and handshake complete?
-    connected: Cell<bool>,
+    connected: bool,
     // ban score
     ban: u32,
     // outgoing or incoming connection
@@ -584,7 +583,7 @@ impl Peer {
         let (sender, receiver) = mpsc::channel();
         let peer = Peer{pid, poll: poll.clone(), stream, read_buffer: Buffer::new(), write_buffer: Buffer::new(),
             got_verack: false, version: None, sender, receiver, writeable: AtomicBool::new(false),
-            connected: Cell::new(false), ban: 0, outgoing };
+            connected: false, ban: 0, outgoing };
         if outgoing {
             peer.register_write()?;
         } else {
