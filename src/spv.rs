@@ -28,12 +28,14 @@ use p2p::P2P;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
-use p2p::PeerMap;
+use p2p::{PeerMap, PeerSource};
 use futures::future;
 use futures::prelude::*;
 use futures::executor::ThreadPool;
 use dns::dns_seed;
 use rand::{thread_rng, Rng};
+
+const MAX_PROTOCOL_VERSION :u32 = 70001;
 
 /// The complete SPV stack
 pub struct SPV{
@@ -56,7 +58,7 @@ impl SPV {
         let db = Arc::new(Mutex::new(DB::new(db)?));
         let birth = create_tables(db.clone())?;
         let peers = Arc::new(RwLock::new(PeerMap::new()));
-        let p2p = Arc::new(P2P::new(user_agent, network, 0, peers.clone(), db.clone()));
+        let p2p = Arc::new(P2P::new(user_agent, network, 0, peers.clone(), db.clone(), MAX_PROTOCOL_VERSION));
         let node = Arc::new(Node::new(p2p.clone(), network, db.clone(), birth, peers.clone()));
         Ok(SPV{ node, p2p, thread_pool, db: db.clone() })
     }
@@ -72,9 +74,14 @@ impl SPV {
         let db = Arc::new(Mutex::new(DB::mem()?));
         let birth = create_tables(db.clone())?;
         let peers = Arc::new(RwLock::new(PeerMap::new()));
-        let p2p = Arc::new(P2P::new(user_agent, network, 0, peers.clone(), db.clone()));
+        let p2p = Arc::new(P2P::new(user_agent, network, 0, peers.clone(), db.clone(), MAX_PROTOCOL_VERSION));
         let node = Arc::new(Node::new(p2p.clone(), network, db.clone(), birth, peers.clone()));
         Ok(SPV{ node, p2p, thread_pool, db: db.clone()})
+    }
+
+    /// add a listener of incoming connection requests
+    pub fn listen (&self, addr: &SocketAddr) -> Result<(), SPVError> {
+        Ok(self.p2p.add_listener(addr)?)
     }
 
 	/// Start the SPV stack. This should be called AFTER registering listener of the ChainWatchInterface,
@@ -82,7 +89,7 @@ impl SPV {
 	/// * peers - connect to these peers at startup (might be empty)
 	/// * min_connections - keep connections with at least this number of peers. Peers will be chosen random
 	/// from those discovered in earlier runs
-    pub fn start (&mut self, peers: Vec<SocketAddr>, min_connections: usize) {
+    pub fn start (&mut self, peers: Vec<SocketAddr>, min_connections: usize, nodns: bool) {
         // read stored headers from db
         // there is no recovery if this fails
         self.node.load_headers().unwrap();
@@ -96,13 +103,13 @@ impl SPV {
             Ok(Async::Ready(()))
         }))).unwrap();
 
-        let connector = self.keep_connected(peers, min_connections);
+        let connector = self.keep_connected(peers, min_connections, nodns);
 
         // the task that keeps us connected
         self.thread_pool.run(connector).unwrap();
     }
 
-    fn keep_connected(&self, peers: Vec<SocketAddr>, min_connections: usize) -> Box<Future<Item=(), Error=Never> + Send> {
+    fn keep_connected(&self, peers: Vec<SocketAddr>, min_connections: usize, nodns: bool) -> Box<Future<Item=(), Error=Never> + Send> {
 
         let p2p = self.p2p.clone();
         let db = self.db.clone();
@@ -110,7 +117,7 @@ impl SPV {
         // add initial peers if any
         let mut added = Vec::new();
         for addr in &peers {
-            added.push(p2p.add_peer(addr));
+            added.push(p2p.add_peer(PeerSource::Outgoing(addr.clone())));
         }
 
         struct KeepConnected {
@@ -118,7 +125,8 @@ impl SPV {
             connections: Vec<Box<Future<Item=SocketAddr, Error=SPVError> + Send>>,
             db: Arc<Mutex<DB>>,
             p2p: Arc<P2P>,
-            dns: Vec<SocketAddr>
+            dns: Vec<SocketAddr>,
+            nodns: bool
         }
 
         // this task runs until it runs out of peers
@@ -131,7 +139,9 @@ impl SPV {
                 loop {
                     // add further peers from db if needed
                     self.peers_from_db ();
-                    self.dns_lookup();
+                    if !self.nodns {
+                        self.dns_lookup();
+                    }
 
                     if self.connections.len() == 0 {
                         // run out of peers. this is fatal
@@ -172,7 +182,7 @@ impl SPV {
                             // have an address for it
                             // Note: we do not store Tor adresses, so this should always be true
                             if let Ok(ref sock) = peer.socket_addr() {
-                                self.connections.push(self.p2p.add_peer(sock));
+                                self.connections.push(self.p2p.add_peer(PeerSource::Outgoing(sock.clone())));
                             } else {
                                 break;
                             }
@@ -192,13 +202,14 @@ impl SPV {
                     }
                     if self.dns.len() >0 {
                         let mut rng = thread_rng();
-                        self.connections.push(self.p2p.add_peer(&self.dns[(rng.next_u64() as usize) % self.dns.len()]));
+                        let addr = self.dns[(rng.next_u64() as usize) % self.dns.len()];
+                        self.connections.push(self.p2p.add_peer(PeerSource::Outgoing(addr)));
                     }
                 }
             }
         }
 
-        Box::new(KeepConnected{min_connections, connections: added, db, p2p, dns: Vec::new() })
+        Box::new(KeepConnected{min_connections, connections: added, db, p2p, dns: Vec::new(), nodns })
 	}
 
     /// Get the connector to higher level appl layers, such as Lightning

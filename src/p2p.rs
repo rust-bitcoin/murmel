@@ -30,7 +30,7 @@ use bitcoin::util;
 use error::SPVError;
 use mio::*;
 use mio::unix::UnixReady;
-use mio::net::TcpStream;
+use mio::net::{TcpStream, TcpListener};
 use node::{Node, ProcessResult};
 use database::DB;
 use rand::{Rng, StdRng};
@@ -44,7 +44,6 @@ use std::net::{Shutdown, SocketAddr};
 use std::sync::{Arc, mpsc, RwLock, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering,AtomicBool};
 use std::time::{SystemTime, UNIX_EPOCH};
-use std::cell::Cell;
 use futures::{Future, Async, FutureExt};
 use futures::task::Context;
 use futures::future;
@@ -69,6 +68,12 @@ impl Display for PeerId {
         write!(f, "{}", self.token.0)?;
         Ok(())
     }
+}
+
+#[derive(Clone)]
+pub enum PeerSource {
+    Outgoing(SocketAddr),
+    Incoming(Arc<TcpListener>)
 }
 
 /// a map of peer id to peers
@@ -102,13 +107,15 @@ pub struct P2P {
     db: Arc<Mutex<DB>>,
     // waker
     waker: Arc<Mutex<HashMap<PeerId, Waker>>>,
-    // candidates without handshake
-    candidates: Arc<Mutex<HashMap<SocketAddr, PeerId>>>
+    // server
+    listener: Arc<Mutex<HashMap<Token, Arc<TcpListener>>>>,
+    // this node's maximum protocol version
+    max_protocol_version: u32,
 }
 
 impl P2P {
     /// create a new P2P network controller
-    pub fn new(user_agent: String, network: Network, height: u32, peers: Arc<RwLock<PeerMap>>, db: Arc<Mutex<DB>>) -> P2P {
+    pub fn new(user_agent: String, network: Network, height: u32, peers: Arc<RwLock<PeerMap>>, db: Arc<Mutex<DB>>, max_protocol_version: u32) -> P2P {
         let mut rng = StdRng::new().unwrap();
         P2P {
             network: network,
@@ -121,42 +128,52 @@ impl P2P {
             next_peer_id: AtomicUsize::new(0),
             db,
             waker: Arc::new(Mutex::new(HashMap::new())),
-            candidates: Arc::new(Mutex::new(HashMap::new()))
+            listener: Arc::new(Mutex::new(HashMap::new())),
+            max_protocol_version: max_protocol_version
         }
     }
 
+    pub fn add_listener (&self, bind: &SocketAddr) -> Result<(), io::Error> {
+        let listener = TcpListener::bind(bind)?;
+        let token = Token(self.next_peer_id.fetch_add(1, Ordering::Relaxed));
+        self.poll.register(&listener, token, Ready::readable(), PollOpt::edge())?;
+        self.listener.lock().unwrap().insert(token, Arc::new(listener));
+        Ok(())
+    }
+
     /// return a future that does not complete until the peer is connected
-    pub fn add_peer (&self, addr: &SocketAddr) -> Box<Future<Item=SocketAddr, Error=SPVError> + Send> {
-        let connect = self.connect_peer_with_timeout(addr, CONNECT_TIMEOUT_SECONDS);
+    pub fn add_peer (&self, source: PeerSource) -> Box<Future<Item=SocketAddr, Error=SPVError> + Send> {
+        // new token, never re-using previously connected peer's id
+        // so log messages are easier to follow
+        let token = Token(self.next_peer_id.fetch_add(1, Ordering::Relaxed));
+        let pid = PeerId{token};
+
+        let connect = self.connect_peer_with_timeout(pid,CONNECT_TIMEOUT_SECONDS, source.clone());
 
         let peers = self.peers.clone();
         let peers2 = self.peers.clone();
-        let address = addr.clone();
-        let candidates = self.candidates.clone();
         let db = self.db.clone();
 
         Box::new(connect
             .map_err (move |e| {
-                // timeout or error before handshake
-                if let Entry::Occupied(pid_entry) = candidates.lock().unwrap().entry(address) {
-                    // remove peers and candidates entry
-                    info!("timeout on handshake peer={}", pid_entry.get());
-                    peers2.write().unwrap().remove(pid_entry.get());
-                    pid_entry.remove();
+                // remove peers and candidates entry
+                info!("timeout on handshake peer={}", pid);
+                peers2.write().unwrap().remove(&pid);
+                if let PeerSource::Outgoing(address) = source {
                     let mut db = db.lock().unwrap();
                     let transaction = db.transaction().unwrap();
-                    transaction.remove_peer (&address).unwrap_or(0);
+                    transaction.remove_peer(&address).unwrap_or(0);
                     transaction.commit().unwrap();
                 }
                 e
             })
-            .and_then (move|pid| {
+            .and_then (move|address| {
             Box::new(future::poll_fn (move | _ | {
                 // retrieve peer from peer map
                 if let Some(_) = peers.read().unwrap().get(&pid) {
                     Ok(Async::Pending)
                 } else {
-                    trace!("peer {} finished", address);
+                    trace!("peer {:?} finished", address);
                     Ok(Async::Ready(address))
                 }
             }
@@ -164,29 +181,29 @@ impl P2P {
     }
 
     /// return a future that resolves to a connected (handshake perfect) peer or timeout
-    pub fn connect_peer_with_timeout (&self, addr: &SocketAddr, seconds: u64) -> Box<Future<Item=PeerId, Error=SPVError> + Send> {
+    pub fn connect_peer_with_timeout (&self, pid: PeerId, seconds: u64, source: PeerSource) -> Box<Future<Item=SocketAddr, Error=SPVError> + Send> {
         use futures_timer::FutureExt;
 
-        Box::new(self.connect_peer(addr).timeout(Duration::from_secs(seconds)))
+        Box::new(self.connect_peer(pid, source).timeout(Duration::from_secs(seconds)))
     }
 
     // connect a peer
-    fn connect_peer(&self, addr: &SocketAddr) -> Box<Future<Item=PeerId, Error=SPVError> + Send> {
+    fn connect_peer(&self, pid: PeerId, source: PeerSource) -> Box<Future<Item=SocketAddr, Error=SPVError> + Send> {
         let peers = self.peers.clone();
         let waker = self.waker.clone();
 
         // initiate connection
-        match self.initiate_connect(addr) {
+        match self.initiate_connect(pid,source) {
             // connection initiated, resolve to a future that polls for handshake complete
-            Ok(pid) => Box::new(
+            Ok(addr) => Box::new(
                 future::poll_fn (move |ctx|
                     {
                         // retrieve peer from peer map
                         if let Some(peer) = peers.read().unwrap().get(&pid) {
                             // return pid if peer is connected (handshake perfect)
-                            if peer.lock().unwrap().connected.get() {
+                            if peer.lock().unwrap().connected {
                                 trace!("woke up to handshake");
-                                Ok(Async::Ready(pid))
+                                Ok(Async::Ready(addr))
                             } else {
                                 waker.lock().unwrap().insert(pid, ctx.waker().clone());
                                 Ok(Async::Pending)
@@ -201,19 +218,29 @@ impl P2P {
         }
     }
 
-    // initiate connect to peer
-    fn initiate_connect(&self, addr: &SocketAddr) -> Result<PeerId, SPVError> {
-        // new token, never re-using previously connected peer's id
-        // so log messages are easier to follow
-        let token = Token(self.next_peer_id.fetch_add(1, Ordering::Relaxed));
-        let pid = PeerId{token};
-
-        self.candidates.lock().unwrap().insert(addr.clone(), pid);
-
-        info!("trying to connect to {} peer={}", addr, pid);
+    // initiate outgoing connection to peer
+    fn initiate_connect(&self, pid: PeerId, source: PeerSource) -> Result<SocketAddr, SPVError> {
+        let outgoing;
+        let addr;
+        let stream;
+        match source {
+            PeerSource::Outgoing(a) => {
+                addr = a;
+                outgoing = true;
+                info!("trying outgoing connect to {} peer={}", addr, pid);
+                stream = TcpStream::connect(&addr)?;
+            },
+            PeerSource::Incoming(listener) => {
+                let (s, a) = listener.accept()?;
+                addr = a;
+                stream = s;
+                info!("trying incoming connect to {} peer={}", addr, pid);
+                outgoing = false;
+            }
+        };
 
         // create lock protected peer object
-        let peer = Mutex::new(Peer::new(pid, self.poll.clone(), addr, self.nonce)?);
+        let peer = Mutex::new(Peer::new(pid, stream,self.poll.clone(), outgoing)?);
 
         // add peer object to peer map shared between P2P and node
         let mut peers = self.peers.write().unwrap();
@@ -221,31 +248,40 @@ impl P2P {
         // add to peer map
         peers.insert(pid, peer);
 
-        // send this node's version message to peer
-        peers.get(&pid).unwrap().lock().unwrap().send(&P2P::version(&self.user_agent, self.nonce,
-                                                                    self.height.load(Ordering::Relaxed) as u32,
-                                                                    addr))?;
+        let stored_peer = peers.get(&pid).unwrap();
 
-        Ok(pid)
+        if outgoing {
+            stored_peer.lock().unwrap().register_write()?;
+        } else {
+            stored_peer.lock().unwrap().register_read()?;
+        }
+        if outgoing {
+            // send this node's version message to peer
+            peers.get(&pid).unwrap().lock().unwrap().send(&self.version(&addr, self.max_protocol_version))?;
+        }
+
+        Ok(addr)
     }
 
-    // compile this node's version message
-    fn version (user_agent: &String, nonce: u64, height: u32, remote: &SocketAddr) -> NetworkMessage {
+    // compile this node's version message for outgoing connections
+    fn version (&self, remote: &SocketAddr, max_protocol_version: u32) -> NetworkMessage {
         // now in unix time
         let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
 
+        let services = if self.listener.lock().unwrap().is_empty() { 0 } else { 9 };
+
         // build message
         NetworkMessage::Version(VersionMessage {
-            version: 70001, // used only to be able to disable tx relay
-            services: 0, // NODE_NONE this SPV implementation does not serve anything
+            version: min(max_protocol_version, self.max_protocol_version),
+            services,
             timestamp,
             receiver: Address::new(remote, 1),
-            // TODO: sender is only dummy
+            // sender is only dummy
             sender: Address::new(remote, 1),
-            nonce: nonce,
-            user_agent: user_agent.clone(),
-            start_height: height as i32,
-            relay: false,
+            nonce: self.nonce,
+            user_agent: self.user_agent.clone(),
+            start_height: self.height.load(Ordering::Relaxed) as i32,
+            relay: false, // there is no mempool here therefore no use for inv's of transactions
         })
     }
 
@@ -361,22 +397,70 @@ impl P2P {
                         // extract messages from the buffer
                         while let Some(msg) = decode(&mut locked_peer.read_buffer)? {
                             trace!("received {} peer={}", msg.command(), pid);
-                            // process handshake first
-                            match locked_peer.process_handshake(&msg)? {
-                                HandShake::Disconnect => {
-                                    trace!("disconnecting peer={}", pid);
-                                    // mark for disconnect outside of lock scope
-                                    disconnect = true;
-                                    break;
-                                }
-                                HandShake::Handshake => {
-                                    // mark for connected outside of lock scope
-                                    handshake = true;
-                                }
-                                HandShake::InProgress => {},
-                                HandShake::Process => {
-                                    // queue messages to process outside of locked scope
-                                    incoming.push(msg);
+                            if locked_peer.connected {
+                                // regular processing after handshake
+                                incoming.push(msg);
+                            }
+                            else {
+                                // have to get both version and verack to complete handhsake
+                                if !(locked_peer.version.is_some() && locked_peer.got_verack) {
+                                    // before handshake complete
+                                    match msg.payload {
+                                        NetworkMessage::Version(ref version) => {
+                                            if locked_peer.version.is_some() {
+                                                // repeated version
+                                                disconnect = true;
+                                                break;
+                                            }
+                                            if version.nonce == self.nonce {
+                                                // connect to myself
+                                                disconnect = true;
+                                                break;
+                                            } else {
+                                                // want to connect to full nodes supporting segwit
+                                                if false {// version.services & 9 != 9 || version.version < 70013 {
+                                                    disconnect = true;
+                                                    break;
+                                                } else {
+                                                    if !locked_peer.outgoing {
+                                                        // send own version message to incoming peer
+                                                        let addr = locked_peer.stream.peer_addr()?;
+                                                        trace!("send version to incoming connection {}", addr);
+                                                        // do not show higher version than the peer speaks
+                                                        let version = self.version (&addr, version.version);
+                                                        locked_peer.send(&version)?;
+                                                    }
+                                                    // acknowledge version message received
+                                                    locked_peer.send(&NetworkMessage::Verack)?;
+                                                    // all right, remember this peer
+                                                    info!("client {} height: {} peer={}", version.user_agent, version.start_height, pid);
+                                                    let mut vm = version.clone();
+                                                    // reduce protocol version to our capabilities
+                                                    vm.version = min (vm.version, self.max_protocol_version);
+                                                    locked_peer.version = Some(vm);
+                                                }
+                                            }
+                                        }
+                                        NetworkMessage::Verack => {
+                                            if locked_peer.got_verack {
+                                                // repeated verack
+                                                disconnect = true;
+                                                break;
+                                            }
+                                            trace!("got verack peer={}", pid);
+                                            locked_peer.got_verack = true;
+                                        }
+                                        _ => {
+                                            trace!("misbehaving peer={}", pid);
+                                            // some other message before handshake
+                                            disconnect = true;
+                                            break;
+                                        }
+                                    };
+                                    if locked_peer.version.is_some() && locked_peer.got_verack {
+                                        locked_peer.connected = true;
+                                        handshake = true;
+                                    }
                                 }
                             }
                         }
@@ -448,23 +532,32 @@ impl P2P {
 
             // iterate over events
             for event in events.iter() {
-                // construct the id of the peer the event concerns
-                let pid = PeerId { token: event.token() };
-                if let Err(error) = self.event_processor(node.clone(), event, pid, iobuf.as_mut_slice(), ctx) {
-                    warn!("error {} peer={}", error.to_string(), pid);
-                    debug!("error {:?} peer={}", error, pid);
+                // check for listener
+                if let Some(server) = self.is_listener(event.token()) {
+                    trace!("incoming connection request");
+                    ctx.executor().spawn(
+                        Box::new(self.add_peer(PeerSource::Incoming(server))
+                        .map(|_|()).or_else(|_|Ok(()))))
+                        .expect("can not spawn task for incoming connection");
+                }
+                else {
+                    // construct the id of the peer the event concerns
+                    let pid = PeerId { token: event.token() };
+                    if let Err(error) = self.event_processor(node.clone(), event, pid, iobuf.as_mut_slice(), ctx) {
+                        warn!("error {} peer={}", error.to_string(), pid);
+                        debug!("error {:?} peer={}", error, pid);
+                    }
                 }
             }
         }
     }
-}
 
-// possible outcomes of the handshake with a peer
-enum HandShake {
-    Disconnect,
-    InProgress,
-    Handshake,
-    Process
+    fn is_listener(&self, token: Token) -> Option<Arc<TcpListener>> {
+        if let Some(server) = self.listener.lock().unwrap().get(&token) {
+            return Some(server.clone())
+        }
+        None
+    }
 }
 
 /// a peer
@@ -481,8 +574,6 @@ pub struct Peer {
     write_buffer: Buffer,
     // did the remote peer already sent a verack?
     got_verack: bool,
-    // own id, needed here to recognise that remote is actually the local peer
-    nonce: u64,
     /// the version message the peer sent to us at connect
     pub version: Option<VersionMessage>,
     // channel into the event processing loop for outgoing messages
@@ -492,28 +583,37 @@ pub struct Peer {
     // is registered for write?
     writeable: AtomicBool,
     // connected and handshake complete?
-    connected: Cell<bool>,
+    connected: bool,
     // ban score
-    ban: u32
+    ban: u32,
+    // outgoing or incoming connection
+    outgoing: bool
 }
 
 impl Peer {
     /// create a new peer
-    pub fn new (pid: PeerId, poll: Arc<Poll>, addr: &SocketAddr, nonce: u64) -> Result<Peer, SPVError> {
-        let stream = TcpStream::connect(addr)?;
+    pub fn new (pid: PeerId, stream: TcpStream, poll: Arc<Poll>, outgoing: bool) -> Result<Peer, SPVError> {
         let (sender, receiver) = mpsc::channel();
         let peer = Peer{pid, poll: poll.clone(), stream, read_buffer: Buffer::new(), write_buffer: Buffer::new(),
-            got_verack: false, nonce, version: None, sender, receiver, writeable: AtomicBool::new(false),
-            connected: Cell::new(false), ban: 0 };
-        peer.register_write()?;
+            got_verack: false, version: None, sender, receiver, writeable: AtomicBool::new(false),
+            connected: false, ban: 0, outgoing };
         Ok(peer)
     }
 
-    // register for peer readable events
+    // re-register for peer readable events
     fn reregister_read(&self) -> Result<(), SPVError> {
         if self.writeable.swap(false, Ordering::Acquire) {
             trace!("re-register for read peer={}", self.pid);
             self.poll.reregister(&self.stream, self.pid.token, Ready::readable() | UnixReady::error() | UnixReady::hup(), PollOpt::level())?;
+        }
+        Ok(())
+    }
+
+    // register for peer readable events
+    fn register_read(&self) -> Result<(), SPVError> {
+        if self.writeable.swap(false, Ordering::Acquire) {
+            trace!("register for read peer={}", self.pid);
+            self.poll.register(&self.stream, self.pid.token, Ready::readable() | UnixReady::error() | UnixReady::hup(), PollOpt::level())?;
         }
         Ok(())
     }
@@ -536,7 +636,6 @@ impl Peer {
         Ok(())
     }
 
-
     // register for peer writable events
     fn register_write(&self) -> Result<(), SPVError> {
         if !self.writeable.swap(true, Ordering::Acquire) {
@@ -554,58 +653,6 @@ impl Peer {
         } else {
             None
         }
-    }
-
-    // process handshake, returning:
-    // Handshake::Disconnect - for misbehaving or useless remote peers
-    // Handshake::InProgress - for handshake in progress that may still fail
-    // Handshake::Handshake - for finished handshake, this will be returned only once
-    // Handshake::Process - handshake was perfect, go ahead with regular processing
-    fn process_handshake(&mut self, msg: &RawNetworkMessage) -> Result<HandShake, SPVError> {
-        if !(self.version.is_some() && self.got_verack) {
-            // before handshake complete
-            match msg.payload {
-                NetworkMessage::Version(ref version) => {
-                    if self.version.is_some() {
-                        return Ok(HandShake::Disconnect);
-                    }
-
-                    if version.nonce == self.nonce {
-                        return Ok(HandShake::Disconnect);
-                    } else {
-                        // want to connect to full nodes upporting segwit
-                        if version.services & 9 != 9 || version.version < 70013 {
-                            return Ok(HandShake::Disconnect);
-                        } else {
-                            // acknowledge version message received
-                            self.send(&NetworkMessage::Verack)?;
-                            // all right, remember this peer
-                            info!("client {} height: {} peer={}", version.user_agent, version.start_height, self.pid);
-                            self.version = Some(version.clone());
-                        }
-                    }
-                }
-                NetworkMessage::Verack => {
-                    if self.got_verack {
-                        return Ok(HandShake::Disconnect);
-                    }
-                    trace!("got verack peer={}", self.pid);
-                    self.got_verack = true;
-                }
-                _ => {
-                    trace!("misbehaving peer={}", self.pid);
-                    return Ok(HandShake::Disconnect);
-                }
-            };
-            if self.version.is_some() && self.got_verack {
-                self.connected.set(true);
-                return Ok(HandShake::Handshake)
-            }
-            else {
-                return Ok(HandShake::InProgress)
-            }
-        }
-        Ok(HandShake::Process)
     }
 }
 
