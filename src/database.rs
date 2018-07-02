@@ -112,31 +112,18 @@ impl<'a> DBTX<'a> {
     ///   * peers - list of known peers
     pub fn create_tables(&self) -> Result<u32, SPVError> {
         trace!("creating tables...");
-        self.tx.execute("create table if not exists ids (
-                                hash blob(32) primary key
-                                )", &[])?;
 
         self.tx.execute("create table if not exists tip (
-                                id integer
+                                id blob(32)
                                 )", &[])?;
 
         self.tx.execute("create table if not exists header (
-                                id integer primary key,
+                                id blob(32) primary key,
                                 data blob
                                 )", &[])?;
 
-        self.tx.execute("create table if not exists blk_tx (
-                                blk integer,
-                                tx integer,
-                                snr integer
-                                )", &[])?;
-
-        self.tx.execute("create index if not exists blk_ix on blk_tx (blk)", &[])?;
-        self.tx.execute("create index if not exists tx_ix on blk_tx (tx)", &[])?;
-        self.tx.execute("create unique index if not exists tx_blk_ix on blk_tx (blk, tx)", &[])?;
-
         self.tx.execute("create table if not exists tx (
-                                id integer primary key,
+                                id blob(32) primary key,
                                 data blob
                                 )", &[])?;
 
@@ -146,6 +133,11 @@ impl<'a> DBTX<'a> {
                                 services integer,
                                 last_seen integer,
                                 banned_until integer)", &[])?;
+
+        self.tx.execute("create table if not exists filters (
+                                id blob(32) primary key,
+                                prev_id blob(32),
+                                content blob)", &[])?;
 
         self.tx.execute("create table if not exists birth (inception integer)", &[])?;
 
@@ -244,119 +236,51 @@ impl<'a> DBTX<'a> {
         Err(SPVError::Generic("no useful peers in the database"))
     }
 
-    /// get the integer proxy for a hash. All tables use integers mapped here for better performance.
-    pub fn get_id(&self, hash: &Sha256dHash) -> Result<i64, SPVError> {
-        Ok(self.tx.query_row("select rowid from ids where hash = ?",
-                             &[&encode(hash)?],
-                             |row| {
-                                 row.get(0)
-                             })?)
-    }
-
-    /// get a hash for the integer id. All tables use integers mapped here for better performance.
-    pub fn get_hash(&self, id: i64) -> Result<Sha256dHash, SPVError> {
-        decode(self.tx.query_row("select hash from ids where rowid = ?",
-                                 &[&id], |row| { row.get(0) })?)
-    }
-
-    /// insert an id for a hash. All tables use integers mapped here for better performance.
-    pub fn insert_id(&self, hash: &Sha256dHash) -> Result<i64, SPVError> {
-        self.tx.execute("insert into ids (hash) values (?)", &[&encode(hash)?])?;
-        Ok(self.tx.last_insert_rowid())
-    }
-
-    /// get or insert an id for a hash. All tables use integers mapped here for better performance.
-    pub fn get_or_insert_id(&self, hash: &Sha256dHash) -> Result<i64, SPVError> {
-        if let Ok(id) = self.get_id(hash) {
-            Ok(id)
-        } else {
-            self.insert_id(hash)
-        }
-    }
-
     /// Set the highest hash for the chain with most work
     pub fn set_tip(&self, hash: &Sha256dHash) -> Result<(), SPVError> {
         trace!("storing tip {}", hash);
-        let id = self.get_or_insert_id(hash)?;
-        if self.get_tip().is_err() {
-            self.tx.execute("delete from tip", &[]).map(|_| { () })?;
-            Ok(self.tx.execute("insert into tip (id) values (?)", &[&id]).map(|_| { () })?)
-        } else {
-            Ok(self.tx.execute("update tip set id = ? where rowid = 1", &[&id]).map(|_| { () })?)
-        }
+        self.tx.execute("delete from tip", &[]).map(|_| { () })?;
+        Ok(self.tx.execute("insert into tip (id) values (?)", &[&encode(hash)?]).map(|_| { () })?)
     }
 
     /// Get the hash of the highest hash on the chain with most work
     pub fn get_tip(&self) -> Result<Sha256dHash, SPVError> {
-        self.get_hash(self.tx.query_row("select id from tip where rowid = 1",
+        decode(self.tx.query_row("select id from tip where rowid = 1",
                                         &[], |row| { row.get(0) })?)
     }
 
     /// Store a header into the DB. This method will return an error if the header is already stored.
-    pub fn insert_header(&self, header: &BlockHeader) -> Result<i64, SPVError> {
+    pub fn insert_header(&self, header: &BlockHeader) -> Result<(), SPVError> {
         let hash = header.bitcoin_hash();
-        let id = self.insert_id(&hash)?;
         self.tx.execute("insert into header (id, data) values (?, ?)",
-                        &[&id, &encode(header)?])?;
+                        &[&encode(&hash)?, &encode(header)?])?;
         trace!("stored header {}", hash);
-        Ok(id)
+        Ok(())
     }
 
     /// Get a stored header. This method will return an error for an unknown header.
     pub fn get_header(&self, hash: &Sha256dHash) -> Result<BlockHeader, SPVError> {
-        let id = self.get_id(hash)?;
         decode(self.tx.query_row("select data from header where id = ?",
-                                 &[&id], |row| { row.get(0) })?)
+                                 &[&encode(hash)?], |row| { row.get(0) })?)
     }
 
     /// Insert a transaction. This method will NOT return an error if the transaction is already known.
-    pub fn insert_transaction(&self, transaction: &Transaction) -> Result<i64, SPVError> {
-        if let Ok(id) = self.get_id(&transaction.txid()) {
-            Ok(id)
+    pub fn insert_transaction(&self, transaction: &Transaction) -> Result<(), SPVError> {
+        if let Ok(_) = self.get_transaction(&transaction.txid()) {
+            Ok(())
         } else {
-            let id = self.insert_id(&transaction.bitcoin_hash())?;
+            let hash = transaction.txid();
             self.tx.execute("insert into tx (id, data) values (?, ?)",
-                            &[&id, &encode(transaction)?])?;
-            Ok(id)
+                            &[&encode(&hash)?, &encode(transaction)?])?;
+            Ok(())
         }
     }
 
     /// Retrieve a stored transaction. This method will return an error if the transaction was not stored
     #[allow(dead_code)]
     pub fn get_transaction(&self, hash: &Sha256dHash) -> Result<Transaction, SPVError> {
-        let id = self.get_id(hash)?;
         decode(self.tx.query_row("select data from tx where id = ?",
-                                 &[&id], |row| { row.get(0) })?)
-    }
-
-    /// Store a block. It is OK to store a block after its header was stored.
-    pub fn insert_block(&self, block: &Block) -> Result<(), SPVError> {
-        let hid: i64;
-        if let Ok(id) = self.get_id(&block.header.bitcoin_hash()) {
-            hid = id;
-        } else {
-            hid = self.insert_header(&block.header)?;
-        }
-        for (nr, transaction) in block.txdata.iter().enumerate() {
-            let tid = self.insert_transaction(transaction)?;
-            self.tx.execute("insert into blk_tx (blk, tx, snr) values (?, ?, ?)", &[&hid, &tid, &(nr as i64)])?;
-        }
-        info!("stored block {}", block.header.bitcoin_hash());
-        Ok(())
-    }
-
-    /// Retrieve a block
-    #[allow(dead_code)]
-    pub fn get_block(&self, hash: &Sha256dHash) -> Result<Block, SPVError> {
-        let bid = self.get_id(hash)?;
-        let header = self.get_header(hash)?;
-        let mut stmt = self.tx.prepare("select tx.data from blk_tx inner join tx on blk_tx.tx = tx.id where blk_tx.blk = ? order by blk_tx.snr")?;
-        let iter = stmt.query_map(&[&bid], |row| { row.get(0) })?;
-        let mut txdata: Vec<Transaction> = Vec::new();
-        for data in iter {
-            txdata.push(decode(data?)?);
-        }
-        Ok(Block { header, txdata })
+                                 &[&encode(hash)?], |row| { row.get(0) })?)
     }
 
     /// Return headers in ascending hight order. (genesis, tip]
@@ -410,19 +334,6 @@ mod test {
         let header = tx.get_header(&genesis.header.bitcoin_hash()).unwrap();
         assert_eq!(header.bitcoin_hash(), genesis.bitcoin_hash());
         tx.set_tip(&genesis.header.bitcoin_hash()).unwrap();
-        tx.commit().unwrap();
-    }
-
-    #[test]
-    fn test_db2() {
-        let mut db = DB::mem().unwrap();
-        let tx = db.transaction().unwrap();
-        tx.create_tables().unwrap();
-        let genesis = constants::genesis_block(network::constants::Network::Bitcoin);
-        tx.insert_block(&genesis).unwrap();
-        let block = tx.get_block(&genesis.header.bitcoin_hash()).unwrap();
-        assert_eq!(block.bitcoin_hash(), genesis.bitcoin_hash());
-        assert_eq!(block.txdata.get(0), genesis.txdata.get(0));
         tx.commit().unwrap();
     }
 }

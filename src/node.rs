@@ -334,7 +334,8 @@ impl Node {
 					// store a block if it is on the chain with most work
 					let mut db = self.db.lock().unwrap();
 					let tx = db.transaction()?;
-					tx.insert_block(&block)?;
+					// TODO filter instead
+                    //tx.insert_block(&block)?;
 					tx.commit()?;
 				}
 				// send new block to lighning connector
