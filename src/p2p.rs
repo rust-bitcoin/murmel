@@ -218,7 +218,7 @@ impl P2P {
         }
     }
 
-    // initiate outgoing connection to peer
+    // initiate connection to peer
     fn initiate_connect(&self, pid: PeerId, source: PeerSource) -> Result<SocketAddr, SPVError> {
         let outgoing;
         let addr;
