@@ -59,7 +59,7 @@ impl SPV {
         let birth = create_tables(db.clone())?;
         let peers = Arc::new(RwLock::new(PeerMap::new()));
         let p2p = Arc::new(P2P::new(user_agent, network, 0, peers.clone(), db.clone(), MAX_PROTOCOL_VERSION));
-        let node = Arc::new(Node::new(p2p.clone(), network, db.clone(), birth, peers.clone()));
+        let node = Arc::new(Node::new(p2p.clone(), network, db.clone(), true, peers.clone()));
         Ok(SPV{ node, p2p, thread_pool, db: db.clone() })
     }
 
@@ -75,7 +75,7 @@ impl SPV {
         let birth = create_tables(db.clone())?;
         let peers = Arc::new(RwLock::new(PeerMap::new()));
         let p2p = Arc::new(P2P::new(user_agent, network, 0, peers.clone(), db.clone(), MAX_PROTOCOL_VERSION));
-        let node = Arc::new(Node::new(p2p.clone(), network, db.clone(), birth, peers.clone()));
+        let node = Arc::new(Node::new(p2p.clone(), network, db.clone(), true, peers.clone()));
         Ok(SPV{ node, p2p, thread_pool, db: db.clone()})
     }
 

@@ -48,3 +48,4 @@ pub mod spv;
 mod blockfilter;
 mod p2p;
 mod dns;
+mod tasks;

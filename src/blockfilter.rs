@@ -23,8 +23,7 @@
 
 use bitcoin;
 use bitcoin::blockdata::block::Block;
-use bitcoin::blockdata::transaction::Transaction;
-use bitcoin::blockdata::opcodes::All::OP_RETURN;
+use bitcoin::blockdata::script::Script;
 use bitcoin::network::encodable::{ConsensusDecodable, ConsensusEncodable};
 use bitcoin::network::encodable::VarInt;
 use bitcoin::network::serialize::{RawDecoder, RawEncoder};
@@ -34,10 +33,32 @@ use siphasher::sip::SipHasher;
 use std::cmp;
 use std::collections::HashSet;
 use std::hash::Hasher;
+use std::io::Cursor;
 use std::io;
 
 const P: u8 = 19;
 const M: u64 = 784931;
+
+/// a computed or read block filter
+pub struct BlockFilter {
+    pub block: Sha256dHash,
+    pub filter_type: u8,
+    pub content: Vec<u8>
+}
+
+impl BlockFilter {
+
+    pub fn compute_wallet_filter (block: &Block, utxo: impl UTXOAccessor) -> Result<BlockFilter, io::Error> {
+        let mut bytes = Vec::new();
+        let mut out = Cursor::new(&mut bytes);
+        {
+            let mut writer = BlockFilterWriter::new(&mut out, block);
+            writer.wallet_filter(utxo)?;
+            writer.finish()?;
+        }
+        Ok(BlockFilter{block: block.bitcoin_hash(), filter_type: 1, content: out.into_inner().to_vec()})
+    }
+}
 
 /// Compiles and writes a block filter
 pub struct BlockFilterWriter<'a> {
@@ -53,10 +74,6 @@ impl <'a> BlockFilterWriter<'a> {
         BlockFilterWriter { block, writer }
     }
 
-    fn is_op_return (script: &Vec<u8>) -> bool {
-        (script.len() > 0) && (script[0] == OP_RETURN as u8)
-    }
-
     /// Add output scripts of the block - excluding OP_RETURN scripts
     fn add_output_scripts (&mut self) {
         for transaction in &self.block.txdata {
@@ -69,12 +86,12 @@ impl <'a> BlockFilterWriter<'a> {
     }
 
     /// Add consumed output scripts of a block to filter
-    fn add_consumed_scripts (&mut self, tx_accessor: impl TxAccessor) -> Result<(), io::Error> {
+    fn add_consumed_scripts (&mut self, tx_accessor: impl UTXOAccessor) -> Result<(), io::Error> {
         for transaction in &self.block.txdata {
             if !transaction.is_coin_base() {
                 for input in &transaction.input {
-                    let tx = tx_accessor.get_tx(&input.prev_hash)?;
-                    self.writer.add_element(tx.output[input.prev_index as usize].script_pubkey.data().as_slice());
+                    let (script, _) = tx_accessor.get_utxo(&input.prev_hash, input.prev_index)?;
+                    self.writer.add_element(script.data().as_slice());
                 }
             }
         }
@@ -82,7 +99,7 @@ impl <'a> BlockFilterWriter<'a> {
     }
 
     /// compile a filter useful for wallets
-    pub fn wallet_filter (&mut self, tx_accessor: impl TxAccessor) -> Result<(), io::Error> {
+    pub fn wallet_filter (&mut self, tx_accessor: impl UTXOAccessor) -> Result<(), io::Error> {
         self.add_output_scripts();
         self.add_consumed_scripts(tx_accessor)
     }
@@ -93,8 +110,8 @@ impl <'a> BlockFilterWriter<'a> {
     }
 }
 
-pub trait TxAccessor {
-    fn get_tx(&self, txid: &Sha256dHash) -> Result<Transaction, io::Error>;
+pub trait UTXOAccessor {
+    fn get_utxo(&self, txid: &Sha256dHash, ix: u32) -> Result<(Script, u64), io::Error>;
 }
 
 fn encode<T: ? Sized>(data: &T) -> Result<Vec<u8>, io::Error>
@@ -401,10 +418,10 @@ mod test {
             .map_err(|_| { io::Error::new(io::ErrorKind::InvalidData, "serialization error") })?)
     }
 
-    impl TxAccessor for HashMap<Sha256dHash, Transaction> {
-        fn get_tx(&self, txid: &Sha256dHash) -> Result<Transaction, io::Error> {
-            if let Some (tx) = self.get(txid) {
-                Ok(tx.clone())
+    impl UTXOAccessor for HashMap<(Sha256dHash, u32), (Script, u64)> {
+        fn get_utxo(&self, txid: &Sha256dHash, ix: u32) -> Result<(Script, u64), io::Error> {
+            if let Some (ux) = self.get(&(*txid, ix)) {
+                Ok(ux.clone())
             }
             else {
                 println!("missing {}", txid);
@@ -434,13 +451,17 @@ mod test {
             assert_eq!(block.bitcoin_hash(), block_hash);
 
             for tx in &block.txdata {
-                txmap.insert(tx.txid(), tx.clone());
+                for (ix, out) in tx.output.iter().enumerate() {
+                    txmap.insert((tx.txid(), ix as u32), (out.script_pubkey.clone(), out.value));
+                }
             }
             for i in 1 .. 9 {
                 let line = txs[i].as_array().unwrap();
-                let tx: Transaction = decode(hex::decode(line[1].as_string().unwrap()).unwrap()).unwrap();
+                let tx: bitcoin::blockdata::transaction::Transaction = decode(hex::decode(line[1].as_string().unwrap()).unwrap()).unwrap();
                 assert_eq!(tx.txid().to_string(), line[0].as_string().unwrap());
-                txmap.insert(tx.txid(), tx);
+                for (ix, out) in tx.output.iter().enumerate() {
+                    txmap.insert((tx.txid(), ix as u32), (out.script_pubkey.clone(), out.value));
+                }
             }
 
             let test_filter = hex::decode(test_case[4].as_string().unwrap()).unwrap();

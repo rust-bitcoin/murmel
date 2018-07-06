@@ -487,7 +487,7 @@ impl P2P {
                     // as process could call back to P2P
                     for msg in incoming {
                         trace!("processing {} for peer={}", msg.command(), pid);
-                        match node.process (&msg.payload, pid)? {
+                        match node.process (&msg.payload, pid, ctx)? {
                             ProcessResult::Ack => { trace!("ack {} peer={}", msg.command(), pid); },
                             ProcessResult::Ignored => { trace!("ignored {} peer={}", msg.command(), pid); }
                             ProcessResult::Ban(increment) => {
@@ -520,6 +520,7 @@ impl P2P {
     /// this method does not return unless there is an error obtaining network events
     /// run in its own thread, which will process all network events
     pub fn run(&self, node: Arc<Node>, ctx: &mut Context) -> Result<(), io::Error>{
+        node.init_before_p2p(ctx);
         trace!("start mio event loop");
         loop {
             // events buffer
@@ -544,8 +545,10 @@ impl P2P {
                     // construct the id of the peer the event concerns
                     let pid = PeerId { token: event.token() };
                     if let Err(error) = self.event_processor(node.clone(), event, pid, iobuf.as_mut_slice(), ctx) {
+                        use std::error::Error;
+
                         warn!("error {} peer={}", error.to_string(), pid);
-                        debug!("error {:?} peer={}", error, pid);
+                        debug!("error {:?} peer={}", error.cause(), pid);
                     }
                 }
             }
@@ -611,10 +614,9 @@ impl Peer {
 
     // register for peer readable events
     fn register_read(&self) -> Result<(), SPVError> {
-        if self.writeable.swap(false, Ordering::Acquire) {
-            trace!("register for read peer={}", self.pid);
-            self.poll.register(&self.stream, self.pid.token, Ready::readable() | UnixReady::error() | UnixReady::hup(), PollOpt::level())?;
-        }
+        trace!("register for read peer={}", self.pid);
+        self.poll.register(&self.stream, self.pid.token, Ready::readable() | UnixReady::error() | UnixReady::hup(), PollOpt::level())?;
+        self.writeable.store(false, Ordering::Relaxed);
         Ok(())
     }
 
@@ -638,10 +640,9 @@ impl Peer {
 
     // register for peer writable events
     fn register_write(&self) -> Result<(), SPVError> {
-        if !self.writeable.swap(true, Ordering::Acquire) {
-            trace!("register for write peer={}", self.pid);
-            self.poll.register(&self.stream, self.pid.token, Ready::writable() | UnixReady::error() | UnixReady::hup(), PollOpt::level())?;
-        }
+        trace!("register for write peer={}", self.pid);
+        self.poll.register(&self.stream, self.pid.token, Ready::writable() | UnixReady::error() | UnixReady::hup(), PollOpt::level())?;
+        self.writeable.store(true, Ordering::Relaxed);
         Ok(())
     }
 

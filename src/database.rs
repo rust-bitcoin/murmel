@@ -20,15 +20,17 @@
 //!
 
 
-use bitcoin::blockdata::block::Block;
-use bitcoin::blockdata::block::BlockHeader;
+use bitcoin::blockdata::block::{BlockHeader, Block};
 use bitcoin::blockdata::transaction::Transaction;
+use bitcoin::blockdata::script::Script;
 use bitcoin::network::encodable::{ConsensusDecodable, ConsensusEncodable};
 use bitcoin::network::serialize::{RawDecoder, RawEncoder};
 use bitcoin::network::serialize::BitcoinHash;
 use bitcoin::network::serialize::serialize;
 use bitcoin::network::address::Address;
 use bitcoin::util::hash::Sha256dHash;
+use bitcoin_chain::blockchain::Blockchain;
+use blockfilter::BlockFilter;
 use error::SPVError;
 use rusqlite;
 use rusqlite::Connection;
@@ -41,6 +43,9 @@ use std::time::UNIX_EPOCH;
 use std::net::SocketAddr;
 use rand;
 use rand::Rng;
+
+// maximum number of blocks UTXO can unwind
+const UNWIND_LIMIT :i64 = 100;
 
 /// Database interface to connect
 /// start, commit or rollback transactions
@@ -114,17 +119,41 @@ impl<'a> DBTX<'a> {
         trace!("creating tables...");
 
         self.tx.execute("create table if not exists tip (
-                                id blob(32)
+                                headers blob(32),
+                                filters blob(32)
                                 )", &[])?;
 
         self.tx.execute("create table if not exists header (
                                 id blob(32) primary key,
+                                prev blob(32),
                                 data blob
                                 )", &[])?;
 
-        self.tx.execute("create table if not exists tx (
-                                id blob(32) primary key,
-                                data blob
+        self.tx.execute("create table if not exists utxo (
+                                id blob(32),
+                                ix integer,
+                                script blob,
+                                amount integer,
+                                block blob(32),
+                                primary key(id, ix)
+                                )", &[])?;
+
+        self.tx.execute("create index if not exists utxo_block on utxo (block)", &[])?;
+
+        self.tx.execute("create table if not exists utxo_unwind (
+                                id blob(32),
+                                ix integer,
+                                script blob,
+                                amount integer,
+                                was_block blob(32),
+                                block blob(32),
+                                primary key(id, ix)
+                                )", &[])?;
+
+        self.tx.execute("create index if not exists utxo_unwind_block on utxo_unwind (block)", &[])?;
+
+        self.tx.execute("create table if not exists unwindable (
+                                id blob(32)
                                 )", &[])?;
 
         self.tx.execute("create table if not exists peers (
@@ -135,9 +164,12 @@ impl<'a> DBTX<'a> {
                                 banned_until integer)", &[])?;
 
         self.tx.execute("create table if not exists filters (
-                                id blob(32) primary key,
-                                prev_id blob(32),
-                                content blob)", &[])?;
+                                block blob(32),
+                                filter_type integer,
+                                filter_id blob(32),
+                                content blob,
+                                primary key(block, filter_type)
+                                )", &[])?;
 
         self.tx.execute("create table if not exists birth (inception integer)", &[])?;
 
@@ -237,24 +269,23 @@ impl<'a> DBTX<'a> {
     }
 
     /// Set the highest hash for the chain with most work
-    pub fn set_tip(&self, hash: &Sha256dHash) -> Result<(), SPVError> {
-        trace!("storing tip {}", hash);
+    pub fn set_tip(&self, headers: &Sha256dHash) -> Result<(), SPVError> {
+        trace!("storing tip {}", headers);
         self.tx.execute("delete from tip", &[]).map(|_| { () })?;
-        Ok(self.tx.execute("insert into tip (id) values (?)", &[&encode(hash)?]).map(|_| { () })?)
+        Ok(self.tx.execute("insert into tip (headers) values (?)", &[&encode(headers)?]).map(|_| { () })?)
     }
 
     /// Get the hash of the highest hash on the chain with most work
     pub fn get_tip(&self) -> Result<Sha256dHash, SPVError> {
-        decode(self.tx.query_row("select id from tip where rowid = 1",
+        decode(self.tx.query_row("select headers from tip",
                                         &[], |row| { row.get(0) })?)
     }
 
     /// Store a header into the DB. This method will return an error if the header is already stored.
     pub fn insert_header(&self, header: &BlockHeader) -> Result<(), SPVError> {
         let hash = header.bitcoin_hash();
-        self.tx.execute("insert into header (id, data) values (?, ?)",
-                        &[&encode(&hash)?, &encode(header)?])?;
-        trace!("stored header {}", hash);
+        self.tx.execute("insert into header (id, prev, data) values (?, ?, ?)",
+                        &[&encode(&hash)?, &encode(&header.prev_blockhash)?, &encode(header)?])?;
         Ok(())
     }
 
@@ -264,51 +295,118 @@ impl<'a> DBTX<'a> {
                                  &[&encode(hash)?], |row| { row.get(0) })?)
     }
 
-    /// Insert a transaction. This method will NOT return an error if the transaction is already known.
-    pub fn insert_transaction(&self, transaction: &Transaction) -> Result<(), SPVError> {
-        if let Ok(_) = self.get_transaction(&transaction.txid()) {
-            Ok(())
-        } else {
-            let hash = transaction.txid();
-            self.tx.execute("insert into tx (id, data) values (?, ?)",
-                            &[&encode(&hash)?, &encode(transaction)?])?;
-            Ok(())
+    pub fn previous_processed (&self, block: &Block) -> Result<bool, SPVError> {
+        let prev_block = block.header.prev_blockhash;
+        if prev_block == Sha256dHash::default() {
+            return Ok(true)
+        }
+        match self.tx.query_row("select id from filters where block = ?", &[&encode(&prev_block)?], |_| true ) {
+            Ok(_) => Ok(true),
+            Err(_) => Ok(false)
         }
     }
 
     /// Retrieve a stored transaction. This method will return an error if the transaction was not stored
-    #[allow(dead_code)]
-    pub fn get_transaction(&self, hash: &Sha256dHash) -> Result<Transaction, SPVError> {
-        decode(self.tx.query_row("select data from tx where id = ?",
-                                 &[&encode(hash)?], |row| { row.get(0) })?)
+    pub fn get_utxo(&self, hash: &Sha256dHash, ix: u32) -> Result<(Script, u64), SPVError> {
+        let r = self.tx.query_row("select script, amount from utxo where id = ? and ix = ?",
+                                 &[&encode(hash)?, &ix],
+                             |row| -> Result<(Script, i64), SPVError> { Ok((decode(row.get(0))?, row.get(1))) })?;
+        match r {
+            Err(e) => Err(e),
+            Ok((s, v)) => Ok((s, v as u64))
+        }
     }
 
-    /// Return headers in ascending hight order. (genesis, tip]
-    pub fn get_headers(&self, genesis: &Sha256dHash, tip: &Sha256dHash) -> Result<Vec<BlockHeader>, SPVError> {
-        let mut result = Vec::new();
-        let mut current = *tip;
-        while current != *genesis {
-            let header = self.get_header(&current)?;
-            result.push(header);
-            current = header.prev_blockhash;
+
+    pub fn update_utxos(&self, block: &Block) -> Result<(), SPVError> {
+        debug!("add utxos for {}", block.bitcoin_hash());
+        let block_id = &encode(&block.bitcoin_hash())?;
+
+        let mut insert_unwind = self.tx.prepare("insert into utxo_unwind (id, ix, script, amount, was_block, block) values (?, ?, ?, ?, ?, ?)")?;
+        let mut insert_utxo = self.tx.prepare("insert into utxo (id, ix, script, amount, block) values (?, ?, ?, ?, ?)")?;
+        let mut delete_utxo = self.tx.prepare("delete from utxo where id = ? and ix = ?")?;
+        let mut get_utxo = self.tx.prepare("select script, amount, block from utxo where id = ? and ix = ?")?;
+
+        for transaction in &block.txdata {
+            let txid = transaction.txid();
+            let txhash = &encode(&txid)?;
+
+            for (ix, out) in transaction.output.iter().enumerate() {
+                if !out.script_pubkey.is_op_return() {
+                    insert_utxo.execute(&[txhash, &(ix as u32), &encode(&out.script_pubkey.data())?, &(out.value as i64), block_id])?;
+                }
+            }
+            if !transaction.is_coin_base() {
+                for input in &transaction.input {
+                    let prev = &encode(&input.prev_hash)?;
+                    delete_utxo.execute(&[prev, &input.prev_index])?;
+
+                    if let Ok(spent) = get_utxo.query_row(&[&encode(&input.prev_hash)?, &input.prev_index],
+                                       |row| -> Result<(Script, i64, Sha256dHash), SPVError> {
+                                           Ok((decode(row.get(0))?, row.get(1), decode(row.get(2))?))}) {
+                        if let Ok((script, amount, was_block)) = spent {
+                            insert_unwind.execute(&[prev, &(input.prev_index),
+                                &script.data(), &amount, &encode(&was_block)?, block_id])?;
+                        }
+                    }
+                }
+            }
         }
-        result.reverse();
-        Ok(result)
+        self.tx.execute("insert into unwindable (id) values (?)", &[block_id])?;
+        let forget = self.tx.last_insert_rowid() - UNWIND_LIMIT;
+        if forget > 0 {
+            if let Ok(blob) = self.tx.query_row("select id from unwindable where rowid = ?", &[&forget], |row| -> Vec<u8> { row.get(0) } ) {
+                self.tx.execute("delete from utxo_unwind where block = ?", &[&blob])?;
+                self.tx.execute("delete from unwindable where id = ?", &[&blob])?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn unwind_utxos(&self, block_hash: &Sha256dHash) -> Result<(), SPVError> {
+        debug!("unwind utxos for {}", block_hash);
+        let block_id = &encode(block_hash)?;
+        self.tx.execute("delete from utxo where block = ?", &[&encode(block_id)?])?;
+        self.tx.execute("insert into utxo (id, ix, script, amount, block)
+                              select id, ix, script, amount, was_block from utxo_unwind
+                              where block = ?", &[block_id])?;
+        Ok(())
+    }
+
+    /// read headers into an in-memory tree, return the number of headers on trunk
+    pub fn get_headers(&self, blockchain: &mut Blockchain) -> Result<u32, SPVError> {
+        let mut get_prev = self.tx.prepare("select prev from header where id = ?")?;
+        let mut get_header = self.tx.prepare("select data from header where id = ?")?;
+
+        let mut trunk = Vec::new();
+        if let Ok(mut current) = self.get_tip() {
+            trunk.push(current);
+            while current != blockchain.genesis_hash() {
+                let prev: Sha256dHash = decode(get_prev.query_row(&[&encode(&current)?], |r| r.get(0))?)?;
+                trunk.push(prev);
+                current = prev;
+            }
+            let mut reverse = trunk.iter().rev();
+            reverse.next(); // skip genesis
+            for hash in reverse {
+                blockchain.add_header(decode(get_header.query_row(&[&encode(hash)?], |r| r.get(0))?)?)?;
+            }
+            return Ok(trunk.len() as u32 - 1);
+        }
+        Ok(0)
     }
 }
 
 fn decode<T: ? Sized>(data: Vec<u8>) -> Result<T, SPVError>
     where T: ConsensusDecodable<RawDecoder<Cursor<Vec<u8>>>> {
     let mut decoder: RawDecoder<Cursor<Vec<u8>>> = RawDecoder::new(Cursor::new(data));
-    Ok(ConsensusDecodable::consensus_decode(&mut decoder)
-        .map_err(|_| { Error::InvalidParameterName("serialization error".to_owned()) })?)
+    ConsensusDecodable::consensus_decode(&mut decoder).map_err(|e| { SPVError::Util(e) })
 }
 
 
 fn encode<T: ? Sized>(data: &T) -> Result<Vec<u8>, SPVError>
     where T: ConsensusEncodable<RawEncoder<Cursor<Vec<u8>>>> {
-    Ok(serialize(data)
-        .map_err(|_| { Error::InvalidParameterName("serialization error".to_owned()) })?)
+    serialize(data).map_err(|e| { SPVError::Util(e) })
 }
 
 

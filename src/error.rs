@@ -21,6 +21,7 @@
 
 
 use rusqlite;
+use bitcoin::util;
 use std::convert;
 use std::error::Error;
 use std::fmt;
@@ -33,7 +34,9 @@ pub enum SPVError {
     /// Network IO error
     IO(io::Error),
     /// Database error
-    DB(rusqlite::Error)
+    DB(rusqlite::Error),
+    /// Bitcoin util error
+    Util(util::Error)
 }
 
 impl Error for SPVError {
@@ -41,7 +44,8 @@ impl Error for SPVError {
         match *self {
             SPVError::Generic(ref s) => s,
             SPVError::IO(ref err) => err.description(),
-            SPVError::DB(ref err) => err.description()
+            SPVError::DB(ref err) => err.description(),
+            SPVError::Util(ref err) => err.description()
         }
     }
 
@@ -49,7 +53,8 @@ impl Error for SPVError {
         match *self {
             SPVError::Generic(_) => None,
             SPVError::IO(ref err) => Some(err),
-            SPVError::DB(ref err) => Some(err)
+            SPVError::DB(ref err) => Some(err),
+            SPVError::Util(ref err) => Some(err)
         }
     }
 }
@@ -62,6 +67,7 @@ impl fmt::Display for SPVError {
             SPVError::Generic(ref s) => write!(f, "Generic: {}", s),
             SPVError::IO(ref err) => write!(f, "IO error: {}", err),
             SPVError::DB(ref err) => write!(f, "DB error: {}", err),
+            SPVError::Util(ref err) => write!(f, "Util error: {}", err),
         }
     }
 }
@@ -84,6 +90,13 @@ impl convert::From<SPVError> for io::Error {
 impl convert::From<io::Error> for SPVError {
     fn from(err: io::Error) -> SPVError {
         SPVError::IO(err)
+    }
+}
+
+
+impl convert::From<util::Error> for SPVError {
+    fn from(err: util::Error) -> SPVError {
+        SPVError::Util(err)
     }
 }
 
