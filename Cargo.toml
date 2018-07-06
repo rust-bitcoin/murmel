@@ -19,7 +19,7 @@ name = "bitcoin_spv"
 path = "src/bin/main.rs"
 
 [dependencies]
-bitcoin = "0.13"
+bitcoin = { version = "0.13", features = ["bitcoinconsensus"] }
 bitcoin-chain = { git = "https://github.com/tamasblummer/rust-bitcoin-chain", branch = "send" }
 lightning = { git = "https://github.com/rust-bitcoin/rust-lightning", branch = "master" }
 mio = "0.6"
@@ -27,7 +27,7 @@ rand = "0.4"
 siphasher = "0.2"
 log = "0.4"
 simple_logger = "0.5.0"
-rusqlite = "0.13.0"
+rusqlite = { version = "0.13.0", features = ["bundled"] }
 futures={ git= "https://github.com/tamasblummer/futures-rs.git", tag = "0.2.1" }
 futures-timer= { git= "https://github.com/tamasblummer/futures-timer.git", branch = "futures_0.2.1" }
 
