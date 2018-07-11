@@ -30,7 +30,7 @@ use std::io;
 /// An error class to offer a unified error interface upstream
 pub enum SPVError {
     /// generic error message
-    Generic(&'static str),
+    Generic(String),
     /// Network IO error
     IO(io::Error),
     /// Database error
