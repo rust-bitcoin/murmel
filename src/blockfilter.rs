@@ -86,7 +86,7 @@ impl <'a> BlockFilterWriter<'a> {
     }
 
     /// Add consumed output scripts of a block to filter
-    fn add_consumed_scripts (&mut self, tx_accessor: impl UTXOAccessor) -> Result<(), io::Error> {
+    fn add_consumed_scripts (&mut self, mut tx_accessor: impl UTXOAccessor) -> Result<(), io::Error> {
         for transaction in &self.block.txdata {
             if !transaction.is_coin_base() {
                 for input in &transaction.input {
@@ -111,7 +111,7 @@ impl <'a> BlockFilterWriter<'a> {
 }
 
 pub trait UTXOAccessor {
-    fn get_utxo(&self, txid: &Sha256dHash, ix: u32) -> Result<(Script, u64), io::Error>;
+    fn get_utxo(&mut self, txid: &Sha256dHash, ix: u32) -> Result<(Script, u64), io::Error>;
 }
 
 fn encode<T: ? Sized>(data: &T) -> Result<Vec<u8>, io::Error>
@@ -419,7 +419,7 @@ mod test {
     }
 
     impl UTXOAccessor for HashMap<(Sha256dHash, u32), (Script, u64)> {
-        fn get_utxo(&self, txid: &Sha256dHash, ix: u32) -> Result<(Script, u64), io::Error> {
+        fn get_utxo(&mut self, txid: &Sha256dHash, ix: u32) -> Result<(Script, u64), io::Error> {
             if let Some (ux) = self.get(&(*txid, ix)) {
                 Ok(ux.clone())
             }
