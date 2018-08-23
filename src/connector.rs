@@ -23,9 +23,21 @@ use bitcoin::blockdata::block::{Block, BlockHeader};
 use bitcoin::blockdata::script::Script;
 use bitcoin::util::hash::Sha256dHash;
 use lightning::chain::chaininterface::{ChainListener,ChainWatchInterface, ChainWatchInterfaceUtil};
+use lightning::util::logger::{Logger, Record, Level};
 use node::Broadcaster;
 use std::sync::{Weak,Arc};
 
+struct LightningLogger{
+    level: Level
+}
+
+impl Logger for LightningLogger {
+    fn log(&self, record: &Record) {
+        if self.level >= record.level {
+            println!("{:<5} [{} : {}, {}] {}", record.level.to_string(), record.module_path, record.file, record.line, record.args);
+        }
+    }
+}
 
 /// connector to lighning network
 pub struct LightningConnector {
@@ -37,7 +49,7 @@ impl LightningConnector {
     /// create a connector
     pub fn new (broadcaster: Arc<Broadcaster>) -> LightningConnector {
         LightningConnector {
-            util: ChainWatchInterfaceUtil::new(),
+            util: ChainWatchInterfaceUtil::new(Arc::new(LightningLogger{level: Level::Info})),
             broadcaster
         }
     }
@@ -62,13 +74,13 @@ impl LightningConnector {
 
 impl ChainWatchInterface for LightningConnector {
     /// install a listener to be called with transactions that match the script
-    fn install_watch_script(&self, script_pub_key: Script) {
+    fn install_watch_script(&self, script_pub_key: &Script) {
         self.util.install_watch_script(script_pub_key)
     }
 
     /// install a listener to be called with transactions that spend the outpoint
-    fn install_watch_outpoint(&self, outpoint: (Sha256dHash, u32)) {
-        self.util.install_watch_outpoint(outpoint)
+    fn install_watch_outpoint(&self, outpoint: (Sha256dHash, u32), out_script: &Script) {
+        self.util.install_watch_outpoint(outpoint, out_script)
     }
 
     /// install a listener to be called for every transaction
