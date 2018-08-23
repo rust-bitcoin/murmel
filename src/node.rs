@@ -36,7 +36,7 @@ use bitcoin_chain::blockchain::Blockchain;
 use blockfilter::BlockFilter;
 use blockfilter::UTXOAccessor;
 use connector::LightningConnector;
-use database::{DB, DBTX};
+use database::{DB, DBTX, DBUTXOAccessor};
 use error::SPVError;
 use futures::task::Context;
 use lightning::chain::chaininterface::BroadcasterInterface;
@@ -56,14 +56,17 @@ use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use std::cmp::min;
+use std::sync::atomic::{AtomicBool,Ordering};
 
 
 // peer is considered stale and banned if not
 // sending valuable data within below number of seconds.
-const STALE_PEER_SECONDS: u32 = 30;
+const STALE_PEER_SECONDS: u32 = 60;
 
 // number of blocks to download at a single operation
-const BLOCK_DOWNLOAD_BATCH: usize = 100;
+const BLOCK_DOWNLOAD_BATCH: usize = 5;
+
+const WALLET_FILTER_TYPE : u8 = 1;
 
 /// The node replies with this process result to messages
 pub enum ProcessResult {
@@ -114,19 +117,7 @@ struct Inner {
     // the persistent blockchain storing previously downloaded header and blocks
     db: Arc<Mutex<DB>>,
     // connector serving Layer 2 network
-    connector: Arc<LightningConnector>,
-    // is this a server node?
-    server: bool,
-    // blocks to download
-    want_blocks: Mutex<VecDeque<Sha256dHash>>,
-    // waker to tasks
-    tasks: Tasks,
-    // peer used for block download
-    download_peer: Mutex<Cell<Option<PeerId>>>,
-    // expecting to receive these blocks
-    expecting_blocks: Mutex<VecDeque<Sha256dHash>>,
-
-    temp_processed: Mutex<HashSet<Sha256dHash>>
+    connector: Arc<LightningConnector>
 }
 
 impl Node {
@@ -140,13 +131,7 @@ impl Node {
                 network,
                 blockchain: Mutex::new(Blockchain::new(network)),
                 db,
-                connector: Arc::new(connector),
-                server,
-                want_blocks: Mutex::new(VecDeque::new()),
-                tasks: Tasks::new(),
-                download_peer: Mutex::new(Cell::new(None)),
-                expecting_blocks: Mutex::new(VecDeque::new()),
-                temp_processed: Mutex::new(HashSet::new())
+                connector: Arc::new(connector)
             })
         }
     }
@@ -163,11 +148,9 @@ impl Node {
         let mut blockchain = self.inner.blockchain.lock().unwrap();
         let mut db = self.inner.db.lock().unwrap();
         let tx = db.transaction()?;
-        info!("reading headers ...");
-        let headers = tx.get_headers(&mut blockchain)?;
-        if self.inner.server {
-
-        }
+        info!("reading headers and filters ...");
+        let mut temp_throwaway = HashMap::new();
+        let headers = tx.init_node(&mut blockchain, &mut temp_throwaway)?;
         info!("read {} headers from the database", headers);
         tx.commit()?;
         Ok(())
@@ -177,131 +160,20 @@ impl Node {
     pub fn connected(&self, pid: PeerId, ctx: &mut Context) -> Result<ProcessResult, SPVError> {
         self.get_headers(pid)?;
 
-        let node = self.clone();
-
-        // a never ending task that downloads blocks
-        // use self.download_blocks to pass work to it
-        self.inner.tasks.spawn_no_error(ctx, "block downloader",
-                                        move |ctx| node.task_block_download(ctx));
-
         Ok(ProcessResult::Ack)
-    }
-
-    // body od the "block downloader" task
-    fn task_block_download (&self, ctx: &mut Context) -> Result<bool, SPVError> {
-        // todos in want
-        let mut want = self.inner.want_blocks.lock().unwrap();
-        if !want.is_empty() {
-            // choose peer
-            if let Some(peer_id) = self.get_download_peer_id() {
-
-                // take no more then BLOCK_DOWNLOAD_BATCH blocks for a batch
-                let batch_range = 0 .. min(BLOCK_DOWNLOAD_BATCH, want.len());
-                let batch = want.drain(batch_range).collect::<Vec<_>>();
-                let batch2 = batch.clone();
-
-                let node = self.clone();
-                let node2 = self.clone();
-                // spawn the task downloading the batch
-                self.inner.tasks.spawn_with_timeout(ctx, "block batch", STALE_PEER_SECONDS,
-                                                    move |ctx| {
-                                                        node.task_block_download_batch(ctx, peer_id, batch.clone())
-                                                    },
-                                                    move |error| {
-                                                        // the peer did not send the batch within STALE_PEER_SECONDS
-                                                        node2.task_block_download_failed(error, peer_id, batch2.clone());
-                                                    });
-            }
-        }
-        // this task never ends, park it.
-        Ok(false)
     }
 
     // decide if the block was fully processed
     fn is_processed (&self, block: &Sha256dHash) -> bool {
-        self.inner.temp_processed.lock().unwrap().contains(block)
-    }
-
-    // download a batch of blocks
-    fn task_block_download_batch(&self, ctx: &mut Context, peer_id: PeerId, batch: Vec<Sha256dHash>) -> Result<bool, SPVError> {
-        let mut expecting = self.inner.expecting_blocks.lock().unwrap();
-        if expecting.is_empty() {
-            // if not yet expecting to receive
-            let peers = self.inner.peers.read().unwrap();
-            if let Some(peer) = peers.get(&peer_id) {
-                // filter out processed blocks and compile inventory request
-                expecting.extend(batch.iter().filter(|h| !self.is_processed(*h)));
-                let invs = expecting.iter()
-                    .map(|hash| Inventory { inv_type: InvType::Block, hash: hash.clone() })
-                    .collect::<Vec<_>>();
-                if invs.len() > 0 {
-                    // if any left ask the peer for it
-                    peer.lock().unwrap().send(&NetworkMessage::GetData(invs))?;
-                }
-                return Ok(false);
-            }
-            else {
-                // lost downloading peer
-                expecting.clear();
-            }
-        }
-        else {
-            // expecting some but not yet received -> park this task
-            return Ok(false);
-        }
-        // done with this task. wake up "block downloader" to get a new batch
-        self.inner.tasks.wake("block downloader");
-        Ok(true)
-    }
-
-    fn task_block_download_failed (&self, error: SPVError, peer_id: PeerId, batch: Vec<Sha256dHash>) {
-        info!("ban slow peer {}", peer_id);
-        self.inner.p2p.ban(peer_id).unwrap_or(());
-        // push back failed batch to want
-        let mut want = self.inner.want_blocks.lock().unwrap();
-        for h in batch.iter().rev() {
-            want.push_front(*h);
-        }
-        // wake up downloader
-        self.inner.tasks.wake("block downloader");
+        false
     }
 
     fn download_blocks(&self, blocks: Vec<Sha256dHash>) {
-        // add to wanted blocks
-        self.inner.want_blocks.lock().unwrap().extend(blocks);
-        // wake downloader
-        self.inner.tasks.wake("block downloader");
-    }
-
-    fn get_download_peer_id(&self) -> Option<PeerId> {
-        let peers = self.inner.peers.read().unwrap();
-        let download_peer = self.inner.download_peer.lock().unwrap();
-        // stick with current download peer if available
-        if let Some (peer) = download_peer.get() {
-            return Some(peer);
-        }
-        else {
-            // otherwise chose and store a random one
-            let mut rng = thread_rng();
-            let peer_index = rng.next_u64() as usize % peers.len();
-            for (i, v) in peers.keys().enumerate() {
-                if i == peer_index {
-                    download_peer.replace(Some(*v));
-                    return Some(*v);
-                }
-            }
-            return None;
-        }
+        // TODO
     }
 
     /// called from dispatcher whenever a peer is disconnected
     pub fn disconnected(&self, pid: PeerId) -> Result<ProcessResult, SPVError> {
-        if let Some(downloading_peer) = self.inner.download_peer.lock().unwrap().get() {
-            if downloading_peer == pid {
-                self.inner.expecting_blocks.lock().unwrap().clear();
-                self.inner.tasks.wake("block downloader");
-            }
-        }
         Ok(ProcessResult::Ack)
     }
 
@@ -354,7 +226,7 @@ impl Node {
                             tip_moved = tip_moved || new_tip != old_tip;
                             let header_hash = header.header.bitcoin_hash();
                             // ask for blocks after birth
-                            if self.inner.server && new_tip == header_hash {
+                            if new_tip == header_hash {
                                 ask_for_blocks.push(new_tip);
                             }
 
@@ -397,13 +269,14 @@ impl Node {
                 // limit context
                 self.inner.connector.block_disconnected(&header);
             }
+            if some_new {
+                self.get_headers(peer)?;
+            }
             // ask for new blocks on trunk
             self.download_blocks(ask_for_blocks);
 
             // ask if peer knows even more
-            if some_new {
-                self.get_headers(peer)?;
-            }
+
             if tip_moved {
                 Ok(ProcessResult::Height(height))
             } else {
@@ -416,33 +289,10 @@ impl Node {
 
     // process an incoming block
     fn block(&self, block: &Block, peer: PeerId) -> Result<ProcessResult, SPVError> {
-        if let Some(download_peer) = self.inner.download_peer.lock().unwrap().get() {
-            if peer == download_peer {
-                // if from download peer
-                let mut expecting = self.inner.expecting_blocks.lock().unwrap();
-                // expect to see next
-                if let Some(next) = expecting.pop_front() {
-                    if next != block.bitcoin_hash() {
-                        expecting.push_front(next);
-                    }
-                    else {
-                        // received some expected, wake up batch
-                        self.inner.tasks.wake("block batch");
-                    }
-                }
-            }
-        }
         let blockchain = self.inner.blockchain.lock().unwrap();
         // header should be known already, otherwise it might be spam
-        let block_node = blockchain.get_block(block.bitcoin_hash());
-        if block_node.is_some() {
-            let bn = block_node.unwrap();
-            if bn.is_on_main_chain(&blockchain) {
-                // send new block to lighning connector
-                self.inner.connector.block_connected(&block, bn.height);
-            }
-            info!("processed block {}", block.bitcoin_hash());
-            self.inner.temp_processed.lock().unwrap().insert(block.bitcoin_hash());
+        if let Some(block_node) = blockchain.get_block(block.bitcoin_hash()) {
+            info!("processed block {} height={}", block.bitcoin_hash(), block_node.height);
             return Ok(ProcessResult::Ack);
         }
         Ok(ProcessResult::Ignored)
@@ -486,21 +336,6 @@ impl Node {
         }
         tx.commit()?;
         Ok(result)
-    }
-
-    /// get the blocks we are interested in
-    fn get_blocks(&self, peer: PeerId, blocks: Vec<Sha256dHash>) -> Result<ProcessResult, SPVError> {
-        if blocks.len() > 0 {
-            let mut invs = Vec::new();
-            for b in blocks {
-                invs.push(Inventory {
-                    inv_type: InvType::WitnessBlock,
-                    hash: b,
-                });
-            }
-            return self.send(peer, &NetworkMessage::GetData(invs));
-        }
-        Ok(ProcessResult::Ack)
     }
 
     /// get headers this peer is ahead of us
@@ -548,33 +383,6 @@ impl Node {
     #[allow(dead_code)]
     pub fn get_broadcaster(&self) -> Arc<Broadcaster> {
         self.inner.connector.get_broadcaster()
-    }
-}
-
-struct DBUTXOAccessor<'a> {
-    pub tx: &'a DBTX<'a>,
-    pub same_block_utxo: HashMap<(Sha256dHash, u32), (Script, u64)>,
-}
-
-impl<'a> DBUTXOAccessor<'a> {
-    fn new(tx: &'a DBTX<'a>, block: &Block) -> DBUTXOAccessor<'a> {
-        let mut acc = DBUTXOAccessor { tx, same_block_utxo: HashMap::new() };
-        for t in &block.txdata {
-            let id = t.txid();
-            for (ix, o) in t.output.iter().enumerate() {
-                acc.same_block_utxo.insert((id, ix as u32), (o.script_pubkey.clone(), o.value));
-            }
-        }
-        acc
-    }
-}
-
-impl<'a> UTXOAccessor for DBUTXOAccessor<'a> {
-    fn get_utxo(&self, txid: &Sha256dHash, ix: u32) -> Result<(Script, u64), io::Error> {
-        if let Some(utxo) = self.same_block_utxo.get(&(*txid, ix)) {
-            return Ok(utxo.clone());
-        }
-        Ok(self.tx.get_utxo(txid, ix)?)
     }
 }
 

@@ -34,6 +34,7 @@ use futures::prelude::*;
 use futures::executor::ThreadPool;
 use dns::dns_seed;
 use rand::{thread_rng, Rng};
+use std::collections::HashSet;
 
 const MAX_PROTOCOL_VERSION :u32 = 70001;
 
@@ -126,6 +127,7 @@ impl SPV {
             db: Arc<Mutex<DB>>,
             p2p: Arc<P2P>,
             dns: Vec<SocketAddr>,
+            earlier: HashSet<SocketAddr>,
             nodns: bool
         }
 
@@ -178,10 +180,11 @@ impl SPV {
                 while self.connections.len()  < self.min_connections {
                     if let Ok(tx) = db.transaction() {
                         // found a peer
-                        if let Ok(peer) = tx.get_a_peer() {
+                        if let Ok(peer) = tx.get_a_peer(&self.earlier) {
                             // have an address for it
                             // Note: we do not store Tor adresses, so this should always be true
                             if let Ok(ref sock) = peer.socket_addr() {
+                                self.earlier.insert(*sock);
                                 self.connections.push(self.p2p.add_peer(PeerSource::Outgoing(sock.clone())));
                             } else {
                                 break;
@@ -209,7 +212,7 @@ impl SPV {
             }
         }
 
-        Box::new(KeepConnected{min_connections, connections: added, db, p2p, dns: Vec::new(), nodns })
+        Box::new(KeepConnected{min_connections, connections: added, db, p2p, dns: Vec::new(), nodns, earlier: HashSet::new() })
 	}
 
     /// Get the connector to higher level appl layers, such as Lightning
