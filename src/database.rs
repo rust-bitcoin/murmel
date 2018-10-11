@@ -106,7 +106,7 @@ impl<'a> DBTX<'a> {
 
     /// rollback the transaction
     pub fn rollback(self) -> Result<(), SPVError> {
-        self.tx.commit()?;
+        self.tx.rollback()?;
         trace!("rolled back transaction");
         Ok(())
     }
