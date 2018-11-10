@@ -153,6 +153,9 @@ impl Node {
         let mut temp_throwaway = HashMap::new();
         let headers = tx.init_node(&mut blockchain, &mut temp_throwaway)?;
         info!("read {} headers from the database", headers);
+        if headers == 0 {
+            tx.store_block(&genesis_block(self.inner.network))?;
+        }
         tx.commit()?;
         Ok(())
     }
@@ -170,8 +173,9 @@ impl Node {
     }
 
     fn download_blocks(&self, pid: PeerId, blocks: Vec<Sha256dHash>) -> Result<ProcessResult, SPVError> {
-        let blockchain = self.inner.blockchain.lock().unwrap();
-        self.send(pid, &NetworkMessage::GetBlocks(GetBlocksMessage::new(blocks, blockchain.best_tip_hash())))
+        let inventory = blocks.iter().map(|b| {Inventory{inv_type: InvType::WitnessBlock, hash: b.clone()}}).collect();
+        self.send(pid, &NetworkMessage::GetData(inventory))?;
+        Ok(ProcessResult::Ack)
     }
 
     /// called from dispatcher whenever a peer is disconnected
@@ -294,7 +298,13 @@ impl Node {
         let blockchain = self.inner.blockchain.lock().unwrap();
         // header should be known already, otherwise it might be spam
         if let Some(block_node) = blockchain.get_block(block.bitcoin_hash()) {
+            let mut db = self.inner.db.lock().unwrap();
+            let tx = db.transaction()?;
+            tx.store_block(block)?;
             info!("processed block {} height={}", block.bitcoin_hash(), block_node.height);
+            if block_node.height % 1000 == 0 {
+                tx.batch()?;
+            }
             return Ok(ProcessResult::Ack);
         }
         Ok(ProcessResult::Ignored)
@@ -304,11 +314,12 @@ impl Node {
     fn inv(&self, v: &Vec<Inventory>, peer: PeerId) -> Result<ProcessResult, SPVError> {
         for inventory in v {
             // only care of blocks
-            if inventory.inv_type == InvType::Block
-                && self.inner.blockchain.lock().unwrap().get_block(inventory.hash).is_none() {
-                // ask for header(s) if observing a new block
-                self.get_headers(peer)?;
-                return Ok(ProcessResult::Ack);
+            if inventory.inv_type == InvType::Block {
+                if self.inner.blockchain.lock().unwrap().get_block(inventory.hash).is_none() {
+                    // ask for header(s) if observing a new block
+                    self.get_headers(peer)?;
+                    return Ok(ProcessResult::Ack);
+                }
             } else {
                 // do not spam us with transactions
                 debug!("received unwanted inv {:?} peer={}", inventory.inv_type, peer);

@@ -135,6 +135,11 @@ impl<'a> DBTX<'a> {
         Ok(())
     }
 
+    /// batch hammersbald writes
+    pub fn batch (self) -> Result<(), SPVError> {
+        Ok(self.hammersbald.write().unwrap().batch()?)
+    }
+
     /// Create tables suitable for blockchain storage
     /// Tables:
     ///   * ids - maps hashes to integers for better performance, all othe rtables use integers mapped here for hashes
