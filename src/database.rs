@@ -128,10 +128,8 @@ impl<'a> DBTX<'a> {
 
     /// rollback the transaction
     pub fn rollback(self) -> Result<(), SPVError> {
-        if self.dirty.get () {
-            self.tx.rollback()?;
-            trace!("rolled back transaction");
-        }
+        self.tx.rollback()?;
+        trace!("rolled back transaction");
         Ok(())
     }
 
