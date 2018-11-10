@@ -19,13 +19,14 @@
 //! This module establishes network connections and routes messages between the P2P network and this node
 //!
 
-use bitcoin::network::constants::{magic, Network};
+use bitcoin::network::constants::Network;
 use bitcoin::network::encodable::{ConsensusDecodable, ConsensusEncodable};
 use bitcoin::network::message::NetworkMessage;
 use bitcoin::network::message::RawNetworkMessage;
 use bitcoin::network::message_network::VersionMessage;
 use bitcoin::network::serialize::{RawDecoder, RawEncoder};
 use bitcoin::network::address::Address;
+use bitcoin::network::serialize;
 use bitcoin::util;
 use error::SPVError;
 use mio::*;
@@ -33,11 +34,11 @@ use mio::unix::UnixReady;
 use mio::net::{TcpStream, TcpListener};
 use node::{Node, ProcessResult};
 use database::DB;
-use rand::{Rng, StdRng};
+use rand::{thread_rng, Rng, RngCore};
 use std::cmp::{min, max};
 use std::collections::{HashMap, VecDeque};
 use std::collections::hash_map::Entry;
-use std::fmt::{Display, Error, Formatter};
+use std::fmt;
 use std::io;
 use std::io::{Read, Write};
 use std::net::{Shutdown, SocketAddr};
@@ -63,8 +64,8 @@ pub struct PeerId {
     pub token: Token
 }
 
-impl Display for PeerId {
-    fn fmt(&self, f: &mut Formatter) -> Result<(), Error> {
+impl fmt::Display for PeerId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         write!(f, "{}", self.token.0)?;
         Ok(())
     }
@@ -116,10 +117,11 @@ pub struct P2P {
 impl P2P {
     /// create a new P2P network controller
     pub fn new(user_agent: String, network: Network, height: u32, peers: Arc<RwLock<PeerMap>>, db: Arc<Mutex<DB>>, max_protocol_version: u32) -> P2P {
-        let mut rng = StdRng::new().unwrap();
+        let mut rng =  thread_rng();
+        let magic = network.magic();
         P2P {
             network: network,
-            magic: magic(network),
+            magic,
             nonce: rng.next_u64(),
             height: AtomicUsize::new(height as usize),
             user_agent,
@@ -846,7 +848,7 @@ fn encode(item: &RawNetworkMessage, dst: &mut Buffer) -> Result<(), io::Error> {
 fn decode(src: &mut Buffer) -> Result<Option<RawNetworkMessage>, io::Error> {
     // attempt to decode
     let mut raw = RawDecoder::new(src);
-    let decode: Result<RawNetworkMessage, util::Error> =
+    let decode: Result<RawNetworkMessage, serialize::Error> =
         ConsensusDecodable::consensus_decode(&mut raw);
     let src = raw.into_inner();
 
@@ -856,14 +858,16 @@ fn decode(src: &mut Buffer) -> Result<Option<RawNetworkMessage>, io::Error> {
             src.commit();
             Ok(Some(m))
         }
-        Err(util::Error::ByteOrder(_)) => {
-            // failure: partial message, rollback to last commit and retry later
-            src.rollback();
-            Ok(None)
+        Err(serialize::Error::Io(e)) => {
+            if e.kind() == io::ErrorKind::UnexpectedEof {
+                // need more data, rollback and retry after additional read
+                src.rollback();
+                return Ok(None)
+            } else {
+                return Err(e);
+            }
         },
         Err(e) => {
-            // some serious error (often checksum)
-            trace!("invalid data in codec: {}", e);
             Err(io::Error::new(io::ErrorKind::InvalidData, e))
         }
     }

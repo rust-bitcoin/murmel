@@ -19,6 +19,7 @@
 //! All modules of this library use this error class to indicate problems.
 //!
 
+use hammersbald::error::HammersbaldError;
 
 use rusqlite;
 use bitcoin::util;
@@ -26,6 +27,8 @@ use std::convert;
 use std::error::Error;
 use std::fmt;
 use std::io;
+use bitcoin_chain::blockchain;
+use bitcoin::network::serialize;
 
 /// An error class to offer a unified error interface upstream
 pub enum SPVError {
@@ -36,7 +39,13 @@ pub enum SPVError {
     /// Database error
     DB(rusqlite::Error),
     /// Bitcoin util error
-    Util(util::Error)
+    Util(util::Error),
+    /// Bitcoin serialize error
+    Serialize(serialize::Error),
+    /// Hammersbald error
+    Hammersbald(HammersbaldError),
+    /// blockchain
+    Blockchain(blockchain::BlockchainError)
 }
 
 impl Error for SPVError {
@@ -45,7 +54,10 @@ impl Error for SPVError {
             SPVError::Generic(ref s) => s,
             SPVError::IO(ref err) => err.description(),
             SPVError::DB(ref err) => err.description(),
-            SPVError::Util(ref err) => err.description()
+            SPVError::Util(ref err) => err.description(),
+            SPVError::Hammersbald(ref err) => err.description(),
+            SPVError::Blockchain(ref err) => err.description(),
+            SPVError::Serialize(ref err) => err.description()
         }
     }
 
@@ -54,7 +66,10 @@ impl Error for SPVError {
             SPVError::Generic(_) => None,
             SPVError::IO(ref err) => Some(err),
             SPVError::DB(ref err) => Some(err),
-            SPVError::Util(ref err) => Some(err)
+            SPVError::Util(ref err) => Some(err),
+            SPVError::Hammersbald(ref err) => Some(err),
+            SPVError::Blockchain(ref err) => Some(err),
+            SPVError::Serialize(ref err) => Some(err)
         }
     }
 }
@@ -68,6 +83,9 @@ impl fmt::Display for SPVError {
             SPVError::IO(ref err) => write!(f, "IO error: {}", err),
             SPVError::DB(ref err) => write!(f, "DB error: {}", err),
             SPVError::Util(ref err) => write!(f, "Util error: {}", err),
+            SPVError::Hammersbald(ref err) => write!(f, "Hammersbald error: {}", err),
+            SPVError::Blockchain(ref err) => write!(f, "Blockchain error: {}", err),
+            SPVError::Serialize(ref err) => write!(f, "Serialize error: {}", err),
         }
     }
 }
@@ -103,5 +121,23 @@ impl convert::From<util::Error> for SPVError {
 impl convert::From<rusqlite::Error> for SPVError {
     fn from(err: rusqlite::Error) -> SPVError {
         SPVError::DB(err)
+    }
+}
+
+impl convert::From<HammersbaldError> for SPVError {
+    fn from(err: HammersbaldError) -> SPVError {
+        SPVError::Hammersbald(err)
+    }
+}
+
+impl convert::From<blockchain::BlockchainError> for SPVError {
+    fn from(err: blockchain::BlockchainError) -> SPVError {
+        SPVError::Blockchain(err)
+    }
+}
+
+impl convert::From<serialize::Error> for SPVError {
+    fn from(err: serialize::Error) -> SPVError {
+        SPVError::Serialize(err)
     }
 }

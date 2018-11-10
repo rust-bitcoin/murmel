@@ -33,10 +33,14 @@ pub struct Tasks {
 }
 
 impl Tasks {
+
+    #[allow(unused)]
     pub fn new () -> Tasks {
         Tasks {waker: Arc::new(Mutex::new(HashMap::new()))}
     }
 
+
+    #[allow(unused)]
     pub fn wake (&self, task_name: &str) {
         self.waker.lock().unwrap().get(&task_name.to_string()).unwrap().wake();
     }
@@ -61,6 +65,8 @@ impl Tasks {
         })
     }
 
+
+    #[allow(unused)]
     pub fn spawn<F,G> (&self, ctx: &mut Context, task_name: &str, work: F, fail: G)
         where F: Fn(&mut Context) -> Result<bool, SPVError> +Send+'static, G: Fn(SPVError) + Send+'static {
         let waker = self.waker.clone();
@@ -69,6 +75,8 @@ impl Tasks {
         ctx.spawn(wrapper);
     }
 
+
+    #[allow(unused)]
     pub fn spawn_no_error<F> (&self, ctx: &mut Context, task_name: &str, work: F)
         where F: Fn(&mut Context) -> Result<bool, SPVError> +Send+'static {
         let waker = self.waker.clone();
@@ -77,6 +85,7 @@ impl Tasks {
         ctx.spawn(wrapper);
     }
 
+    #[allow(unused)]
     pub fn spawn_with_timeout<F,G> (&self, ctx: &mut Context, task_name: &str, seconds: u32, work: F, fail: G)
         where F: Fn(&mut Context) -> Result<bool, SPVError> +Send+'static, G: Fn(SPVError) + Send+'static {
         use futures_timer::FutureExt;

@@ -33,6 +33,7 @@ use bitcoin::network::serialize::BitcoinHash;
 use bitcoin::util;
 use bitcoin::util::hash::Sha256dHash;
 use bitcoin_chain::blockchain::Blockchain;
+use bitcoin_chain::blockchain;
 use blockfilter::BlockFilter;
 use blockfilter::UTXOAccessor;
 use connector::LightningConnector;
@@ -123,7 +124,7 @@ struct Inner {
 impl Node {
     /// Create a new local node
     pub fn new(p2p: Arc<P2P>, network: Network, db: Arc<Mutex<DB>>, server: bool, peers: Arc<RwLock<PeerMap>>) -> Node {
-        let connector = LightningConnector::new(Arc::new(Broadcaster { peers: peers.clone() }));
+        let connector = LightningConnector::new(network,Arc::new(Broadcaster { peers: peers.clone() }));
         Node {
             inner: Arc::new(Inner {
                 p2p,
@@ -152,6 +153,9 @@ impl Node {
         let mut temp_throwaway = HashMap::new();
         let headers = tx.init_node(&mut blockchain, &mut temp_throwaway)?;
         info!("read {} headers from the database", headers);
+        if headers == 0 {
+            tx.store_block(&genesis_block(self.inner.network))?;
+        }
         tx.commit()?;
         Ok(())
     }
@@ -168,8 +172,10 @@ impl Node {
         false
     }
 
-    fn download_blocks(&self, blocks: Vec<Sha256dHash>) {
-        // TODO
+    fn download_blocks(&self, pid: PeerId, blocks: Vec<Sha256dHash>) -> Result<ProcessResult, SPVError> {
+        let inventory = blocks.iter().map(|b| {Inventory{inv_type: InvType::WitnessBlock, hash: b.clone()}}).collect();
+        self.send(pid, &NetworkMessage::GetData(inventory))?;
+        Ok(ProcessResult::Ack)
     }
 
     /// called from dispatcher whenever a peer is disconnected
@@ -240,7 +246,7 @@ impl Node {
                                 }
                             }
                         }
-                        Err(util::Error::SpvBadProofOfWork) => {
+                        Err(blockchain::BlockchainError::BitcoinError(util::Error::SpvBadProofOfWork)) => {
                             info!("Incorrect POW, banning peer={}", peer);
                             return Ok(ProcessResult::Ban(100));
                         }
@@ -273,7 +279,7 @@ impl Node {
                 self.get_headers(peer)?;
             }
             // ask for new blocks on trunk
-            self.download_blocks(ask_for_blocks);
+            self.download_blocks(peer, ask_for_blocks)?;
 
             // ask if peer knows even more
 
@@ -292,7 +298,13 @@ impl Node {
         let blockchain = self.inner.blockchain.lock().unwrap();
         // header should be known already, otherwise it might be spam
         if let Some(block_node) = blockchain.get_block(block.bitcoin_hash()) {
+            let mut db = self.inner.db.lock().unwrap();
+            let tx = db.transaction()?;
+            tx.store_block(block)?;
             info!("processed block {} height={}", block.bitcoin_hash(), block_node.height);
+            if block_node.height % 1000 == 0 {
+                tx.batch()?;
+            }
             return Ok(ProcessResult::Ack);
         }
         Ok(ProcessResult::Ignored)
@@ -302,11 +314,12 @@ impl Node {
     fn inv(&self, v: &Vec<Inventory>, peer: PeerId) -> Result<ProcessResult, SPVError> {
         for inventory in v {
             // only care of blocks
-            if inventory.inv_type == InvType::Block
-                && self.inner.blockchain.lock().unwrap().get_block(inventory.hash).is_none() {
-                // ask for header(s) if observing a new block
-                self.get_headers(peer)?;
-                return Ok(ProcessResult::Ack);
+            if inventory.inv_type == InvType::Block {
+                if self.inner.blockchain.lock().unwrap().get_block(inventory.hash).is_none() {
+                    // ask for header(s) if observing a new block
+                    self.get_headers(peer)?;
+                    return Ok(ProcessResult::Ack);
+                }
             } else {
                 // do not spam us with transactions
                 debug!("received unwanted inv {:?} peer={}", inventory.inv_type, peer);

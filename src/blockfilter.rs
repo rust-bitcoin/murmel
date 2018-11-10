@@ -79,7 +79,7 @@ impl <'a> BlockFilterWriter<'a> {
         for transaction in &self.block.txdata {
             for output in &transaction.output {
                 if !output.script_pubkey.is_op_return() {
-                    self.writer.add_element(output.script_pubkey.data().as_slice());
+                    self.writer.add_element(output.script_pubkey.as_bytes());
                 }
             }
         }
@@ -90,8 +90,8 @@ impl <'a> BlockFilterWriter<'a> {
         for transaction in &self.block.txdata {
             if !transaction.is_coin_base() {
                 for input in &transaction.input {
-                    let (script, _) = tx_accessor.get_utxo(&input.prev_hash, input.prev_index)?;
-                    self.writer.add_element(script.data().as_slice());
+                    let (script, _) = tx_accessor.get_utxo(&input.previous_output.txid, input.previous_output.vout)?;
+                    self.writer.add_element(script.as_bytes());
                 }
             }
         }
@@ -400,6 +400,7 @@ mod test {
     use blockfilter::test::rustc_serialize::json::Json;
     use rand;
     use rand::Rng;
+    use rand::RngCore;
     use std::fs::File;
     use std::io::Cursor;
     use std::io::Read;
@@ -476,8 +477,8 @@ mod test {
             assert_eq!(test_filter, filter);
             let filter_hash = Sha256dHash::from_data(filter.as_slice());
             let mut header_data = [0u8; 64];
-            header_data[0..32].copy_from_slice(&filter_hash.data()[0..32]);
-            header_data[32..64].copy_from_slice(&previous_header_hash.data()[0..32]);
+            header_data[0..32].copy_from_slice(&filter_hash.as_bytes()[..]);
+            header_data[32..64].copy_from_slice(&previous_header_hash.as_bytes()[..]);
             let filter_header_hash = Sha256dHash::from_data(&header_data);
             assert_eq!(filter_header_hash, header_hash);
         }
