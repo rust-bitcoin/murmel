@@ -263,35 +263,39 @@ impl<'a> DBTX<'a> {
     /// Set the highest hash for the chain with most work
     pub fn set_tip(&self, tip: &Sha256dHash) -> Result<(), SPVError> {
         trace!("storing tip {}", tip);
-        unimplemented!();
+        let mut hb = self.hammersbald.write().unwrap();
+        hb.put(Sha256dHash::default().as_bytes(), tip.as_bytes(), &vec!())?;
         Ok(())
     }
 
     /// Get the hash of the highest hash on the chain with most work
     pub fn get_tip(&self) -> Result<Option<Sha256dHash>, SPVError> {
-        unimplemented!();
+        let hb = self.hammersbald.read().unwrap();
+        if let Some((_, tip, _)) = hb.get(Sha256dHash::default().as_bytes())? {
+            return Ok(Some(decode(tip)?));
+        }
         return Ok(None)
     }
 
     /// Store a header into the DB. This method will return an error if the header is already stored.
     pub fn insert_header(&self, header: &BlockHeader) -> Result<(), SPVError> {
-        let mut bcdb = self.hammersbald.write().unwrap();
-        bcdb.insert_header(header, &Vec::new())?;
-        bcdb.fetch_header(&header.bitcoin_hash())?;
+        let mut hb = self.hammersbald.write().unwrap();
+        hb.insert_header(header, &Vec::new())?;
+        hb.fetch_header(&header.bitcoin_hash())?;
         Ok(())
     }
 
     /// Store a transaction
     pub fn store_block (&self, block: &Block) -> Result<(), SPVError> {
-        let mut bcdb = self.hammersbald.write().unwrap();
-        bcdb.insert_block(block, &Vec::new())?;
+        let mut hb = self.hammersbald.write().unwrap();
+        hb.insert_block(block, &Vec::new())?;
         Ok(())
     }
 
     /// Get a stored header. This method will return an error for an unknown header.
     pub fn get_header(&self, hash: &Sha256dHash) -> Result<Option<BlockHeader>, SPVError> {
-        let bcdb = self.hammersbald.read().unwrap();
-        if let Some((header, ext)) = bcdb.fetch_header(hash)? {
+        let hb = self.hammersbald.read().unwrap();
+        if let Some((header, ext)) = hb.fetch_header(hash)? {
             Ok(Some(header))
         }
         else {

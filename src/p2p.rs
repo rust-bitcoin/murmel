@@ -858,14 +858,16 @@ fn decode(src: &mut Buffer) -> Result<Option<RawNetworkMessage>, io::Error> {
             src.commit();
             Ok(Some(m))
         }
-        Err(serialize::Error::ParseFailed(_)) => {
-            // failure: partial message, rollback to last commit and retry later
-            src.rollback();
-            Ok(None)
+        Err(serialize::Error::Io(e)) => {
+            if e.kind() == io::ErrorKind::UnexpectedEof {
+                // need more data, rollback and retry after additional read
+                src.rollback();
+                return Ok(None)
+            } else {
+                return Err(e);
+            }
         },
         Err(e) => {
-            // some serious error (often checksum)
-            trace!("invalid data in codec: {}", e);
             Err(io::Error::new(io::ErrorKind::InvalidData, e))
         }
     }

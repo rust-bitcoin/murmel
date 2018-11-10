@@ -169,8 +169,9 @@ impl Node {
         false
     }
 
-    fn download_blocks(&self, blocks: Vec<Sha256dHash>) {
-        // TODO
+    fn download_blocks(&self, pid: PeerId, blocks: Vec<Sha256dHash>) -> Result<ProcessResult, SPVError> {
+        let blockchain = self.inner.blockchain.lock().unwrap();
+        self.send(pid, &NetworkMessage::GetBlocks(GetBlocksMessage::new(blocks, blockchain.best_tip_hash())))
     }
 
     /// called from dispatcher whenever a peer is disconnected
@@ -274,7 +275,7 @@ impl Node {
                 self.get_headers(peer)?;
             }
             // ask for new blocks on trunk
-            self.download_blocks(ask_for_blocks);
+            self.download_blocks(peer, ask_for_blocks)?;
 
             // ask if peer knows even more
 
