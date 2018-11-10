@@ -7,7 +7,7 @@ homepage = "https://github.com/rust-bitcoin/rust-bitcoin-spv/"
 repository = "https://github.com/rust-bitcoin/rust-bitcoin-spv/"
 documentation = "https://github.com/rust-bitcoin/rust-bitcoin-spv/"
 description = "SPV client for Bitcoin"
-keywords = [ "crypto", "bitcoin" ]
+keywords = [ "bitcoin", "SPV" ]
 readme = "README.md"
 
 [lib]
@@ -19,11 +19,12 @@ name = "bitcoin_spv"
 path = "src/bin/main.rs"
 
 [dependencies]
-bitcoin = { version = "0.13", features = ["bitcoinconsensus"] }
-bitcoin-chain = { git = "https://github.com/tamasblummer/rust-bitcoin-chain", branch = "send" }
+bitcoin = { version = "0.14", features = ["bitcoinconsensus"] }
+bitcoin-chain = { git= "https://github.com/tamasblummer/rust-bitcoin-chain.git", branch = "master" }
+hammersbald = { git= "https://github.com/tamasblummer/hammersbald.git", features = ["bitcoin_support"] }
 lightning = { git = "https://github.com/rust-bitcoin/rust-lightning", branch = "master" }
 mio = "0.6"
-rand = "0.4"
+rand = "0.5"
 siphasher = "0.2"
 log = "0.4"
 simple_logger = "0.5.0"
@@ -35,6 +36,3 @@ futures-timer= { git= "https://github.com/tamasblummer/futures-timer.git", branc
 rustc-serialize = "0.3"
 hex = "0.3"
 tempfile = "3.0.2"
-
-[patch.crates-io]
-bitcoin = { git="https://github.com/tamasblummer/rust-bitcoin", branch = "bip157" }

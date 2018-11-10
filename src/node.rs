@@ -33,6 +33,7 @@ use bitcoin::network::serialize::BitcoinHash;
 use bitcoin::util;
 use bitcoin::util::hash::Sha256dHash;
 use bitcoin_chain::blockchain::Blockchain;
+use bitcoin_chain::blockchain;
 use blockfilter::BlockFilter;
 use blockfilter::UTXOAccessor;
 use connector::LightningConnector;
@@ -123,7 +124,7 @@ struct Inner {
 impl Node {
     /// Create a new local node
     pub fn new(p2p: Arc<P2P>, network: Network, db: Arc<Mutex<DB>>, server: bool, peers: Arc<RwLock<PeerMap>>) -> Node {
-        let connector = LightningConnector::new(Arc::new(Broadcaster { peers: peers.clone() }));
+        let connector = LightningConnector::new(network,Arc::new(Broadcaster { peers: peers.clone() }));
         Node {
             inner: Arc::new(Inner {
                 p2p,
@@ -240,7 +241,7 @@ impl Node {
                                 }
                             }
                         }
-                        Err(util::Error::SpvBadProofOfWork) => {
+                        Err(blockchain::BlockchainError::BitcoinError(util::Error::SpvBadProofOfWork)) => {
                             info!("Incorrect POW, banning peer={}", peer);
                             return Ok(ProcessResult::Ban(100));
                         }

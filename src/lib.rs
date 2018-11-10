@@ -30,6 +30,7 @@ extern crate mio;
 extern crate bitcoin;
 extern crate bitcoin_chain;
 extern crate lightning;
+extern crate hammersbald;
 #[macro_use]
 extern crate log;
 extern crate rand;

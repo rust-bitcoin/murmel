@@ -33,7 +33,7 @@ use futures::future;
 use futures::prelude::*;
 use futures::executor::ThreadPool;
 use dns::dns_seed;
-use rand::{thread_rng, Rng};
+use rand::{thread_rng, Rng, RngCore};
 use std::collections::HashSet;
 
 const MAX_PROTOCOL_VERSION :u32 = 70001;

@@ -19,10 +19,12 @@
 //! This implements an interface to higher level applications
 //!
 
+use bitcoin::network::constants::Network;
 use bitcoin::blockdata::block::{Block, BlockHeader};
 use bitcoin::blockdata::script::Script;
 use bitcoin::util::hash::Sha256dHash;
 use lightning::chain::chaininterface::{ChainListener,ChainWatchInterface, ChainWatchInterfaceUtil};
+use lightning::chain::chaininterface::ChainError;
 use lightning::util::logger::{Logger, Record, Level};
 use node::Broadcaster;
 use std::sync::{Weak,Arc};
@@ -47,9 +49,9 @@ pub struct LightningConnector {
 
 impl LightningConnector {
     /// create a connector
-    pub fn new (broadcaster: Arc<Broadcaster>) -> LightningConnector {
+    pub fn new (network: Network, broadcaster: Arc<Broadcaster>) -> LightningConnector {
         LightningConnector {
-            util: ChainWatchInterfaceUtil::new(Arc::new(LightningLogger{level: Level::Info})),
+            util: ChainWatchInterfaceUtil::new(network, Arc::new(LightningLogger{level: Level::Info})),
             broadcaster
         }
     }
@@ -73,9 +75,9 @@ impl LightningConnector {
 }
 
 impl ChainWatchInterface for LightningConnector {
-    /// install a listener to be called with transactions that match the script
-    fn install_watch_script(&self, script_pub_key: &Script) {
-        self.util.install_watch_script(script_pub_key)
+
+    fn install_watch_tx(&self, txid: &'_ Sha256dHash, script_pub_key: &'_ Script) {
+        unimplemented!()
     }
 
     /// install a listener to be called with transactions that spend the outpoint
@@ -91,5 +93,9 @@ impl ChainWatchInterface for LightningConnector {
     /// install a listener for blocks added to or removed from trunk
     fn register_listener(&self, listener: Weak<ChainListener>) {
         self.util.register_listener(listener)
+    }
+
+    fn get_chain_utxo(&self, genesis_hash: Sha256dHash, unspent_tx_output_identifier: u64) -> Result<(Script, u64), ChainError> {
+        unimplemented!()
     }
 }
