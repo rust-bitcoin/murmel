@@ -20,5 +20,6 @@ The current plan is to create a small footprint, low bandwidth, stable and secur
 * [Bitcoin's libbitcoinconsenus.a with Rust binding.](https://github.com/rust-bitcoin/rust-bitcoinconsensus)
 * [Bitcoin SPV in Rust](https://github.com/rust-bitcoin/bitcoin-spv)
 * [Rust-Lightning, not Rusty's Lightning](https://github.com/rust-bitcoin/rust-lightning)
+* [Hammersbald]((https://github.com/rust-bitcoin/hammersbald))
 
 Send in your PRs if aligned with above vision.

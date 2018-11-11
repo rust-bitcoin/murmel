@@ -90,14 +90,14 @@ impl DB {
     /// Create an in-memory database instance
     pub fn mem() -> Result<DB, SPVError> {
         info!("working with memory database");
-        let mut hammersbald = Transient::new_db("", 1)?;
+        let mut hammersbald = Transient::new_db("", 1, 2)?;
         hammersbald.init()?;
         Ok(DB { conn: Connection::open_in_memory()?, hammersbald: RwLock::new(BitcoinAdapter::new(hammersbald)) })
     }
 
     /// Create or open a persistent database instance identified by the path
     pub fn new(path: &Path) -> Result<DB, SPVError> {
-        let mut hammersbald = Persistent::new_db(path.to_str().unwrap(), 100)?;
+        let mut hammersbald = Persistent::new_db(path.to_str().unwrap(), 100, 2)?;
         hammersbald.init()?;
         let db = DB {
             conn: Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE |
@@ -265,7 +265,6 @@ impl<'a> DBTX<'a> {
 
     /// Set the highest hash for the chain with most work
     pub fn set_tip(&self, tip: &Sha256dHash) -> Result<(), SPVError> {
-        trace!("storing tip {}", tip);
         let mut hb = self.hammersbald.write().unwrap();
         hb.put(Sha256dHash::default().as_bytes(), tip.as_bytes(), &vec!())?;
         Ok(())
@@ -312,27 +311,16 @@ impl<'a> DBTX<'a> {
 
     /// read headers and filters into an in-memory tree, return the number of headers on trunk
     pub fn init_node(&self, blockchain: &mut Blockchain, filters: &mut HashMap<Sha256dHash, (Sha256dHash, u8, Vec<u8>)>) -> Result<u32, SPVError> {
-        let mut trunk = Vec::new();
-        if let Ok(Some(mut current)) = self.get_tip() {
-            trunk.push(current);
-            let bcdb = self.hammersbald.read().unwrap();
-            while current != blockchain.genesis_hash() {
-                if let Some((header, _)) = bcdb.fetch_header(&current)? {
-                    trunk.push(header.prev_blockhash);
-                    current = header.prev_blockhash;
-                }
-                else {
-                    return Err(SPVError::Generic("broken chain".to_string()));
-                }
+        if let Some(current) = self.get_tip()? {
+            let hb = self.hammersbald.read().unwrap();
+            let mut headers = vec!();
+            for (header, _) in hb.iter_headers(&current)?.skip(1) {
+                headers.push(header);
             }
-            let mut reverse = trunk.iter().rev();
-            reverse.next(); // skip genesis
-            for hash in reverse {
-                if let Some((header, _)) = bcdb.fetch_header(&hash)? {
-                    blockchain.add_header(header)?;
-                }
+            for h in headers.iter().rev().skip(1) {
+                blockchain.add_header(h.clone())?;
             }
-            return Ok(trunk.len() as u32 - 1);
+            return Ok(headers.len() as u32 - 1);
         }
         Ok(0)
     }
