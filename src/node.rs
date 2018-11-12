@@ -42,7 +42,6 @@ use error::SPVError;
 use futures::task::Context;
 use lightning::chain::chaininterface::BroadcasterInterface;
 use p2p::{P2P, PeerId, PeerMap};
-use tasks::Tasks;
 use rand::Rng;
 use rand::thread_rng;
 use std::cell::Cell;
