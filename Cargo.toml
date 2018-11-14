@@ -21,7 +21,7 @@ path = "src/bin/main.rs"
 [dependencies]
 bitcoin = { version = "0.14", features = ["bitcoinconsensus"] }
 bitcoin-chain = "0.2.1"
-hammersbald = { version="1.0.1", features = ["bitcoin_support"] }
+hammersbald = { version="1.0.2", features = ["bitcoin_support"] }
 lightning = { git = "https://github.com/rust-bitcoin/rust-lightning", branch = "master" }
 mio = "0.6"
 rand = "0.5"

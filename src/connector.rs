@@ -76,7 +76,7 @@ impl LightningConnector {
 
 impl ChainWatchInterface for LightningConnector {
 
-    fn install_watch_tx(&self, txid: &'_ Sha256dHash, script_pub_key: &'_ Script) {
+    fn install_watch_tx(&self, txid: &Sha256dHash, script_pub_key: &Script) {
         unimplemented!()
     }
 
