@@ -96,6 +96,6 @@ impl ChainWatchInterface for LightningConnector {
     }
 
     fn get_chain_utxo(&self, genesis_hash: Sha256dHash, unspent_tx_output_identifier: u64) -> Result<(Script, u64), ChainError> {
-        unimplemented!()
+        Err(ChainError::NotSupported)
     }
 }
