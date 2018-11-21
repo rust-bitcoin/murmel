@@ -22,7 +22,7 @@ path = "src/bin/main.rs"
 bitcoin = { version = "0.15", features = ["bitcoinconsensus"] }
 bitcoin-chain = "0.3.1"
 hammersbald = { version="1.1", features = ["bitcoin_support"] }
-lightning = { git = "https://github.com/rust-bitcoin/rust-lightning", branch = "master" }
+lightning = "0.0.7"
 mio = "0.6"
 rand = "0.5"
 siphasher = "0.2"
