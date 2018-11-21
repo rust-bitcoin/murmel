@@ -20,13 +20,12 @@
 //!
 
 use bitcoin::network::constants::Network;
-use bitcoin::network::encodable::{ConsensusDecodable, ConsensusEncodable};
+use bitcoin::consensus::{Decodable, Encodable};
 use bitcoin::network::message::NetworkMessage;
 use bitcoin::network::message::RawNetworkMessage;
 use bitcoin::network::message_network::VersionMessage;
-use bitcoin::network::serialize::{RawDecoder, RawEncoder};
 use bitcoin::network::address::Address;
-use bitcoin::network::serialize;
+use bitcoin::consensus::encode;
 use bitcoin::util;
 use error::SPVError;
 use mio::*;
@@ -837,8 +836,8 @@ impl Read for Buffer {
 }
 
 // encode a message in Bitcoin's wire format extending the given buffer
-fn encode(item: &RawNetworkMessage, dst: &mut Buffer) -> Result<(), io::Error> {
-    match item.consensus_encode(&mut RawEncoder::new(dst)) {
+fn encode(item: &RawNetworkMessage, mut dst: &mut Buffer) -> Result<(), io::Error> {
+    match item.consensus_encode(&mut dst) {
         Ok(_) => Ok(()),
         Err(e) => Err(io::Error::new(io::ErrorKind::WriteZero, e))
     }
@@ -847,10 +846,8 @@ fn encode(item: &RawNetworkMessage, dst: &mut Buffer) -> Result<(), io::Error> {
 // decode a message from the buffer if possible
 fn decode(src: &mut Buffer) -> Result<Option<RawNetworkMessage>, io::Error> {
     // attempt to decode
-    let mut raw = RawDecoder::new(src);
-    let decode: Result<RawNetworkMessage, serialize::Error> =
-        ConsensusDecodable::consensus_decode(&mut raw);
-    let src = raw.into_inner();
+    let decode: Result<RawNetworkMessage, encode::Error> =
+        Decodable::consensus_decode(src);
 
     match decode {
         Ok(m) => {
@@ -858,7 +855,7 @@ fn decode(src: &mut Buffer) -> Result<Option<RawNetworkMessage>, io::Error> {
             src.commit();
             Ok(Some(m))
         }
-        Err(serialize::Error::Io(e)) => {
+        Err(encode::Error::Io(e)) => {
             if e.kind() == io::ErrorKind::UnexpectedEof {
                 // need more data, rollback and retry after additional read
                 src.rollback();

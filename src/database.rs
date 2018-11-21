@@ -23,12 +23,9 @@
 use bitcoin::blockdata::block::{BlockHeader, Block};
 use bitcoin::blockdata::transaction::Transaction;
 use bitcoin::blockdata::script::Script;
-use bitcoin::network::encodable::{ConsensusDecodable, ConsensusEncodable};
-use bitcoin::network::serialize::{RawDecoder, RawEncoder};
-use bitcoin::network::serialize::BitcoinHash;
-use bitcoin::network::serialize::serialize;
+use bitcoin::consensus::{Decodable, Encodable};
 use bitcoin::network::address::Address;
-use bitcoin::util::hash::Sha256dHash;
+use bitcoin::util::hash::{BitcoinHash, Sha256dHash};
 use bitcoin_chain::blockchain::Blockchain;
 use blockfilter::{BlockFilter,UTXOAccessor};
 use error::SPVError;
@@ -326,17 +323,18 @@ impl<'a> DBTX<'a> {
     }
 }
 
-fn decode<T: ? Sized>(data: Vec<u8>) -> Result<T, SPVError>
-    where T: ConsensusDecodable<RawDecoder<Cursor<Vec<u8>>>> {
-    let mut decoder: RawDecoder<Cursor<Vec<u8>>> = RawDecoder::new(Cursor::new(data));
-    ConsensusDecodable::consensus_decode(&mut decoder).map_err(|e| { SPVError::Serialize(e) })
+fn decode<'d, T: ? Sized>(data: Vec<u8>) -> Result<T, SPVError>
+    where T: Decodable<Cursor<Vec<u8>>> {
+    let mut decoder  = Cursor::new(data);
+    Decodable::consensus_decode(&mut decoder).map_err(|e| { SPVError::Serialize(e) })
 }
 
 fn encode<T: ? Sized>(data: &T) -> Result<Vec<u8>, SPVError>
-    where T: ConsensusEncodable<RawEncoder<Cursor<Vec<u8>>>> {
-    serialize(data).map_err(|e| { SPVError::Serialize(e) })
+    where T: Encodable<Vec<u8>> {
+    let mut result = vec!();
+    data.consensus_encode(&mut result).map_err(|e| { SPVError::Serialize(e) })?;
+    Ok(result)
 }
-
 
 fn encode_id(data: &Sha256dHash) -> Result<Vec<u8>, SPVError> {
     Ok(data.be_hex_string().as_bytes().to_vec())
@@ -391,8 +389,7 @@ impl<'a> UTXOAccessor for DBUTXOAccessor<'a> {
 mod test {
     use bitcoin::blockdata::constants;
     use bitcoin::network;
-    use bitcoin::network::serialize::BitcoinHash;
-    use bitcoin::util::hash::Sha256dHash;
+    use bitcoin::util::hash::{BitcoinHash, Sha256dHash};
     use super::DB;
 
     #[test]

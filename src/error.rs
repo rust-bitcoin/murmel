@@ -28,7 +28,7 @@ use std::error::Error;
 use std::fmt;
 use std::io;
 use bitcoin_chain::blockchain;
-use bitcoin::network::serialize;
+use bitcoin::consensus::encode;
 
 /// An error class to offer a unified error interface upstream
 pub enum SPVError {
@@ -41,7 +41,7 @@ pub enum SPVError {
     /// Bitcoin util error
     Util(util::Error),
     /// Bitcoin serialize error
-    Serialize(serialize::Error),
+    Serialize(encode::Error),
     /// Hammersbald error
     Hammersbald(HammersbaldError),
     /// blockchain
@@ -136,8 +136,8 @@ impl convert::From<blockchain::BlockchainError> for SPVError {
     }
 }
 
-impl convert::From<serialize::Error> for SPVError {
-    fn from(err: serialize::Error) -> SPVError {
+impl convert::From<encode::Error> for SPVError {
+    fn from(err: encode::Error) -> SPVError {
         SPVError::Serialize(err)
     }
 }

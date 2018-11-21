@@ -24,11 +24,9 @@
 use bitcoin;
 use bitcoin::blockdata::block::Block;
 use bitcoin::blockdata::script::Script;
-use bitcoin::network::encodable::{ConsensusDecodable, ConsensusEncodable};
-use bitcoin::network::encodable::VarInt;
-use bitcoin::network::serialize::{RawDecoder, RawEncoder};
-use bitcoin::network::serialize::BitcoinHash;
-use bitcoin::util::hash::Sha256dHash;
+use bitcoin::consensus::{Decodable, Encodable};
+use bitcoin::consensus::encode::VarInt;
+use bitcoin::util::hash::{BitcoinHash, Sha256dHash};
 use siphasher::sip::SipHasher;
 use std::cmp;
 use std::collections::HashSet;
@@ -114,18 +112,19 @@ pub trait UTXOAccessor {
     fn get_utxo(&mut self, txid: &Sha256dHash, ix: u32) -> Result<(Script, u64), io::Error>;
 }
 
-fn encode<T: ? Sized>(data: &T) -> Result<Vec<u8>, io::Error>
-    where T: ConsensusEncodable<RawEncoder<io::Cursor<Vec<u8>>>> {
-    Ok(serialize(data)
-        .map_err(|_| { io::Error::new(io::ErrorKind::InvalidData, "serialization error") })?)
+fn serialize<T: ?Sized>(data: &T) -> Result<Vec<u8>, bitcoin::util::Error>
+    where T: Encodable<io::Cursor<Vec<u8>>>,
+{
+    let mut encoder = io::Cursor::new(vec![]);
+    data.consensus_encode(&mut encoder)?;
+    Ok(encoder.into_inner())
 }
 
-fn serialize<T: ?Sized>(data: &T) -> Result<Vec<u8>, bitcoin::util::Error>
-    where T: ConsensusEncodable<RawEncoder<io::Cursor<Vec<u8>>>>,
-{
-    let mut encoder = RawEncoder::new(io::Cursor::new(vec![]));
-    data.consensus_encode(&mut encoder)?;
-    Ok(encoder.into_inner().into_inner())
+fn encode<T: ? Sized>(data: &T) -> Result<Vec<u8>, io::Error>
+    where T: Encodable<Vec<u8>> {
+    let mut result = vec!();
+    data.consensus_encode(&mut result).map_err(|e| { io::Error::new(io::ErrorKind::InvalidData, "serialization error") })?;
+    Ok(result)
 }
 
 /// Reads and interpret a block filter
@@ -171,10 +170,10 @@ impl GCSFilterReader {
     }
 
     fn match_any (&mut self, reader: &mut io::Read) -> Result<bool, io::Error> {
-        let mut decoder = RawDecoder::new(reader);
-        let n_elements: VarInt = ConsensusDecodable::consensus_decode(&mut decoder)
+        let mut decoder = reader;
+        let n_elements: VarInt = Decodable::consensus_decode(&mut decoder)
             .map_err(|_| io::Error::new(io::ErrorKind::UnexpectedEof, "unexpected EOF"))?;
-        let ref mut reader = decoder.into_inner();
+        let ref mut reader = decoder;
         if n_elements.0 == 0 {
             return Ok(false)
         }
@@ -236,9 +235,9 @@ impl<'a> GCSFilterWriter<'a> {
 
     fn finish (&mut self) -> Result<usize, io::Error> {
         // write number of elements as varint
-        let mut encoder = RawEncoder::new(io::Cursor::new(Vec::new()));
+        let mut encoder = io::Cursor::new(Vec::new());
         VarInt(self.elements.len() as u64).consensus_encode(&mut encoder).unwrap();
-        let mut wrote = self.writer.write(encoder.into_inner().into_inner().as_slice())?;
+        let mut wrote = self.writer.write(encoder.into_inner().as_slice())?;
         // map hashes to [0, n_elements * M)
         let mut mapped = Vec::new();
         let n = self.elements.len();
@@ -413,9 +412,9 @@ mod test {
     extern crate hex;
 
     fn decode<T: ? Sized>(data: Vec<u8>) -> Result<T, io::Error>
-        where T: ConsensusDecodable<RawDecoder<Cursor<Vec<u8>>>> {
-        let mut decoder: RawDecoder<Cursor<Vec<u8>>> = RawDecoder::new(Cursor::new(data));
-        Ok(ConsensusDecodable::consensus_decode(&mut decoder)
+        where T: Decodable<Cursor<Vec<u8>>> {
+        let mut decoder = Cursor::new(data);
+        Ok(Decodable::consensus_decode(&mut decoder)
             .map_err(|_| { io::Error::new(io::ErrorKind::InvalidData, "serialization error") })?)
     }
 
