@@ -56,7 +56,7 @@ impl SPV {
     /// then serve the returned ChainWatchInterface
     pub fn new(user_agent :String, network: Network, db: &Path) -> Result<SPV, SPVError> {
         let thread_pool = ThreadPool::new()?;
-        let db = Arc::new(Mutex::new(DB::new(db)?));
+        let db = Arc::new(Mutex::new(DB::new(db, network)?));
         let birth = create_tables(db.clone())?;
         let peers = Arc::new(RwLock::new(PeerMap::new()));
         let p2p = Arc::new(P2P::new(user_agent, network, 0, peers.clone(), db.clone(), MAX_PROTOCOL_VERSION));
@@ -72,7 +72,7 @@ impl SPV {
     /// then serve the returned ChainWatchInterface
     pub fn new_in_memory(user_agent :String, network: Network) -> Result<SPV, SPVError> {
         let thread_pool = ThreadPool::new()?;
-        let db = Arc::new(Mutex::new(DB::mem()?));
+        let db = Arc::new(Mutex::new(DB::mem(network)?));
         let birth = create_tables(db.clone())?;
         let peers = Arc::new(RwLock::new(PeerMap::new()));
         let p2p = Arc::new(P2P::new(user_agent, network, 0, peers.clone(), db.clone(), MAX_PROTOCOL_VERSION));

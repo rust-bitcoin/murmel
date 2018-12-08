@@ -21,20 +21,21 @@
 
 
 use bitcoin::blockdata::block::{BlockHeader, Block};
+use bitcoin::network::constants::Network;
 use bitcoin::blockdata::transaction::Transaction;
 use bitcoin::blockdata::script::Script;
 use bitcoin::consensus::{Decodable, Encodable};
 use bitcoin::network::address::Address;
 use bitcoin::util::hash::{BitcoinHash, Sha256dHash};
-use bitcoin_chain::blockchain::Blockchain;
 use blockfilter::{BlockFilter,UTXOAccessor};
 use error::SPVError;
 
-use hammersbald::bitcoin_support::BitcoinAdapter;
 use hammersbald::api::HammersbaldAPI;
 use hammersbald::api::HammersbaldFactory;
 use hammersbald::persistent::Persistent;
 use hammersbald::transient::Transient;
+
+use hb_adapter::{BitcoinAdapter, StoredHeader};
 
 use rusqlite;
 use rusqlite::Connection;
@@ -68,7 +69,8 @@ const UNWIND_LIMIT :i64 = 100;
 /// tx.commit();
 pub struct DB {
     conn: Connection,
-    hammersbald: RwLock<BitcoinAdapter>
+    headers: RwLock<BitcoinAdapter>,
+    blocks: RwLock<BitcoinAdapter>,
 }
 
 /// All database operations are accessible through this transaction wrapper, that also
@@ -79,27 +81,35 @@ pub struct DB {
 /// tx.commit();
 pub struct DBTX<'a> {
     tx: rusqlite::Transaction<'a>,
-    hammersbald: &'a RwLock<BitcoinAdapter>,
+    headers: &'a RwLock<BitcoinAdapter>,
+    blocks: &'a RwLock<BitcoinAdapter>,
     dirty: Cell<bool>
 }
 
 impl DB {
     /// Create an in-memory database instance
-    pub fn mem() -> Result<DB, SPVError> {
+    pub fn mem(network: Network) -> Result<DB, SPVError> {
         info!("working with memory database");
-        let mut hammersbald = Transient::new_db("", 1, 2)?;
-        hammersbald.init()?;
-        Ok(DB { conn: Connection::open_in_memory()?, hammersbald: RwLock::new(BitcoinAdapter::new(hammersbald)) })
+        let mut headers = Transient::new_db("h", 1, 2)?;
+        headers.init()?;
+        let mut blocks = Transient::new_db("b", 1, 2)?;
+        blocks.init()?;
+        Ok(DB { conn: Connection::open_in_memory()?, headers: RwLock::new(BitcoinAdapter::new(headers, network)),
+            blocks: RwLock::new(BitcoinAdapter::new(blocks, network))})
     }
 
     /// Create or open a persistent database instance identified by the path
-    pub fn new(path: &Path) -> Result<DB, SPVError> {
-        let mut hammersbald = Persistent::new_db(path.to_str().unwrap(), 100, 2)?;
-        hammersbald.init()?;
+    pub fn new(path: &Path, network: Network) -> Result<DB, SPVError> {
+        let basename = path.to_str().unwrap().to_string();
+        let mut headers = Persistent::new_db((basename.clone() + ".h").as_str(), 100, 2)?;
+        headers.init()?;
+        let mut blocks = Persistent::new_db((basename + ".b").as_str(), 100, 2)?;
+        blocks.init()?;
         let db = DB {
             conn: Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE |
                 OpenFlags::SQLITE_OPEN_CREATE | OpenFlags::SQLITE_OPEN_FULL_MUTEX)?,
-            hammersbald: RwLock::new(BitcoinAdapter::new(hammersbald))
+            headers: RwLock::new(BitcoinAdapter::new(headers, network)),
+            blocks: RwLock::new(BitcoinAdapter::new(blocks, network))
         };
         info!("database {:?} opened", path);
         Ok(db)
@@ -108,14 +118,14 @@ impl DB {
     /// Start a transaction. All operations must happen within the context of a transaction
     pub fn transaction<'a>(&'a mut self) -> Result<DBTX<'a>, SPVError> {
         trace!("starting transaction");
-        Ok(DBTX { tx: self.conn.transaction()?, hammersbald: &self.hammersbald, dirty: Cell::new(false) })
+        Ok(DBTX { tx: self.conn.transaction()?, headers: &self.headers, blocks: &self.blocks, dirty: Cell::new(false) })
     }
 }
 
 impl<'a> DBTX<'a> {
     /// commit the transaction
     pub fn commit(self) -> Result<(), SPVError> {
-        self.hammersbald.write().unwrap().batch()?;
+        self.headers.write().unwrap().batch()?;
         if self.dirty.get() {
             self.tx.commit()?;
             trace!("committed transaction");
@@ -132,7 +142,7 @@ impl<'a> DBTX<'a> {
 
     /// batch hammersbald writes
     pub fn batch (self) -> Result<(), SPVError> {
-        Ok(self.hammersbald.write().unwrap().batch()?)
+        Ok(self.headers.write().unwrap().batch()?)
     }
 
     /// Create tables suitable for blockchain storage
@@ -260,46 +270,67 @@ impl<'a> DBTX<'a> {
         Err(SPVError::Generic("no useful peers in the database".to_owned()))
     }
 
-    /// Set the highest hash for the chain with most work
-    pub fn set_tip(&self, tip: &Sha256dHash) -> Result<(), SPVError> {
-        let mut hb = self.hammersbald.write().unwrap();
-        hb.put(Sha256dHash::default().as_bytes(), tip.as_bytes(), &vec!())?;
-        Ok(())
-    }
-
     /// Get the hash of the highest hash on the chain with most work
     pub fn get_tip(&self) -> Result<Option<Sha256dHash>, SPVError> {
-        let hb = self.hammersbald.read().unwrap();
-        if let Some((_, tip, _)) = hb.get(Sha256dHash::default().as_bytes())? {
-            return Ok(Some(decode(tip)?));
+        let hb = self.headers.read().unwrap();
+        if let Some(tip) = hb.tip()? {
+            return Ok(Some(tip.header.bitcoin_hash()))
         }
-        return Ok(None)
+        Ok(None)
     }
 
     /// Store a header into the DB. This method will return an error if the header is already stored.
     pub fn insert_header(&self, header: &BlockHeader) -> Result<(), SPVError> {
-        let mut hb = self.hammersbald.write().unwrap();
-        hb.insert_header(header, &Vec::new())?;
-        hb.fetch_header(&header.bitcoin_hash())?;
+        let mut hb = self.headers.write().unwrap();
+        hb.insert_header(header)?;
         Ok(())
     }
 
     /// Store a transaction
     pub fn store_block (&self, block: &Block) -> Result<(), SPVError> {
-        let mut hb = self.hammersbald.write().unwrap();
-        hb.insert_block(block, &Vec::new())?;
+        let mut hb = self.blocks.write().unwrap();
+        hb.insert_block(block)?;
         Ok(())
     }
 
     /// Get a stored header. This method will return an error for an unknown header.
-    pub fn get_header(&self, hash: &Sha256dHash) -> Result<Option<BlockHeader>, SPVError> {
-        let hb = self.hammersbald.read().unwrap();
-        if let Some((header, ext)) = hb.fetch_header(hash)? {
-            Ok(Some(header))
+    pub fn get_header(&self, hash: &Sha256dHash) -> Result<Option<StoredHeader>, SPVError> {
+        let hb = self.headers.read().unwrap();
+        hb.fetch_header(hash)
+    }
+
+    /// get locator
+    pub fn locator_hashes(&self) -> Result<Vec<Sha256dHash>, SPVError> {
+        let mut locator = vec!();
+        let hb = self.headers.read().unwrap();
+        let mut skip = 1;
+        if let Some(mut h) = hb.tip()? {
+            locator.push(h.header.bitcoin_hash());
+            while h.header.prev_blockhash != Sha256dHash::default() {
+                if let Some(prev) = hb.fetch_header(&h.header.prev_blockhash)? {
+                    h = prev;
+                }
+                else {
+                    return Err(SPVError::Generic("tip is not connected to genesis".to_string()));
+                }
+                locator.push(h.header.bitcoin_hash());
+                if locator.len() > 10 {
+                    skip *= 2;
+                }
+                for _ in 1..skip {
+                    if h.header.bitcoin_hash() == Sha256dHash::default() {
+                        break;
+                    }
+                    if let Some(prev) = hb.fetch_header(&h.header.prev_blockhash)? {
+                        h = prev;
+                    }
+                    else {
+                        return Err(SPVError::Generic("tip is not connected to genesis".to_string()));
+                    }
+                }
+            }
         }
-        else {
-            Ok(None)
-        }
+        Ok(locator)
     }
 
     pub fn insert_filter (&self, block_hash: &Sha256dHash, prev_block_hash: &Sha256dHash, filter_type: u8, content: &Vec<u8>) -> Result<Sha256dHash, SPVError> {
@@ -307,19 +338,18 @@ impl<'a> DBTX<'a> {
     }
 
     /// read headers and filters into an in-memory tree, return the number of headers on trunk
-    pub fn init_node(&self, blockchain: &mut Blockchain, filters: &mut HashMap<Sha256dHash, (Sha256dHash, u8, Vec<u8>)>) -> Result<u32, SPVError> {
-        if let Some(current) = self.get_tip()? {
-            let hb = self.hammersbald.read().unwrap();
-            let mut headers = vec!();
-            for (header, _) in hb.iter_headers(&current)?.skip(1) {
-                headers.push(header);
-            }
-            for h in headers.iter().rev().skip(1) {
-                blockchain.add_header(h.clone())?;
-            }
-            return Ok(headers.len() as u32 - 1);
+    pub fn init_node(&self, network: Network, filters: &mut HashMap<Sha256dHash, (Sha256dHash, u8, Vec<u8>)>) -> Result<(), SPVError> {
+        use bitcoin::blockdata::constants::genesis_block;
+        if self.get_tip()?.is_none() {
+            self.insert_header(&genesis_block(network).header)?;
         }
-        Ok(0)
+        Ok(())
+    }
+
+    /// check if hash is on trunk (chain from genesis to tip)
+    pub fn is_on_trunk(&self, hash: &Sha256dHash) -> Result<bool, SPVError> {
+        let hb = self.headers.read().unwrap();
+        hb.is_on_trunk(hash)
     }
 }
 
@@ -389,22 +419,19 @@ impl<'a> UTXOAccessor for DBUTXOAccessor<'a> {
 mod test {
     use bitcoin::blockdata::constants;
     use bitcoin::network;
+    use bitcoin::network::constants::Network;
     use bitcoin::util::hash::{BitcoinHash, Sha256dHash};
     use super::DB;
 
     #[test]
     fn test_db1() {
-        let mut db = DB::mem().unwrap();
+        let mut db = DB::mem(Network::Bitcoin).unwrap();
         let tx = db.transaction().unwrap();
         tx.create_tables().unwrap();
-        tx.set_tip(&Sha256dHash::default()).unwrap();
-        assert_eq!(Some(Sha256dHash::default()), tx.get_tip().unwrap());
         let genesis = constants::genesis_block(network::constants::Network::Bitcoin);
         tx.insert_header(&genesis.header).unwrap();
         let header = tx.get_header(&genesis.header.bitcoin_hash()).unwrap().unwrap();
-        assert_eq!(header.bitcoin_hash(), genesis.bitcoin_hash());
-        tx.set_tip(&genesis.header.bitcoin_hash()).unwrap();
-
+        assert_eq!(header.header.bitcoin_hash(), genesis.bitcoin_hash());
         assert_eq!(Some(genesis.header.bitcoin_hash()), tx.get_tip().unwrap());
         tx.commit().unwrap();
     }

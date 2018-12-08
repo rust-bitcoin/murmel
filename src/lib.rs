@@ -28,9 +28,9 @@
 
 extern crate mio;
 extern crate bitcoin;
-extern crate bitcoin_chain;
 extern crate lightning;
 extern crate hammersbald;
+extern crate byteorder;
 #[macro_use]
 extern crate log;
 extern crate rand;
@@ -41,6 +41,7 @@ extern crate futures_timer;
 
 mod node;
 mod database;
+mod hb_adapter;
 mod error;
 #[allow(dead_code)]
 mod connector;

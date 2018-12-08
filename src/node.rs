@@ -22,7 +22,6 @@
 
 
 use bitcoin::blockdata::block::{Block, LoneBlockHeader};
-use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::blockdata::script::Script;
 use bitcoin::blockdata::transaction::Transaction;
 use bitcoin::network::address::Address;
@@ -31,8 +30,6 @@ use bitcoin::network::message_blockdata::*;
 use bitcoin::network::constants::Network;
 use bitcoin::util;
 use bitcoin::util::hash::{BitcoinHash, Sha256dHash};
-use bitcoin_chain::blockchain::Blockchain;
-use bitcoin_chain::blockchain;
 use blockfilter::BlockFilter;
 use blockfilter::UTXOAccessor;
 use connector::LightningConnector;
@@ -111,8 +108,6 @@ struct Inner {
     peers: Arc<RwLock<PeerMap>>,
     // type of the connected network
     network: Network,
-    // the in-memory blockchain storing headers
-    blockchain: Mutex<Blockchain>,
     // the persistent blockchain storing previously downloaded header and blocks
     db: Arc<Mutex<DB>>,
     // connector serving Layer 2 network
@@ -128,7 +123,6 @@ impl Node {
                 p2p,
                 peers,
                 network,
-                blockchain: Mutex::new(Blockchain::new(network)),
                 db,
                 connector: Arc::new(connector)
             })
@@ -143,17 +137,11 @@ impl Node {
     /// Load headers from database
     pub fn load_headers(&self) -> Result<(), SPVError> {
         info!("loading headers from database...");
-        // always lock blockchain before db
-        let mut blockchain = self.inner.blockchain.lock().unwrap();
         let mut db = self.inner.db.lock().unwrap();
         let tx = db.transaction()?;
         info!("reading headers and filters ...");
         let mut temp_throwaway = HashMap::new();
-        let headers = tx.init_node(&mut blockchain, &mut temp_throwaway)?;
-        info!("read {} headers from the database", headers);
-        if headers == 0 {
-            tx.store_block(&genesis_block(self.inner.network))?;
-        }
+        tx.init_node(self.inner.network, &mut temp_throwaway)?;
         tx.commit()?;
         Ok(())
     }
@@ -214,53 +202,61 @@ impl Node {
             let mut tip_moved = false;
             {
                 // new scope to limit lock
-
-                // always lock blockchain before db to avoid deadlock (if need to lock both)
-                let mut blockchain = self.inner.blockchain.lock().unwrap();
-
                 let mut db = self.inner.db.lock().unwrap();
                 let tx = db.transaction()?;
 
                 for header in headers {
-                    let old_tip = blockchain.best_tip_hash();
-                    // add to in-memory blockchain - this also checks proof of work
-                    match blockchain.add_header(header.header) {
-                        Ok(_) => {
-                            // this is a new header, not previously stored
-                            let new_tip = blockchain.best_tip_hash();
-                            tip_moved = tip_moved || new_tip != old_tip;
-                            let header_hash = header.header.bitcoin_hash();
-                            // ask for blocks after birth
-                            if new_tip == header_hash {
-                                ask_for_blocks.push(new_tip);
-                            }
+                    if let Some(mut old_tip) = tx.get_tip()? {
+                        // add to in-memory blockchain - this also checks proof of work
+                        match tx.insert_header(&header.header) {
+                            Ok(_) => {
+                                // this is a new header, not previously stored
+                                if let Some(new_tip) = tx.get_tip()? {
+                                    tip_moved = tip_moved || new_tip != old_tip;
+                                    let header_hash = header.header.bitcoin_hash();
+                                    // ask for blocks after birth
+                                    if new_tip == header_hash {
+                                        ask_for_blocks.push(new_tip);
+                                    }
 
-                            tx.insert_header(&header.header)?;
-                            some_new = true;
+                                    tx.insert_header(&header.header)?;
+                                    some_new = true;
 
-                            if header_hash == new_tip && header.header.prev_blockhash != old_tip {
-                                // this is a re-org. Compute headers to unwind
-                                for orphan_block in blockchain.rev_stale_iter(old_tip) {
-                                    disconnected_headers.push(orphan_block.header);
+                                    if header_hash == new_tip && header.header.prev_blockhash != old_tip {
+                                        // this is a re-org. Compute headers to unwind
+                                        while !tx.is_on_trunk(&old_tip)? {
+                                            if let Some(old_header) = tx.get_header(&old_tip)? {
+                                                old_tip = old_header.header.prev_blockhash;
+                                                disconnected_headers.push(old_header.header);
+                                            }
+                                        }
+                                    }
                                 }
                             }
+                            Err(SPVError::SpvBadProofOfWork) => {
+                                info!("Incorrect POW, banning peer={}", peer);
+                                return Ok(ProcessResult::Ban(100));
+                            }
+                            Err(_) => return Ok(ProcessResult::Ignored)
                         }
-                        Err(blockchain::BlockchainError::BitcoinError(util::Error::SpvBadProofOfWork)) => {
-                            info!("Incorrect POW, banning peer={}", peer);
-                            return Ok(ProcessResult::Ban(100));
-                        }
-                        Err(_) => return Ok(ProcessResult::Ignored)
                     }
                 }
-                let new_tip = blockchain.best_tip_hash();
-                height = blockchain.get_block(new_tip).unwrap().height;
-
+                if let Some(ref new_tip) = tx.get_tip()? {
+                    if let Some(header) = tx.get_header(new_tip)? {
+                        height = header.height;
+                    }
+                    else {
+                        return Err(SPVError::Generic("no tip header stored".to_string()));
+                    }
+                }
+                else {
+                    return Err(SPVError::Generic("no tip".to_string()));
+                }
                 if tip_moved {
-                    tx.set_tip(&new_tip)?;
-
+                    if let Some(new_tip) = tx.get_tip()? {
+                        info!("received {} headers new tip={} from peer={}", headers.len(), new_tip, peer);
+                    }
                     tx.commit()?;
-                    info!("received {} headers new tip={} from peer={}", headers.len(),
-                          blockchain.best_tip_hash(), peer);
                 } else {
                     tx.commit()?;
                     debug!("received {} known or orphan headers from peer={}", headers.len(), peer);
@@ -294,9 +290,10 @@ impl Node {
 
     // process an incoming block
     fn block(&self, block: &Block, peer: PeerId) -> Result<ProcessResult, SPVError> {
-        let blockchain = self.inner.blockchain.lock().unwrap();
+        let mut db = self.inner.db.lock().unwrap();
+        let tx = db.transaction()?;
         // header should be known already, otherwise it might be spam
-        if let Some(block_node) = blockchain.get_block(block.bitcoin_hash()) {
+        if let Some(block_node) = tx.get_header(&block.bitcoin_hash())? {
             // TODO process
             return Ok(ProcessResult::Ack);
         }
@@ -308,7 +305,9 @@ impl Node {
         for inventory in v {
             // only care of blocks
             if inventory.inv_type == InvType::Block {
-                if self.inner.blockchain.lock().unwrap().get_block(inventory.hash).is_none() {
+                let mut db = self.inner.db.lock().unwrap();
+                let tx = db.transaction()?;
+                if tx.get_header(&inventory.hash)?.is_none() {
                     // ask for header(s) if observing a new block
                     self.get_headers(peer)?;
                     return Ok(ProcessResult::Ack);
@@ -346,7 +345,9 @@ impl Node {
 
     /// get headers this peer is ahead of us
     fn get_headers(&self, peer: PeerId) -> Result<ProcessResult, SPVError> {
-        let locator = self.inner.blockchain.lock().unwrap().locator_hashes();
+        let mut db = self.inner.db.lock().unwrap();
+        let tx = db.transaction()?;
+        let locator = tx.locator_hashes()?;
         if locator.len() > 0 {
             let last = if locator.len() > 0 {
                 *locator.last().unwrap()

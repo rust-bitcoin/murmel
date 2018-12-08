@@ -27,11 +27,12 @@ use std::convert;
 use std::error::Error;
 use std::fmt;
 use std::io;
-use bitcoin_chain::blockchain;
 use bitcoin::consensus::encode;
 
 /// An error class to offer a unified error interface upstream
 pub enum SPVError {
+    /// bad proof of work
+    SpvBadProofOfWork,
     /// generic error message
     Generic(String),
     /// Network IO error
@@ -44,31 +45,29 @@ pub enum SPVError {
     Serialize(encode::Error),
     /// Hammersbald error
     Hammersbald(HammersbaldError),
-    /// blockchain
-    Blockchain(blockchain::BlockchainError)
 }
 
 impl Error for SPVError {
     fn description(&self) -> &str {
         match *self {
+            SPVError::SpvBadProofOfWork => "bad proof of work",
             SPVError::Generic(ref s) => s,
             SPVError::IO(ref err) => err.description(),
             SPVError::DB(ref err) => err.description(),
             SPVError::Util(ref err) => err.description(),
             SPVError::Hammersbald(ref err) => err.description(),
-            SPVError::Blockchain(ref err) => err.description(),
             SPVError::Serialize(ref err) => err.description()
         }
     }
 
     fn cause(&self) -> Option<&Error> {
         match *self {
+            SPVError::SpvBadProofOfWork => None,
             SPVError::Generic(_) => None,
             SPVError::IO(ref err) => Some(err),
             SPVError::DB(ref err) => Some(err),
             SPVError::Util(ref err) => Some(err),
             SPVError::Hammersbald(ref err) => Some(err),
-            SPVError::Blockchain(ref err) => Some(err),
             SPVError::Serialize(ref err) => Some(err)
         }
     }
@@ -79,12 +78,12 @@ impl fmt::Display for SPVError {
         match *self {
             // Both underlying errors already impl `Display`, so we defer to
             // their implementations.
+            SPVError::SpvBadProofOfWork => write!(f, "bad proof of work"),
             SPVError::Generic(ref s) => write!(f, "Generic: {}", s),
             SPVError::IO(ref err) => write!(f, "IO error: {}", err),
             SPVError::DB(ref err) => write!(f, "DB error: {}", err),
             SPVError::Util(ref err) => write!(f, "Util error: {}", err),
             SPVError::Hammersbald(ref err) => write!(f, "Hammersbald error: {}", err),
-            SPVError::Blockchain(ref err) => write!(f, "Blockchain error: {}", err),
             SPVError::Serialize(ref err) => write!(f, "Serialize error: {}", err),
         }
     }
@@ -127,12 +126,6 @@ impl convert::From<rusqlite::Error> for SPVError {
 impl convert::From<HammersbaldError> for SPVError {
     fn from(err: HammersbaldError) -> SPVError {
         SPVError::Hammersbald(err)
-    }
-}
-
-impl convert::From<blockchain::BlockchainError> for SPVError {
-    fn from(err: blockchain::BlockchainError) -> SPVError {
-        SPVError::Blockchain(err)
     }
 }
 
