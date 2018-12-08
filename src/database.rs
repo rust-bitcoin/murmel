@@ -318,7 +318,7 @@ impl<'a> DBTX<'a> {
                     skip *= 2;
                 }
                 for _ in 1..skip {
-                    if h.header.bitcoin_hash() == Sha256dHash::default() {
+                    if h.header.prev_blockhash == Sha256dHash::default() {
                         break;
                     }
                     if let Some(prev) = hb.fetch_header(&h.header.prev_blockhash)? {

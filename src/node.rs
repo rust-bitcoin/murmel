@@ -160,8 +160,8 @@ impl Node {
 
     fn download_blocks(&self, pid: PeerId, blocks: Vec<Sha256dHash>) -> Result<ProcessResult, SPVError> {
         // TODO decide if we need it (BIP158)
-        // let inventory = blocks.iter().map(|b| {Inventory{inv_type: InvType::WitnessBlock, hash: b.clone()}}).collect();
-        // self.send(pid, &NetworkMessage::GetData(inventory))?;
+        let inventory = blocks.iter().map(|b| {Inventory{inv_type: InvType::WitnessBlock, hash: b.clone()}}).collect();
+        self.send(pid, &NetworkMessage::GetData(inventory))?;
         Ok(ProcessResult::Ack)
     }
 
@@ -294,7 +294,7 @@ impl Node {
         let tx = db.transaction()?;
         // header should be known already, otherwise it might be spam
         if let Some(block_node) = tx.get_header(&block.bitcoin_hash())? {
-            // TODO process
+            tx.store_block(block)?;
             return Ok(ProcessResult::Ack);
         }
         Ok(ProcessResult::Ignored)
