@@ -125,7 +125,7 @@ impl DB {
 impl<'a> DBTX<'a> {
     /// commit the transaction
     pub fn commit(self) -> Result<(), SPVError> {
-        self.headers.write().unwrap().batch()?;
+        self.batch()?;
         if self.dirty.get() {
             self.tx.commit()?;
             trace!("committed transaction");
@@ -141,7 +141,8 @@ impl<'a> DBTX<'a> {
     }
 
     /// batch hammersbald writes
-    pub fn batch (self) -> Result<(), SPVError> {
+    pub fn batch (&self) -> Result<(), SPVError> {
+        self.blocks.write().unwrap().batch()?;
         Ok(self.headers.write().unwrap().batch()?)
     }
 
