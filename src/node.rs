@@ -111,7 +111,8 @@ struct Inner {
     // the persistent blockchain storing previously downloaded header and blocks
     db: Arc<Mutex<DB>>,
     // connector serving Layer 2 network
-    connector: Arc<LightningConnector>
+    connector: Arc<LightningConnector>,
+    // header chain with most work
 }
 
 impl Node {
@@ -139,9 +140,7 @@ impl Node {
         info!("loading headers from database...");
         let mut db = self.inner.db.lock().unwrap();
         let tx = db.transaction()?;
-        info!("reading headers and filters ...");
-        let mut temp_throwaway = HashMap::new();
-        tx.init_node(self.inner.network, &mut temp_throwaway)?;
+        tx.init_node(self.inner.network)?;
         tx.commit()?;
         Ok(())
     }
@@ -219,7 +218,6 @@ impl Node {
                                         ask_for_blocks.push(new_tip);
                                     }
 
-                                    tx.insert_header(&header.header)?;
                                     some_new = true;
 
                                     if header_hash == new_tip && header.header.prev_blockhash != old_tip {
@@ -294,7 +292,9 @@ impl Node {
         let tx = db.transaction()?;
         // header should be known already, otherwise it might be spam
         if let Some(block_node) = tx.get_header(&block.bitcoin_hash())? {
+            debug!("store block {}", block.bitcoin_hash());
             tx.store_block(block)?;
+            debug!("store block {} done", block.bitcoin_hash());
             return Ok(ProcessResult::Ack);
         }
         Ok(ProcessResult::Ignored)
@@ -349,12 +349,16 @@ impl Node {
         let tx = db.transaction()?;
         let locator = tx.locator_hashes()?;
         if locator.len() > 0 {
+            debug!("locator {} {}", locator[0], locator.len());
             let last = if locator.len() > 0 {
                 *locator.last().unwrap()
             } else {
                 Sha256dHash::default()
             };
             return self.send(peer, &NetworkMessage::GetHeaders(GetHeadersMessage::new(locator, last)));
+        }
+        else {
+            debug!("empty locator");
         }
         Ok(ProcessResult::Ack)
     }

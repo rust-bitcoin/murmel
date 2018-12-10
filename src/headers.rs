@@ -14,7 +14,7 @@
 // limitations under the License.
 //
 //!
-//! # atapter to use hammersbald
+//! # store headers with hammersbald and maintain a cache
 //!
 
 use error::SPVError;
@@ -50,14 +50,14 @@ use std:: {
 };
 
 /// Adapter for Hammersbald storing Bitcoin data
-pub struct BitcoinAdapter {
+pub struct Headers {
     hammersbald: Hammersbald,
     network: Network
 }
 
 /// Errors returned by this library
 #[derive(Debug)]
-pub enum BitcoinAdapterError {
+pub enum HeadersError {
     /// attempt to insert an unconnected header
     Unconnected,
     /// chain tip is not set
@@ -66,12 +66,12 @@ pub enum BitcoinAdapterError {
     ParseError
 }
 
-impl Error for BitcoinAdapterError {
+impl Error for HeadersError {
     fn description(&self) -> &str {
         match self {
-            BitcoinAdapterError::Unconnected => "unconnected header",
-            BitcoinAdapterError::NoTip => "the chain has no tip",
-            BitcoinAdapterError::ParseError => "parse error"
+            HeadersError::Unconnected => "unconnected header",
+            HeadersError::NoTip => "the chain has no tip",
+            HeadersError::ParseError => "parse error"
         }
     }
 
@@ -80,20 +80,10 @@ impl Error for BitcoinAdapterError {
     }
 }
 
-impl fmt::Display for BitcoinAdapterError {
+impl fmt::Display for HeadersError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "BitcoinAdapterError error: {} cause: {:?}", self.description(), self.cause())
+        write!(f, "HeadersError error: {} cause: {:?}", self.description(), self.cause())
     }
-}
-
-/// Types of Bitcoin data
-pub enum BitcoinData<'d> {
-    /// Header or Block
-    HeaderOrBlock(&'d [u8]),
-    /// Transaction
-    Transaction(&'d [u8]),
-    /// Extension
-    Extension(&'d [u8]),
 }
 
 /// A header enriched with information about its position on the blockchain
@@ -111,21 +101,10 @@ pub struct StoredHeader {
     pub required_work: Uint256
 }
 
-impl<'d> BitcoinData<'d> {
-    /// de-serialize stored Bitcoin data types
-    pub fn deserialize (data: &'d [u8]) -> BitcoinData<'d> {
-        match data [0] {
-            0u8 => BitcoinData::HeaderOrBlock(&data [1..]),
-            1u8 => BitcoinData::Transaction(&data[1..]),
-            _ => BitcoinData::Extension(&data[1..])
-        }
-    }
-}
-
-impl BitcoinAdapter {
+impl Headers {
     /// create a new Bitcoin adapter wrapping Hammersbald
-    pub fn new(hammersbald: Hammersbald, network: Network) -> BitcoinAdapter {
-        BitcoinAdapter { hammersbald, network }
+    pub fn new(hammersbald: Hammersbald, network: Network) -> Headers {
+        Headers { hammersbald, network }
     }
 
     /// Insert a Bitcoin header
@@ -159,7 +138,6 @@ impl BitcoinAdapter {
         }
         let key = &header.bitcoin_hash().to_bytes()[..];
         let mut serialized_header = Vec::new();
-        serialized_header.push(0u8);
         serialized_header.extend(encode(&stored.header)?);
         serialized_header.write_u24::<BigEndian>(stored.height)?; // height
         serialized_header.write_u48::<BigEndian>(PRef::invalid().as_u64())?; // no transactions
@@ -319,19 +297,16 @@ impl BitcoinAdapter {
     }
 
     fn parse_header(stored: Vec<u8>, referred: Vec<PRef>) -> Result<Option<StoredHeader>, SPVError> {
-        if let BitcoinData::HeaderOrBlock(stored) = BitcoinData::deserialize(stored.as_slice()) {
-            let header = decode(&stored[0..80])?;
-            let mut data = Cursor::new(&stored[80..]);
-            let height = data.read_u24::<BigEndian>()?;
-            PRef::from(data.read_u48::<BigEndian>()?); // do not care of transactions
+        let header = decode(&stored[0..80])?;
+        let mut data = Cursor::new(&stored[80..]);
+        let height = data.read_u24::<BigEndian>()?;
+        PRef::from(data.read_u48::<BigEndian>()?); // do not care of transactions
 
-            let previous_ref = if referred.len() > 0 { referred[0] } else { PRef::invalid() };
-            let required_difficulty = Self::parse_u256(&mut data)?;
-            let total_work = Self::parse_u256(&mut data)?;
+        let previous_ref = if referred.len() > 0 { referred[0] } else { PRef::invalid() };
+        let required_difficulty = Self::parse_u256(&mut data)?;
+        let total_work = Self::parse_u256(&mut data)?;
 
-            return Ok(Some(StoredHeader{header, height, previous_ref, total_work, required_work: required_difficulty }))
-        }
-        Ok(None)
+        return Ok(Some(StoredHeader{header, height, previous_ref, total_work, required_work: required_difficulty }))
     }
 
     fn parse_u256(data: &mut Cursor<&[u8]>) -> Result<Uint256, SPVError> {
@@ -348,7 +323,6 @@ impl BitcoinAdapter {
         let mut referred = vec!();
         let key = &block.bitcoin_hash().to_bytes()[..];
         let mut serialized_block = Vec::new();
-        serialized_block.push(0u8);
         serialized_block.extend(encode(&block.header)?);
         let mut tx_prefs = Vec::new();
         for t in &block.txdata {
@@ -367,28 +341,26 @@ impl BitcoinAdapter {
     pub fn fetch_block (&self, id: &Sha256dHash)  -> Result<Option<(Block, Vec<Vec<u8>>)>, Box<Error>> {
         let key = &id.as_bytes()[..];
         if let Some((_, stored, _)) = self.hammersbald.get(&key)? {
-            if let BitcoinData::HeaderOrBlock(stored) = BitcoinData::deserialize(stored.as_slice()) {
-                let header = decode(&stored[0..80])?;
-                let mut data = Cursor::new(&stored[80..]);
-                let txdata_offset = PRef::from(data.read_u48::<BigEndian>()?);
-                let mut txdata: Vec<Transaction> = Vec::new();
-                if txdata_offset.is_valid() {
-                    let (_, _, txrefs) = self.hammersbald.get_referred(txdata_offset)?;
-                    for txref in &txrefs {
-                        let (_, tx, _) = self.hammersbald.get_referred(*txref)?;
-                        txdata.push(decode(tx.as_slice())?);
-                    }
+            let header = decode(&stored[0..80])?;
+            let mut data = Cursor::new(&stored[80..]);
+            let txdata_offset = PRef::from(data.read_u48::<BigEndian>()?);
+            let mut txdata: Vec<Transaction> = Vec::new();
+            if txdata_offset.is_valid() {
+                let (_, _, txrefs) = self.hammersbald.get_referred(txdata_offset)?;
+                for txref in &txrefs {
+                    let (_, tx, _) = self.hammersbald.get_referred(*txref)?;
+                    txdata.push(decode(tx.as_slice())?);
                 }
-                let next = data.read_u32::<BigEndian>()?;
-                let mut extension = Vec::new();
-                for _ in 0..next {
-                    let pref = PRef::from(data.read_u48::<BigEndian>()?);
-                    let (_, e, _) = self.hammersbald.get_referred(pref)?;
-                    extension.push(e);
-                }
-
-                return Ok(Some((Block { header, txdata }, extension)))
             }
+            let next = data.read_u32::<BigEndian>()?;
+            let mut extension = Vec::new();
+            for _ in 0..next {
+                let pref = PRef::from(data.read_u48::<BigEndian>()?);
+                let (_, e, _) = self.hammersbald.get_referred(pref)?;
+                extension.push(e);
+            }
+
+            return Ok(Some((Block { header, txdata }, extension)))
         }
         Ok(None)
     }
@@ -400,55 +372,8 @@ impl BitcoinAdapter {
         }
         return Err(SPVError::Generic("no tip".to_string()));
     }
-
-    /// iterate over transactions that send to a script
-    pub fn iter_send_to_script<'s> (&'s self, tip: &Sha256dHash, script: Script) -> Result<impl Iterator<Item=Transaction> +'s, SPVError> {
-        if let Some((tipref, _, _)) = self.get(&tip.as_bytes()[..])? {
-            return Ok(BitcoinScriptScan { script, dag: self.dag(tipref) })
-        }
-        return Err(SPVError::Generic("no tip".to_string()));
-    }
 }
 
-struct BitcoinScriptScan<'s> {
-    script: Script,
-    dag: DagIterator<'s>
-}
-
-impl<'s> BitcoinScriptScan<'s> {
-    fn process(&self, data: Data) -> Option<Transaction> {
-        if let BitcoinData::Transaction(transaction) = BitcoinData::deserialize(data.data) {
-            let tx: Transaction = decode(transaction).expect("can not parse stored transaction");
-            for output in &tx.output {
-                if output.script_pubkey == self.script {
-                    return Some(tx.clone());
-                }
-            }
-        }
-        None
-    }
-}
-
-impl<'s> Iterator for BitcoinScriptScan<'s> {
-    type Item = Transaction;
-
-    fn next(&mut self) -> Option<<Self as Iterator>::Item> {
-        while let Some((_, envelope)) = self.dag.next() {
-            if let Some(transaction) = match Payload::deserialize(envelope.payload()) {
-                Ok(Payload::Indexed(indexed)) => {
-                    self.process(indexed.data)
-                }
-                Ok(Payload::Referred(data)) => {
-                    self.process(data)
-                }
-                _ => None
-            } {
-                return Some(transaction)
-            }
-        }
-        None
-    }
-}
 
 struct BitcoinHeaderScan<'s> {
     tip: PRef,
@@ -467,7 +392,7 @@ impl<'s> Iterator for BitcoinHeaderScan<'s> {
                     else {
                         self.tip = PRef::invalid();
                     }
-                if let Ok(Some(result)) = BitcoinAdapter::parse_header(data, referred) {
+                if let Ok(Some(result)) = Headers::parse_header(data, referred) {
                     return Some(result)
                 }
             }
@@ -477,7 +402,7 @@ impl<'s> Iterator for BitcoinHeaderScan<'s> {
     }
 }
 
-impl HammersbaldAPI for BitcoinAdapter {
+impl HammersbaldAPI for Headers {
     fn init(&mut self) -> Result<(), HammersbaldError> {
         self.hammersbald.init()
     }
@@ -550,7 +475,7 @@ mod test {
 
     #[test]
     fn header_test() {
-        let mut db = BitcoinAdapter::new(
+        let mut db = Headers::new(
             Transient::new_db("first", 1, 1).unwrap(),
             Network::Bitcoin);
 
@@ -565,25 +490,6 @@ mod test {
         db.insert_header(&next.header).unwrap();
 
         assert_eq!(next.bitcoin_hash(), db.tip().unwrap().unwrap().header.bitcoin_hash());
-        db.batch().unwrap();
-        db.shutdown();
-    }
-
-    #[test]
-    fn block_test() {
-        let mut db = BitcoinAdapter::new(
-            Transient::new_db("first", 1, 1).unwrap(),
-            Network::Bitcoin);
-
-        db.init().unwrap();
-
-        let genesis = genesis_block(Network::Bitcoin);
-
-        db.insert_block(&genesis).unwrap();
-
-        let next: Block = decode(hex::decode("010000006fe28c0ab6f1b372c1a6a246ae63f74f931e8365e15a089c68d6190000000000982051fd1e4ba744bbbe680e1fee14677ba1a3c3540bf7b1cdb606e857233e0e61bc6649ffff001d01e362990101000000010000000000000000000000000000000000000000000000000000000000000000ffffffff0704ffff001d0104ffffffff0100f2052a0100000043410496b538e853519c726a2c91e61ec11600ae1390813a627c66fb8be7947be63c52da7589379515d4e0a604f8141781e62294721166bf621e73a82cbf2342c858eeac00000000".as_bytes()).unwrap().as_ref()).unwrap();
-        db.insert_block(&next).unwrap();
-
         db.batch().unwrap();
         db.shutdown();
     }

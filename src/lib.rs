@@ -41,7 +41,8 @@ extern crate futures_timer;
 
 mod node;
 mod database;
-mod hb_adapter;
+mod headers;
+mod blocks;
 mod error;
 #[allow(dead_code)]
 mod connector;

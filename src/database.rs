@@ -35,7 +35,8 @@ use hammersbald::api::HammersbaldFactory;
 use hammersbald::persistent::Persistent;
 use hammersbald::transient::Transient;
 
-use hb_adapter::{BitcoinAdapter, StoredHeader};
+use headers::{Headers, StoredHeader};
+use blocks::Blocks;
 
 use rusqlite;
 use rusqlite::Connection;
@@ -69,8 +70,8 @@ const UNWIND_LIMIT :i64 = 100;
 /// tx.commit();
 pub struct DB {
     conn: Connection,
-    headers: RwLock<BitcoinAdapter>,
-    blocks: RwLock<BitcoinAdapter>,
+    headers: RwLock<Headers>,
+    blocks: RwLock<Blocks>
 }
 
 /// All database operations are accessible through this transaction wrapper, that also
@@ -81,8 +82,8 @@ pub struct DB {
 /// tx.commit();
 pub struct DBTX<'a> {
     tx: rusqlite::Transaction<'a>,
-    headers: &'a RwLock<BitcoinAdapter>,
-    blocks: &'a RwLock<BitcoinAdapter>,
+    headers: &'a RwLock<Headers>,
+    blocks: &'a RwLock<Blocks>,
     dirty: Cell<bool>
 }
 
@@ -94,8 +95,8 @@ impl DB {
         headers.init()?;
         let mut blocks = Transient::new_db("b", 1, 2)?;
         blocks.init()?;
-        Ok(DB { conn: Connection::open_in_memory()?, headers: RwLock::new(BitcoinAdapter::new(headers, network)),
-            blocks: RwLock::new(BitcoinAdapter::new(blocks, network))})
+        Ok(DB { conn: Connection::open_in_memory()?, headers: RwLock::new(Headers::new(headers, network)),
+            blocks: RwLock::new(Blocks::new(blocks, network))})
     }
 
     /// Create or open a persistent database instance identified by the path
@@ -108,8 +109,8 @@ impl DB {
         let db = DB {
             conn: Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE |
                 OpenFlags::SQLITE_OPEN_CREATE | OpenFlags::SQLITE_OPEN_FULL_MUTEX)?,
-            headers: RwLock::new(BitcoinAdapter::new(headers, network)),
-            blocks: RwLock::new(BitcoinAdapter::new(blocks, network))
+            headers: RwLock::new(Headers::new(headers, network)),
+            blocks: RwLock::new(Blocks::new(blocks, network))
         };
         info!("database {:?} opened", path);
         Ok(db)
@@ -339,11 +340,13 @@ impl<'a> DBTX<'a> {
     }
 
     /// read headers and filters into an in-memory tree, return the number of headers on trunk
-    pub fn init_node(&self, network: Network, filters: &mut HashMap<Sha256dHash, (Sha256dHash, u8, Vec<u8>)>) -> Result<(), SPVError> {
-        use bitcoin::blockdata::constants::genesis_block;
+    pub fn init_node(&self, network: Network) -> Result<(), SPVError> {
         if self.get_tip()?.is_none() {
+            use bitcoin::blockdata::constants::genesis_block;
+
             self.insert_header(&genesis_block(network).header)?;
         }
+
         Ok(())
     }
 
