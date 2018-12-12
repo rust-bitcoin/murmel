@@ -265,6 +265,13 @@ impl HeaderStore {
         Ok(())
     }
 
+    fn read_tip_hash(&self) -> Result<Option<Sha256dHash>, SPVError> {
+        if let Some((_, h, _)) = self.hammersbald.get(&Sha256dHash::default().to_bytes()[..])? {
+            return Ok(Some(decode(h.as_slice())?))
+        }
+        Ok(None)
+    }
+
     /// This function emulates the `GetCompact(SetCompact(n))` in the satoshi code,
     /// which drops the precision to something that can be encoded precisely in
     /// the nBits block header field. Savour the perversity. This is in Bitcoin
@@ -309,9 +316,9 @@ impl HeaderStore {
     }
 
     /// initialize cache
-    pub fn init_cache (&mut self) -> Result<(), SPVError> {
-        if let Some(tip) = self.tip()? {
-            let mut h = tip.header.bitcoin_hash();
+    pub fn init_cache (&mut self, genesis: BlockHeader) -> Result<(), SPVError> {
+        if let Some(tip) = self.read_tip_hash()? {
+            let mut h = tip;
             while let Some(stored) = self.fetch_header(&h)? {
                 let sh = Arc::new(stored.header.bitcoin_hash());
                 self.trunk.push(sh.clone());
@@ -324,6 +331,9 @@ impl HeaderStore {
                 }
             }
             self.trunk.reverse();
+        }
+        else {
+            self.insert_header(&genesis)?;
         }
         Ok(())
     }

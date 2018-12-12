@@ -306,13 +306,9 @@ impl<'a> DBTX<'a> {
 
     /// read headers and filters into an in-memory tree, return the number of headers on trunk
     pub fn init_node(&self, network: Network) -> Result<(), SPVError> {
-        if self.get_tip()?.is_none() {
-            use bitcoin::blockdata::constants::genesis_block;
-
-            self.insert_header(&genesis_block(network).header)?;
-        }
+        use bitcoin::blockdata::constants::genesis_block;
         let mut hb = self.headers.write().unwrap();
-        hb.init_cache()?;
+        hb.init_cache(genesis_block(network).header)?;
         Ok(())
     }
 
