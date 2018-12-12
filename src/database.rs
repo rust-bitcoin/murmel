@@ -295,37 +295,9 @@ impl<'a> DBTX<'a> {
     }
 
     /// get locator
-    pub fn locator_hashes(&self) -> Result<Vec<Sha256dHash>, SPVError> {
-        let mut locator = vec!();
+    pub fn locator_hashes(&self) -> Vec<Sha256dHash> {
         let hb = self.headers.read().unwrap();
-        let mut skip = 1;
-        if let Some(mut h) = hb.tip()? {
-            locator.push(h.header.bitcoin_hash());
-            while h.header.prev_blockhash != Sha256dHash::default() {
-                if let Some(prev) = hb.get_header(&h.header.prev_blockhash) {
-                    h = prev;
-                }
-                else {
-                    return Err(SPVError::Generic("tip is not connected to genesis".to_string()));
-                }
-                locator.push(h.header.bitcoin_hash());
-                if locator.len() > 10 {
-                    skip *= 2;
-                }
-                for _ in 1..skip {
-                    if h.header.prev_blockhash == Sha256dHash::default() {
-                        break;
-                    }
-                    if let Some(prev) = hb.get_header(&h.header.prev_blockhash) {
-                        h = prev;
-                    }
-                    else {
-                        return Err(SPVError::Generic("tip is not connected to genesis".to_string()));
-                    }
-                }
-            }
-        }
-        Ok(locator)
+        hb.locator_hashes()
     }
 
     pub fn insert_filter (&self, _block_hash: &Sha256dHash, _prev_block_hash: &Sha256dHash, _filter_type: u8, _content: &Vec<u8>) -> Result<Sha256dHash, SPVError> {

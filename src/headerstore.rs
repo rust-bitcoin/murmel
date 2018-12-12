@@ -328,6 +328,29 @@ impl HeaderStore {
         Ok(())
     }
 
+    pub fn locator_hashes(&self) -> Vec<Sha256dHash> {
+        let mut locator = vec!();
+        let mut skip = 1;
+        let mut count = 0;
+        let mut s = 0;
+
+        let iterator = self.trunk.iter().rev();
+        for h in iterator {
+            if s == 0 {
+                locator.push(*h.clone());
+                count += 1;
+                s = skip;
+            }
+            s -= 1;
+            if count > 10 {
+                skip *= 2;
+            }
+        }
+
+        locator
+    }
+
+
     /// init hammersbald
     pub fn init (&mut self) -> Result<(), HammersbaldError> {
         self.hammersbald.init()

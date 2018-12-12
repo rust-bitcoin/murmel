@@ -310,7 +310,7 @@ impl Node {
     fn get_headers(&self, peer: PeerId) -> Result<ProcessResult, SPVError> {
         let mut db = self.inner.db.lock().unwrap();
         let tx = db.transaction()?;
-        let locator = tx.locator_hashes()?;
+        let locator = tx.locator_hashes();
         if locator.len() > 0 {
             debug!("locator {} {}", locator[0], locator.len());
             let last = if locator.len() > 0 {
