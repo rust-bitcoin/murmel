@@ -22,8 +22,7 @@ use error::SPVError;
 use hammersbald:: {
     api::{HammersbaldAPI, Hammersbald},
     pref::PRef,
-    error::HammersbaldError,
-    datafile::DagIterator
+    error::HammersbaldError
 };
 
 use bitcoin:: {
@@ -40,23 +39,49 @@ use bitcoin:: {
 use byteorder::{ReadBytesExt, WriteBytesExt, BigEndian};
 
 use std:: {
-    io::Cursor,
-    error::Error
+    io::Cursor
 };
 
+/// Block stored
+pub struct StoredBlock {
+    /// Bitcoin block
+    pub block: Block,
+    /// filter id (BIP158)
+    pub filter_id: Sha256dHash
+}
+
 /// Adapter for Hammersbald storing Bitcoin data
-pub struct Blocks {
+pub struct FilterStore {
     hammersbald: Hammersbald
 }
 
-impl Blocks {
+impl FilterStore {
     /// create a new Bitcoin adapter wrapping Hammersbald
-    pub fn new(hammersbald: Hammersbald) -> Blocks {
-        Blocks { hammersbald }
+    pub fn new(hammersbald: Hammersbald) -> FilterStore {
+        FilterStore { hammersbald }
+    }
+
+    pub fn insert_filter(&mut self, previous_filter: &Sha256dHash, filter: Vec<u8>) -> Result<Sha256dHash, SPVError> {
+        let filter_header = Sha256dHash::from_data(filter.as_slice());
+        let mut id_data = [0u8; 64];
+        id_data[0..32].copy_from_slice(&filter_header.as_bytes()[..]);
+        id_data[0..32].copy_from_slice(&previous_filter.as_bytes()[..]);
+        let filter_id = Sha256dHash::from_data(&id_data);
+        self.hammersbald.put(&filter_id.as_bytes()[..], filter.as_slice(), &vec!())?;
+        Ok(filter_id)
     }
 
     /// insert a block
-    pub fn insert_block(&mut self, block: &Block) -> Result<PRef, SPVError> {
+    pub fn insert_block(&mut self, block: &Block, filter: Vec<u8>) -> Result<PRef, SPVError> {
+
+        let prev_filter;
+        if let Some(prev) = self.fetch_block(&block.header.prev_blockhash)? {
+            prev_filter = prev.filter_id;
+        }
+        else {
+            prev_filter = Sha256dHash::default();
+        }
+
         let mut referred = vec!();
         let key = &block.bitcoin_hash().to_bytes()[..];
         let mut serialized_block = Vec::new();
@@ -69,18 +94,22 @@ impl Blocks {
         }
         let stored_tx_offsets = self.hammersbald.put_referred(&[], &tx_prefs)?;
         referred.push(stored_tx_offsets);
-        serialized_block.write_u24::<BigEndian>(0)?; // height
         serialized_block.write_u48::<BigEndian>(stored_tx_offsets.as_u64())?;
+        let filter_id = self.insert_filter(&prev_filter, filter)?;
+        serialized_block.extend(filter_id.as_bytes().iter());
+
         Ok(self.hammersbald.put(&key[..], serialized_block.as_slice(), &referred)?)
     }
 
     /// Fetch a block by its id
-    pub fn fetch_block (&self, id: &Sha256dHash)  -> Result<Option<(Block, Vec<Vec<u8>>)>, Box<Error>> {
+    pub fn fetch_block (&self, id: &Sha256dHash)  -> Result<Option<StoredBlock>, SPVError> {
         let key = &id.as_bytes()[..];
         if let Some((_, stored, _)) = self.hammersbald.get(&key)? {
             let header = decode(&stored[0..80])?;
             let mut data = Cursor::new(&stored[80..]);
             let txdata_offset = PRef::from(data.read_u48::<BigEndian>()?);
+            let filter_id = Sha256dHash::from (&data.into_inner()[86..86+32]);
+
             let mut txdata: Vec<Transaction> = Vec::new();
             if txdata_offset.is_valid() {
                 let (_, _, txrefs) = self.hammersbald.get_referred(txdata_offset)?;
@@ -89,53 +118,21 @@ impl Blocks {
                     txdata.push(decode(tx.as_slice())?);
                 }
             }
-            let next = data.read_u32::<BigEndian>()?;
-            let mut extension = Vec::new();
-            for _ in 0..next {
-                let pref = PRef::from(data.read_u48::<BigEndian>()?);
-                let (_, e, _) = self.hammersbald.get_referred(pref)?;
-                extension.push(e);
-            }
 
-            return Ok(Some((Block { header, txdata }, extension)))
+            return Ok(Some(StoredBlock{ block: Block { header, txdata }, filter_id}))
         }
         Ok(None)
     }
-}
-
-
-
-impl HammersbaldAPI for Blocks {
-    fn init(&mut self) -> Result<(), HammersbaldError> {
+    pub fn init(&mut self) -> Result<(), HammersbaldError> {
         self.hammersbald.init()
     }
 
-    fn batch(&mut self) -> Result<(), HammersbaldError> {
+    pub fn batch(&mut self) -> Result<(), HammersbaldError> {
         self.hammersbald.batch()
     }
 
-    fn shutdown(&mut self) {
+    pub fn shutdown(&mut self) {
         self.hammersbald.shutdown()
-    }
-
-    fn put(&mut self, key: &[u8], data: &[u8], referred: &Vec<PRef>) -> Result<PRef, HammersbaldError> {
-        self.hammersbald.put(key, data, &referred)
-    }
-
-    fn get(&self, key: &[u8]) -> Result<Option<(PRef, Vec<u8>, Vec<PRef>)>, HammersbaldError> {
-        self.hammersbald.get(key)
-    }
-
-    fn put_referred(&mut self, data: &[u8], referred: &Vec<PRef>) -> Result<PRef, HammersbaldError> {
-        self.hammersbald.put_referred(data, referred)
-    }
-
-    fn get_referred(&self, pref: PRef) -> Result<(Vec<u8>, Vec<u8>, Vec<PRef>), HammersbaldError> {
-        self.hammersbald.get_referred(pref)
-    }
-
-    fn dag(&self, root: PRef) -> DagIterator {
-        self.hammersbald.dag(root)
     }
 }
 

@@ -35,8 +35,8 @@ use hammersbald::api::HammersbaldFactory;
 use hammersbald::persistent::Persistent;
 use hammersbald::transient::Transient;
 
-use headers::{Headers, StoredHeader};
-use blocks::Blocks;
+use headerstore::{HeaderStore, StoredHeader};
+use filterstore::FilterStore;
 
 use rusqlite;
 use rusqlite::Connection;
@@ -66,8 +66,8 @@ use rand::RngCore;
 /// tx.commit();
 pub struct DB {
     conn: Connection,
-    headers: RwLock<Headers>,
-    blocks: RwLock<Blocks>
+    headers: RwLock<HeaderStore>,
+    blocks: RwLock<FilterStore>
 }
 
 /// All database operations are accessible through this transaction wrapper, that also
@@ -78,8 +78,8 @@ pub struct DB {
 /// tx.commit();
 pub struct DBTX<'a> {
     tx: rusqlite::Transaction<'a>,
-    headers: &'a RwLock<Headers>,
-    blocks: &'a RwLock<Blocks>,
+    headers: &'a RwLock<HeaderStore>,
+    blocks: &'a RwLock<FilterStore>,
     dirty: Cell<bool>
 }
 
@@ -91,8 +91,8 @@ impl DB {
         headers.init()?;
         let mut blocks = Transient::new_db("b", 1, 2)?;
         blocks.init()?;
-        Ok(DB { conn: Connection::open_in_memory()?, headers: RwLock::new(Headers::new(headers, network)),
-            blocks: RwLock::new(Blocks::new(blocks))})
+        Ok(DB { conn: Connection::open_in_memory()?, headers: RwLock::new(HeaderStore::new(headers, network)),
+            blocks: RwLock::new(FilterStore::new(blocks))})
     }
 
     /// Create or open a persistent database instance identified by the path
@@ -105,8 +105,8 @@ impl DB {
         let db = DB {
             conn: Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE |
                 OpenFlags::SQLITE_OPEN_CREATE | OpenFlags::SQLITE_OPEN_FULL_MUTEX)?,
-            headers: RwLock::new(Headers::new(headers, network)),
-            blocks: RwLock::new(Blocks::new(blocks))
+            headers: RwLock::new(HeaderStore::new(headers, network)),
+            blocks: RwLock::new(FilterStore::new(blocks))
         };
         info!("database {:?} opened", path);
         Ok(db)
@@ -287,7 +287,7 @@ impl<'a> DBTX<'a> {
     /// Store a transaction
     pub fn store_block (&self, block: &Block) -> Result<(), SPVError> {
         let mut hb = self.blocks.write().unwrap();
-        hb.insert_block(block)?;
+        hb.insert_block(block, vec!())?;
         Ok(())
     }
 

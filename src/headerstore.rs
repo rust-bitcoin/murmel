@@ -41,7 +41,7 @@ use std:: {
 };
 
 /// Adapter for Hammersbald storing Bitcoin data
-pub struct Headers {
+pub struct HeaderStore {
     hammersbald: Hammersbald,
     network: Network,
     headers: HashMap<Sha256dHash, StoredHeader>
@@ -58,10 +58,10 @@ pub struct StoredHeader {
     pub log2work: f32
 }
 
-impl Headers {
+impl HeaderStore {
     /// create a new Bitcoin adapter wrapping Hammersbald
-    pub fn new(hammersbald: Hammersbald, network: Network) -> Headers {
-        Headers { hammersbald, network, headers: HashMap::new() }
+    pub fn new(hammersbald: Hammersbald, network: Network) -> HeaderStore {
+        HeaderStore { hammersbald, network, headers: HashMap::new() }
     }
 
     /// Insert a Bitcoin header
@@ -251,12 +251,6 @@ impl Headers {
         Ok(None)
     }
 
-    /// Fetsch a header by its position
-    pub fn fetch_ref_header(&self, pref: PRef) -> Result<Option<StoredHeader>, SPVError> {
-        let (_, stored, referred) = self.hammersbald.get_referred(pref)?;
-        return Self::parse_header(stored, referred);
-    }
-
     fn parse_header(stored: Vec<u8>, _referred: Vec<PRef>) -> Result<Option<StoredHeader>, SPVError> {
         let header = decode(&stored[0..80])?;
         let mut data = Cursor::new(&stored[80..]);
@@ -264,15 +258,6 @@ impl Headers {
         let log2work = data.read_f32::<BigEndian>()?;
 
         return Ok(Some(StoredHeader{header, height, log2work: log2work }))
-    }
-
-    fn parse_u256(data: &mut Cursor<&[u8]>) -> Result<Uint256, SPVError> {
-        let mut words = [0u64; 4];
-        words[0] = data.read_u64::<BigEndian>()?;
-        words[1] = data.read_u64::<BigEndian>()?;
-        words[2] = data.read_u64::<BigEndian>()?;
-        words[3] = data.read_u64::<BigEndian>()?;
-        Ok(Uint256(words))
     }
 
     /// initialize cache
@@ -348,7 +333,7 @@ mod test {
 
     #[test]
     fn header_test() {
-        let mut db = Headers::new(
+        let mut db = HeaderStore::new(
             Transient::new_db("first", 1, 1).unwrap(),
             Network::Bitcoin);
 
