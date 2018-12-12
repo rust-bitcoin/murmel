@@ -271,10 +271,7 @@ impl<'a> DBTX<'a> {
     /// Get the hash of the highest hash on the chain with most work
     pub fn get_tip(&self) -> Result<Option<Sha256dHash>, SPVError> {
         let hb = self.headers.read().unwrap();
-        if let Some(tip) = hb.tip()? {
-            return Ok(Some(tip.header.bitcoin_hash()))
-        }
-        Ok(None)
+        Ok(hb.tip_hash())
     }
 
     /// Store a header into the DB. This method will return an error if the header is already stored.
@@ -292,9 +289,9 @@ impl<'a> DBTX<'a> {
     }
 
     /// Get a stored header. This method will return an error for an unknown header.
-    pub fn get_header(&self, hash: &Sha256dHash) -> Result<Option<StoredHeader>, SPVError> {
+    pub fn get_header(&self, hash: &Sha256dHash) -> Option<StoredHeader> {
         let hb = self.headers.read().unwrap();
-        hb.fetch_header(hash)
+        hb.get_header(hash)
     }
 
     /// get locator
@@ -305,7 +302,7 @@ impl<'a> DBTX<'a> {
         if let Some(mut h) = hb.tip()? {
             locator.push(h.header.bitcoin_hash());
             while h.header.prev_blockhash != Sha256dHash::default() {
-                if let Some(prev) = hb.fetch_header(&h.header.prev_blockhash)? {
+                if let Some(prev) = hb.get_header(&h.header.prev_blockhash) {
                     h = prev;
                 }
                 else {
@@ -319,7 +316,7 @@ impl<'a> DBTX<'a> {
                     if h.header.prev_blockhash == Sha256dHash::default() {
                         break;
                     }
-                    if let Some(prev) = hb.fetch_header(&h.header.prev_blockhash)? {
+                    if let Some(prev) = hb.get_header(&h.header.prev_blockhash) {
                         h = prev;
                     }
                     else {
@@ -431,7 +428,7 @@ mod test {
         tx.create_tables().unwrap();
         let genesis = constants::genesis_block(network::constants::Network::Bitcoin);
         tx.insert_header(&genesis.header).unwrap();
-        let header = tx.get_header(&genesis.header.bitcoin_hash()).unwrap().unwrap();
+        let header = tx.get_header(&genesis.header.bitcoin_hash()).unwrap();
         assert_eq!(header.header.bitcoin_hash(), genesis.bitcoin_hash());
         assert_eq!(Some(genesis.header.bitcoin_hash()), tx.get_tip().unwrap());
         tx.commit().unwrap();

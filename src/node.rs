@@ -165,8 +165,6 @@ impl Node {
     // process headers message
     fn headers(&self, headers: &Vec<LoneBlockHeader>, peer: PeerId) -> Result<ProcessResult, SPVError> {
         if headers.len() > 0 {
-            // blocks we want to download
-            let mut ask_for_blocks = Vec::new();
             // headers to unwind due to re-org
             let mut disconnected_headers = Vec::new();
             // current height
@@ -184,21 +182,15 @@ impl Node {
                         // add to in-memory blockchain - this also checks proof of work
                         match tx.insert_header(&header.header) {
                             Ok(_) => {
-                                // this is a new header, not previously stored
                                 if let Some(new_tip) = tx.get_tip()? {
                                     tip_moved = tip_moved || new_tip != old_tip;
                                     let header_hash = header.header.bitcoin_hash();
-                                    // ask for blocks after birth
-                                    if new_tip == header_hash {
-                                        ask_for_blocks.push(new_tip);
-                                    }
-
                                     some_new = true;
 
                                     if header_hash == new_tip && header.header.prev_blockhash != old_tip {
                                         // this is a re-org. Compute headers to unwind
                                         while !tx.is_on_trunk(&old_tip) {
-                                            if let Some(old_header) = tx.get_header(&old_tip)? {
+                                            if let Some(old_header) = tx.get_header(&old_tip) {
                                                 old_tip = old_header.header.prev_blockhash;
                                                 disconnected_headers.push(old_header.header);
                                             }
@@ -215,7 +207,7 @@ impl Node {
                     }
                 }
                 if let Some(ref new_tip) = tx.get_tip()? {
-                    if let Some(header) = tx.get_header(new_tip)? {
+                    if let Some(header) = tx.get_header(new_tip) {
                         height = header.height;
                     }
                     else {
@@ -233,7 +225,6 @@ impl Node {
                 } else {
                     tx.commit()?;
                     debug!("received {} known or orphan headers from peer={}", headers.len(), peer);
-                    ask_for_blocks.clear();
                     return Ok(ProcessResult::Ban(5));
                 }
             }
@@ -244,12 +235,9 @@ impl Node {
                 self.inner.connector.block_disconnected(&header);
             }
             if some_new {
+                // ask if peer knows even more
                 self.get_headers(peer)?;
             }
-            // ask for new blocks on trunk
-            self.download_blocks(peer, ask_for_blocks)?;
-
-            // ask if peer knows even more
 
             if tip_moved {
                 Ok(ProcessResult::Height(height))
@@ -266,7 +254,7 @@ impl Node {
         let mut db = self.inner.db.lock().unwrap();
         let tx = db.transaction()?;
         // header should be known already, otherwise it might be spam
-        if let Some(_block_node) = tx.get_header(&block.bitcoin_hash())? {
+        if let Some(_block_node) = tx.get_header(&block.bitcoin_hash()) {
             debug!("store block {}", block.bitcoin_hash());
             tx.store_block(block)?;
             debug!("store block {} done", block.bitcoin_hash());
@@ -282,7 +270,7 @@ impl Node {
             if inventory.inv_type == InvType::Block {
                 let mut db = self.inner.db.lock().unwrap();
                 let tx = db.transaction()?;
-                if tx.get_header(&inventory.hash)?.is_none() {
+                if tx.get_header(&inventory.hash).is_none() {
                     // ask for header(s) if observing a new block
                     self.get_headers(peer)?;
                     return Ok(ProcessResult::Ack);

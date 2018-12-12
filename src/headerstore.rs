@@ -67,7 +67,10 @@ impl HeaderStore {
     }
 
     /// Insert a Bitcoin header
-    pub fn insert_header (&mut self, header: &BlockHeader) -> Result<PRef, SPVError> {
+    pub fn insert_header (&mut self, header: &BlockHeader) -> Result<(), SPVError> {
+        if self.headers.get(&header.bitcoin_hash()).is_some() {
+            return Ok(())
+        }
         let stored;
         if header.prev_blockhash != Sha256dHash::default() {
             let previous;
@@ -81,7 +84,7 @@ impl HeaderStore {
         }
         else {
             let new_tip = Arc::new(header.bitcoin_hash());
-            self.hammersbald.put(&Sha256dHash::default().to_bytes()[..], &new_tip.to_bytes()[..], &vec!())?;
+            self.store_tip(&*new_tip)?;
             stored = StoredHeader {
                 header: header.clone(),
                 height: 0,
@@ -95,7 +98,8 @@ impl HeaderStore {
         serialized_header.extend(encode(&stored.header)?);
         serialized_header.write_u24::<BigEndian>(stored.height)?; // height
         serialized_header.write_f32::<BigEndian>(stored.log2work)?;
-        Ok(self.hammersbald.put(&key[..], serialized_header.as_slice(), &vec!())?)
+        self.hammersbald.put(&key[..], serialized_header.as_slice(), &vec!())?;
+        Ok(())
     }
 
     fn log2work(header: &BlockHeader) -> f32 {
@@ -190,7 +194,7 @@ impl HeaderStore {
             if tip.log2work < stored.log2work {
 
                 let new_tip = next_hash.clone();
-                self.hammersbald.put(&Sha256dHash::default().to_bytes()[..], &new_tip.to_bytes()[..], &vec!())?;
+                self.store_tip(&*new_tip)?;
 
                 let mut ph = *new_tip.clone();
                 while !self.is_on_trunk(&ph) {
@@ -243,10 +247,22 @@ impl HeaderStore {
 
     /// retrieve the id of the block/header with most work
     pub fn tip (&self) -> Result<Option<StoredHeader>, SPVError> {
-        if let Some((_, id, _)) = self.hammersbald.get(&Sha256dHash::default().to_bytes()[..])? {
-            return Ok(self.fetch_header(&decode(id.as_slice())?)?);
+        if let Some(id) = self.tip_hash() {
+            return Ok(self.fetch_header(&id)?);
         }
         Ok(None)
+    }
+
+    pub fn tip_hash (&self) -> Option<Sha256dHash> {
+        if let Some(tip) = self.trunk.last() {
+            return Some(**tip);
+        }
+        None
+    }
+
+    fn store_tip(&mut self, tip: &Sha256dHash) -> Result<(), SPVError> {
+        self.hammersbald.put(&Sha256dHash::default().to_bytes()[..], &tip.to_bytes()[..], &vec!())?;
+        Ok(())
     }
 
     /// This function emulates the `GetCompact(SetCompact(n))` in the satoshi code,
@@ -266,9 +282,16 @@ impl HeaderStore {
         ret << bits
     }
 
+    /// Fetch a header by its id from cache
+    pub fn get_header (&self, id: &Sha256dHash)  -> Option<StoredHeader> {
+        if let Some(header) = self.headers.get(id) {
+            return Some(header.clone());
+        }
+        None
+    }
 
-    /// Fetch a header by its id
-    pub fn fetch_header (&self, id: &Sha256dHash)  -> Result<Option<StoredHeader>, SPVError> {
+    /// Fetch a header by its id from hammersbald
+    fn fetch_header (&self, id: &Sha256dHash)  -> Result<Option<StoredHeader>, SPVError> {
         let key = &id.to_bytes()[..];
         if let Some((_,stored,referred)) = self.hammersbald.get(&key)? {
             return Self::parse_header(stored, referred);
