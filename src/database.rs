@@ -27,7 +27,7 @@ use bitcoin::blockdata::script::Script;
 use bitcoin::consensus::{Decodable, Encodable};
 use bitcoin::network::address::Address;
 use bitcoin::util::hash::{BitcoinHash, Sha256dHash};
-use blockfilter::{BlockFilter,UTXOAccessor};
+use blockfilter::UTXOAccessor;
 use error::SPVError;
 
 use hammersbald::api::HammersbaldAPI;
@@ -55,11 +55,7 @@ use std::sync::RwLock;
 use std::cell::Cell;
 
 use rand;
-use rand::Rng;
 use rand::RngCore;
-
-// maximum number of blocks UTXO can unwind
-const UNWIND_LIMIT :i64 = 100;
 
 /// Database interface to connect
 /// start, commit or rollback transactions
@@ -96,7 +92,7 @@ impl DB {
         let mut blocks = Transient::new_db("b", 1, 2)?;
         blocks.init()?;
         Ok(DB { conn: Connection::open_in_memory()?, headers: RwLock::new(Headers::new(headers, network)),
-            blocks: RwLock::new(Blocks::new(blocks, network))})
+            blocks: RwLock::new(Blocks::new(blocks))})
     }
 
     /// Create or open a persistent database instance identified by the path
@@ -110,7 +106,7 @@ impl DB {
             conn: Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE |
                 OpenFlags::SQLITE_OPEN_CREATE | OpenFlags::SQLITE_OPEN_FULL_MUTEX)?,
             headers: RwLock::new(Headers::new(headers, network)),
-            blocks: RwLock::new(Blocks::new(blocks, network))
+            blocks: RwLock::new(Blocks::new(blocks))
         };
         info!("database {:?} opened", path);
         Ok(db)
@@ -335,7 +331,7 @@ impl<'a> DBTX<'a> {
         Ok(locator)
     }
 
-    pub fn insert_filter (&self, block_hash: &Sha256dHash, prev_block_hash: &Sha256dHash, filter_type: u8, content: &Vec<u8>) -> Result<Sha256dHash, SPVError> {
+    pub fn insert_filter (&self, _block_hash: &Sha256dHash, _prev_block_hash: &Sha256dHash, _filter_type: u8, _content: &Vec<u8>) -> Result<Sha256dHash, SPVError> {
         unimplemented!()
     }
 
@@ -346,7 +342,8 @@ impl<'a> DBTX<'a> {
 
             self.insert_header(&genesis_block(network).header)?;
         }
-
+        let mut hb = self.headers.write().unwrap();
+        hb.init_cache()?;
         Ok(())
     }
 
@@ -424,7 +421,7 @@ mod test {
     use bitcoin::blockdata::constants;
     use bitcoin::network;
     use bitcoin::network::constants::Network;
-    use bitcoin::util::hash::{BitcoinHash, Sha256dHash};
+    use bitcoin::util::hash::{BitcoinHash};
     use super::DB;
 
     #[test]

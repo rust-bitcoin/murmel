@@ -22,47 +22,22 @@
 
 
 use bitcoin::blockdata::block::{Block, LoneBlockHeader};
-use bitcoin::blockdata::script::Script;
 use bitcoin::blockdata::transaction::Transaction;
 use bitcoin::network::address::Address;
 use bitcoin::network::message::NetworkMessage;
 use bitcoin::network::message_blockdata::*;
 use bitcoin::network::constants::Network;
-use bitcoin::util;
 use bitcoin::util::hash::{BitcoinHash, Sha256dHash};
-use blockfilter::BlockFilter;
-use blockfilter::UTXOAccessor;
 use connector::LightningConnector;
-use database::{DB, DBTX, DBUTXOAccessor};
+use database::DB;
 use error::SPVError;
 use futures::task::Context;
 use lightning::chain::chaininterface::BroadcasterInterface;
 use p2p::{P2P, PeerId, PeerMap};
-use rand::Rng;
-use rand::thread_rng;
-use std::cell::Cell;
-use std::collections::hash_map::Entry;
-use std::collections::HashMap;
-use std::collections::HashSet;
-use std::collections::VecDeque;
-use std::io;
 use std::sync::{Mutex, RwLock};
 use std::sync::Arc;
-use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
-use std::cmp::min;
-use std::sync::atomic::{AtomicBool,Ordering};
-
-
-// peer is considered stale and banned if not
-// sending valuable data within below number of seconds.
-const STALE_PEER_SECONDS: u32 = 60;
-
-// number of blocks to download at a single operation
-const BLOCK_DOWNLOAD_BATCH: usize = 5;
-
-const WALLET_FILTER_TYPE : u8 = 1;
 
 /// The node replies with this process result to messages
 pub enum ProcessResult {
@@ -117,7 +92,7 @@ struct Inner {
 
 impl Node {
     /// Create a new local node
-    pub fn new(p2p: Arc<P2P>, network: Network, db: Arc<Mutex<DB>>, server: bool, peers: Arc<RwLock<PeerMap>>) -> Node {
+    pub fn new(p2p: Arc<P2P>, network: Network, db: Arc<Mutex<DB>>, _server: bool, peers: Arc<RwLock<PeerMap>>) -> Node {
         let connector = LightningConnector::new(network,Arc::new(Broadcaster { peers: peers.clone() }));
         Node {
             inner: Arc::new(Inner {
@@ -131,7 +106,7 @@ impl Node {
     }
 
     /// Initialize node before P2P communication starts
-    pub fn init_before_p2p(&self, ctx: &mut Context) {
+    pub fn init_before_p2p(&self, _ctx: &mut Context) {
         trace!("initialize node before P2P")
     }
 
@@ -146,14 +121,14 @@ impl Node {
     }
 
     /// called from dispatcher whenever a new peer is connected (after handshake is successful)
-    pub fn connected(&self, pid: PeerId, ctx: &mut Context) -> Result<ProcessResult, SPVError> {
+    pub fn connected(&self, pid: PeerId, _ctx: &mut Context) -> Result<ProcessResult, SPVError> {
         self.get_headers(pid)?;
 
         Ok(ProcessResult::Ack)
     }
 
     // decide if the block was fully processed
-    fn is_processed (&self, block: &Sha256dHash) -> bool {
+    fn is_processed (&self, _block: &Sha256dHash) -> bool {
         false
     }
 
@@ -165,7 +140,7 @@ impl Node {
     }
 
     /// called from dispatcher whenever a peer is disconnected
-    pub fn disconnected(&self, pid: PeerId) -> Result<ProcessResult, SPVError> {
+    pub fn disconnected(&self, _pid: PeerId) -> Result<ProcessResult, SPVError> {
         Ok(ProcessResult::Ack)
     }
 
@@ -287,11 +262,11 @@ impl Node {
     }
 
     // process an incoming block
-    fn block(&self, block: &Block, peer: PeerId) -> Result<ProcessResult, SPVError> {
+    fn block(&self, block: &Block, _peer: PeerId) -> Result<ProcessResult, SPVError> {
         let mut db = self.inner.db.lock().unwrap();
         let tx = db.transaction()?;
         // header should be known already, otherwise it might be spam
-        if let Some(block_node) = tx.get_header(&block.bitcoin_hash())? {
+        if let Some(_block_node) = tx.get_header(&block.bitcoin_hash())? {
             debug!("store block {}", block.bitcoin_hash());
             tx.store_block(block)?;
             debug!("store block {} done", block.bitcoin_hash());

@@ -123,7 +123,7 @@ fn serialize<T: ?Sized>(data: &T) -> Result<Vec<u8>, bitcoin::util::Error>
 fn encode<T: ? Sized>(data: &T) -> Result<Vec<u8>, io::Error>
     where T: Encodable<Vec<u8>> {
     let mut result = vec!();
-    data.consensus_encode(&mut result).map_err(|e| { io::Error::new(io::ErrorKind::InvalidData, "serialization error") })?;
+    data.consensus_encode(&mut result).map_err(|_| { io::Error::new(io::ErrorKind::InvalidData, "serialization error") })?;
     Ok(result)
 }
 
@@ -398,7 +398,6 @@ impl<'a> BitStreamWriter<'a> {
 mod test {
     use blockfilter::test::rustc_serialize::json::Json;
     use rand;
-    use rand::Rng;
     use rand::RngCore;
     use std::fs::File;
     use std::io::Cursor;

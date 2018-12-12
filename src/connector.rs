@@ -76,7 +76,7 @@ impl LightningConnector {
 
 impl ChainWatchInterface for LightningConnector {
 
-    fn install_watch_tx(&self, txid: &Sha256dHash, script_pub_key: &Script) {
+    fn install_watch_tx(&self, _txid: &Sha256dHash, _script_pub_key: &Script) {
         unimplemented!()
     }
 
@@ -95,7 +95,7 @@ impl ChainWatchInterface for LightningConnector {
         self.util.register_listener(listener)
     }
 
-    fn get_chain_utxo(&self, genesis_hash: Sha256dHash, unspent_tx_output_identifier: u64) -> Result<(Script, u64), ChainError> {
+    fn get_chain_utxo(&self, _genesis_hash: Sha256dHash, _unspent_tx_output_identifier: u64) -> Result<(Script, u64), ChainError> {
         Err(ChainError::NotSupported)
     }
 }

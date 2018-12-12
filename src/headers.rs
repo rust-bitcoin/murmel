@@ -17,73 +17,34 @@
 //! # store headers with hammersbald and maintain a cache
 //!
 
-use error::SPVError;
-
-use hammersbald:: {
-    api::{HammersbaldAPI, Hammersbald},
-    pref::PRef,
-    error::HammersbaldError,
-    datafile::DagIterator,
-    format::{Payload, Data}
-};
-
 use bitcoin:: {
     blockdata::{
-        block::{BlockHeader, Block},
-        transaction::Transaction,
-        script::Script
-    },
-    util:: {
-        hash::{Sha256dHash, BitcoinHash},
-        uint::Uint256
+        block::{BlockHeader}
     },
     consensus::{Decodable, Encodable},
-    network::constants::Network
+    network::constants::Network,
+    util:: {
+        hash::{BitcoinHash, Sha256dHash},
+        uint::Uint256
+    }
 };
-
-use byteorder::{ReadBytesExt, WriteBytesExt, BigEndian};
-
+use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
+use error::SPVError;
+use hammersbald:: {
+    api::{Hammersbald, HammersbaldAPI},
+    error::HammersbaldError,
+    pref::PRef
+};
 use std:: {
-    io::Cursor,
-    error::Error,
-    fmt
+    collections::HashMap,
+    io::Cursor
 };
 
 /// Adapter for Hammersbald storing Bitcoin data
 pub struct Headers {
     hammersbald: Hammersbald,
-    network: Network
-}
-
-/// Errors returned by this library
-#[derive(Debug)]
-pub enum HeadersError {
-    /// attempt to insert an unconnected header
-    Unconnected,
-    /// chain tip is not set
-    NoTip,
-    /// parse error
-    ParseError
-}
-
-impl Error for HeadersError {
-    fn description(&self) -> &str {
-        match self {
-            HeadersError::Unconnected => "unconnected header",
-            HeadersError::NoTip => "the chain has no tip",
-            HeadersError::ParseError => "parse error"
-        }
-    }
-
-    fn cause(&self) -> Option<&Error> {
-        None
-    }
-}
-
-impl fmt::Display for HeadersError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "HeadersError error: {} cause: {:?}", self.description(), self.cause())
-    }
+    network: Network,
+    headers: HashMap<Sha256dHash, StoredHeader>
 }
 
 /// A header enriched with information about its position on the blockchain
@@ -91,63 +52,57 @@ impl fmt::Display for HeadersError {
 pub struct StoredHeader {
     /// header
     pub header: BlockHeader,
-    /// reference to previous header
-    pub previous_ref: PRef,
     /// chain height
     pub height: u32,
-    /// total work
-    pub total_work: Uint256,
-    /// required work
-    pub required_work: Uint256
+    /// log2 of total work
+    pub log2work: f32
 }
 
 impl Headers {
     /// create a new Bitcoin adapter wrapping Hammersbald
     pub fn new(hammersbald: Hammersbald, network: Network) -> Headers {
-        Headers { hammersbald, network }
+        Headers { hammersbald, network, headers: HashMap::new() }
     }
 
     /// Insert a Bitcoin header
     pub fn insert_header (&mut self, header: &BlockHeader) -> Result<PRef, SPVError> {
-        let mut referred = vec!();
         let stored;
         if header.prev_blockhash != Sha256dHash::default() {
-            if let Some((ph, sh, r)) = self.hammersbald.get(&header.prev_blockhash.as_bytes()[..])? {
-                if let Some(prev) = Self::parse_header(sh, r)? {
-                    stored = self.add_header_to_tree(ph, &prev,header)?;
-                    referred.push(ph);
-                }
-                else {
-                    return Err(SPVError::Generic("unable to parse stored header".to_string()));
-                }
+            let previous;
+            if let Some(prev) = self.headers.get(&header.prev_blockhash) {
+               previous = prev.clone();
             }
             else {
-                return Err(SPVError::Generic("header is not connected to the chain".to_string()));
+                return Err(SPVError::UnconnectedHeader);
             }
+            stored = self.add_header_to_tree(&previous,header)?;
         }
         else {
             let new_tip = header.bitcoin_hash();
             self.hammersbald.put(&Sha256dHash::default().to_bytes()[..], &new_tip.to_bytes()[..], &vec!())?;
             stored = StoredHeader {
                 header: header.clone(),
-                previous_ref: PRef::invalid(),
                 height: 0,
-                total_work: Uint256::from_u64(0).unwrap(),
-                required_work: header.target()
-            }
+                log2work: Self::log2work(header)
+            };
+            self.headers.insert(new_tip, stored.clone());
         }
         let key = &header.bitcoin_hash().to_bytes()[..];
         let mut serialized_header = Vec::new();
         serialized_header.extend(encode(&stored.header)?);
         serialized_header.write_u24::<BigEndian>(stored.height)?; // height
-        serialized_header.write_u48::<BigEndian>(PRef::invalid().as_u64())?; // no transactions
-        for n in stored.required_work.0.iter() {
-            serialized_header.write_u64::<BigEndian>(*n)?;
+        serialized_header.write_f32::<BigEndian>(stored.log2work)?;
+        Ok(self.hammersbald.put(&key[..], serialized_header.as_slice(), &vec!())?)
+    }
+
+    fn log2work(header: &BlockHeader) -> f32 {
+        let mut r = 0f32;
+        let base = 64f32.exp2();
+        for i in header.work().0.iter().rev() {
+            r *= base;
+            r += *i as f32;
         }
-        for n in stored.total_work.0.iter() {
-            serialized_header.write_u64::<BigEndian>(*n)?;
-        }
-        Ok(self.hammersbald.put(&key[..], serialized_header.as_slice(), &referred)?)
+        r.log2()
     }
 
     fn max_target() -> Uint256 {
@@ -155,7 +110,7 @@ impl Headers {
     }
 
     /// POW comments and code based on a work by Andrew Poelstra
-    fn add_header_to_tree(&mut self, prev_ref: PRef, prev: &StoredHeader, next: &BlockHeader) -> Result<StoredHeader, SPVError> {
+    fn add_header_to_tree(&mut self, prev: &StoredHeader, next: &BlockHeader) -> Result<StoredHeader, SPVError> {
 
         const DIFFCHANGE_INTERVAL: u32 = 2016;
         const DIFFCHANGE_TIMESPAN: u32 = 14 * 24 * 3600;
@@ -168,8 +123,11 @@ impl Headers {
                     // Scan back DIFFCHANGE_INTERVAL blocks
                     let mut scan = prev.clone();
                     for _ in 0..(DIFFCHANGE_INTERVAL - 1) {
-                        if let Some(header)  = self.fetch_ref_header(scan.previous_ref)? {
-                            scan = header;
+                        if let Some(header)  = self.headers.get (&scan.header.prev_blockhash) {
+                            scan = header.clone();
+                        }
+                        else {
+                            return Err(SPVError::UnconnectedHeader);
                         }
                     }
                     // Get clamped timespan between first and last blocks
@@ -201,29 +159,31 @@ impl Headers {
                 let mut scan = prev.clone();
                 let mut height = prev.height + 1;
                 while height % DIFFCHANGE_INTERVAL != 0 &&
-                    scan.required_work == Self::max_target() {
-                    if let Some(header)  = self.fetch_ref_header(scan.previous_ref)? {
+                    scan.header.target() == Self::max_target() {
+                    if let Some(header)  = self.headers.get(&scan.header.prev_blockhash) {
                         scan = header.clone();
                         height = header.height;
                     }
+                    else {
+                        return Err(SPVError::UnconnectedHeader);
+                    }
                 }
-                scan.required_work
+                scan.header.target()
                 // Otherwise just use the last block's difficulty
             } else {
-                prev.required_work
+                prev.header.target()
             };
         let stored = StoredHeader {
             header: next.clone(),
             height: prev.height + 1,
-            previous_ref: prev_ref,
-            required_work,
-            total_work: next.work() + prev.total_work
+            log2work: Self::log2work(next) + prev.log2work
         };
-        if stored.header.spv_validate(&stored.required_work).is_err() {
+        if stored.header.spv_validate(&required_work).is_err() {
             return Err(SPVError::SpvBadProofOfWork);
         }
+        self.headers.insert(stored.header.bitcoin_hash(), stored.clone());
         if let Some(tip) = self.tip()? {
-            if tip.total_work < stored.total_work {
+            if tip.log2work < stored.log2work {
                 let new_tip = stored.header.bitcoin_hash();
                 self.hammersbald.put(&Sha256dHash::default().to_bytes()[..], &new_tip.to_bytes()[..], &vec!())?;
             }
@@ -237,18 +197,19 @@ impl Headers {
 
     /// is the given hash part of the trunk (chain from genesis to tip)
     pub fn is_on_trunk (&self, hash: &Sha256dHash) -> Result<bool, SPVError> {
-        if let Some(mut tip) = self.tip()? {
+        if let Some(tip) = self.tip()? {
             let mut th = tip.header.bitcoin_hash();
+            let mut ph = tip.header.prev_blockhash;
             while th != Sha256dHash::default() {
                 if *hash == th {
                     return Ok(true);
                 }
-                if let Some(p) = self.fetch_header(&tip.header.prev_blockhash)? {
-                    tip = p;
-                    th = tip.header.bitcoin_hash();
+                if let Some(p) = self.headers.get(&ph) {
+                    th = ph;
+                    ph = p.header.prev_blockhash;
                 }
                 else {
-                    return Err(SPVError::Generic(format!("{} is not on the chain", hash)));
+                    return Err(SPVError::UnconnectedHeader);
                 }
             }
         }
@@ -296,17 +257,13 @@ impl Headers {
         return Self::parse_header(stored, referred);
     }
 
-    fn parse_header(stored: Vec<u8>, referred: Vec<PRef>) -> Result<Option<StoredHeader>, SPVError> {
+    fn parse_header(stored: Vec<u8>, _referred: Vec<PRef>) -> Result<Option<StoredHeader>, SPVError> {
         let header = decode(&stored[0..80])?;
         let mut data = Cursor::new(&stored[80..]);
         let height = data.read_u24::<BigEndian>()?;
-        PRef::from(data.read_u48::<BigEndian>()?); // do not care of transactions
+        let log2work = data.read_f32::<BigEndian>()?;
 
-        let previous_ref = if referred.len() > 0 { referred[0] } else { PRef::invalid() };
-        let required_difficulty = Self::parse_u256(&mut data)?;
-        let total_work = Self::parse_u256(&mut data)?;
-
-        return Ok(Some(StoredHeader{header, height, previous_ref, total_work, required_work: required_difficulty }))
+        return Ok(Some(StoredHeader{header, height, log2work: log2work }))
     }
 
     fn parse_u256(data: &mut Cursor<&[u8]>) -> Result<Uint256, SPVError> {
@@ -318,121 +275,36 @@ impl Headers {
         Ok(Uint256(words))
     }
 
-    /// insert a block
-    pub fn insert_block(&mut self, block: &Block) -> Result<PRef, SPVError> {
-        let mut referred = vec!();
-        let key = &block.bitcoin_hash().to_bytes()[..];
-        let mut serialized_block = Vec::new();
-        serialized_block.extend(encode(&block.header)?);
-        let mut tx_prefs = Vec::new();
-        for t in &block.txdata {
-            let pref = self.hammersbald.put_referred(encode(t)?.as_slice(), &vec!())?;
-            tx_prefs.push(pref);
-            referred.push(pref);
-        }
-        let stored_tx_offsets = self.hammersbald.put_referred(&[], &tx_prefs)?;
-        referred.push(stored_tx_offsets);
-        serialized_block.write_u24::<BigEndian>(0)?; // height
-        serialized_block.write_u48::<BigEndian>(stored_tx_offsets.as_u64())?;
-        Ok(self.hammersbald.put(&key[..], serialized_block.as_slice(), &referred)?)
-    }
-
-    /// Fetch a block by its id
-    pub fn fetch_block (&self, id: &Sha256dHash)  -> Result<Option<(Block, Vec<Vec<u8>>)>, Box<Error>> {
-        let key = &id.as_bytes()[..];
-        if let Some((_, stored, _)) = self.hammersbald.get(&key)? {
-            let header = decode(&stored[0..80])?;
-            let mut data = Cursor::new(&stored[80..]);
-            let txdata_offset = PRef::from(data.read_u48::<BigEndian>()?);
-            let mut txdata: Vec<Transaction> = Vec::new();
-            if txdata_offset.is_valid() {
-                let (_, _, txrefs) = self.hammersbald.get_referred(txdata_offset)?;
-                for txref in &txrefs {
-                    let (_, tx, _) = self.hammersbald.get_referred(*txref)?;
-                    txdata.push(decode(tx.as_slice())?);
+    /// initialize cache
+    pub fn init_cache (&mut self) -> Result<(), SPVError> {
+        if let Some(tip) = self.tip()? {
+            let mut h = tip.header.bitcoin_hash();
+            while let Some(stored) = self.fetch_header(&h)? {
+                self.headers.insert(h, stored.clone());
+                if stored.header.prev_blockhash != Sha256dHash::default() {
+                    h = stored.header.prev_blockhash;
+                }
+                else {
+                    break;
                 }
             }
-            let next = data.read_u32::<BigEndian>()?;
-            let mut extension = Vec::new();
-            for _ in 0..next {
-                let pref = PRef::from(data.read_u48::<BigEndian>()?);
-                let (_, e, _) = self.hammersbald.get_referred(pref)?;
-                extension.push(e);
-            }
-
-            return Ok(Some((Block { header, txdata }, extension)))
         }
-        Ok(None)
+        Ok(())
     }
 
-    /// iterate over stored headers
-    pub fn iter_headers<'s>(&'s self, tip: &Sha256dHash) -> Result<impl Iterator<Item=StoredHeader> +'s, SPVError> {
-        if let Some((tipref, _, _)) = self.get(&tip.as_bytes()[..])? {
-            return Ok(BitcoinHeaderScan { tip: tipref, hb: self })
-        }
-        return Err(SPVError::Generic("no tip".to_string()));
-    }
-}
-
-
-struct BitcoinHeaderScan<'s> {
-    tip: PRef,
-    hb: &'s HammersbaldAPI
-}
-
-impl<'s> Iterator for BitcoinHeaderScan<'s> {
-    type Item = StoredHeader;
-
-    fn next(&mut self) -> Option<<Self as Iterator>::Item> {
-        if self.tip.is_valid() {
-            if let Ok((_,data,referred)) = self.hb.get_referred(self.tip) {
-                if referred.len() > 0 {
-                    self.tip = referred[0];
-                }
-                    else {
-                        self.tip = PRef::invalid();
-                    }
-                if let Ok(Some(result)) = Headers::parse_header(data, referred) {
-                    return Some(result)
-                }
-            }
-            return None;
-        }
-        None
-    }
-}
-
-impl HammersbaldAPI for Headers {
-    fn init(&mut self) -> Result<(), HammersbaldError> {
+    /// init hammersbald
+    pub fn init (&mut self) -> Result<(), HammersbaldError> {
         self.hammersbald.init()
     }
 
-    fn batch(&mut self) -> Result<(), HammersbaldError> {
-        self.hammersbald.batch()
-    }
-
-    fn shutdown(&mut self) {
+    /// shutdown hammersbald
+    pub fn shutdown (&mut self) {
         self.hammersbald.shutdown()
     }
 
-    fn put(&mut self, key: &[u8], data: &[u8], referred: &Vec<PRef>) -> Result<PRef, HammersbaldError> {
-        self.hammersbald.put(key, data, &referred)
-    }
-
-    fn get(&self, key: &[u8]) -> Result<Option<(PRef, Vec<u8>, Vec<PRef>)>, HammersbaldError> {
-        self.hammersbald.get(key)
-    }
-
-    fn put_referred(&mut self, data: &[u8], referred: &Vec<PRef>) -> Result<PRef, HammersbaldError> {
-        self.hammersbald.put_referred(data, referred)
-    }
-
-    fn get_referred(&self, pref: PRef) -> Result<(Vec<u8>, Vec<u8>, Vec<PRef>), HammersbaldError> {
-        self.hammersbald.get_referred(pref)
-    }
-
-    fn dag(&self, root: PRef) -> DagIterator {
-        self.hammersbald.dag(root)
+    /// batch hammersbald
+    pub fn batch (&mut self) -> Result<(), HammersbaldError> {
+        self.hammersbald.batch()
     }
 }
 
@@ -454,12 +326,13 @@ mod test {
     extern crate rand;
     extern crate hex;
 
-    use hammersbald::transient::Transient;
-
-    use hammersbald::api::HammersbaldFactory;
+    use bitcoin::blockdata::{
+        block::Block,
+        constants::genesis_block
+    };
     use bitcoin::network::constants::Network;
-    use bitcoin::blockdata::constants::genesis_block;
-
+    use hammersbald::api::HammersbaldFactory;
+    use hammersbald::transient::Transient;
     use super::*;
 
     #[test]

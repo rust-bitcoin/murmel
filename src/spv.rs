@@ -33,7 +33,7 @@ use futures::future;
 use futures::prelude::*;
 use futures::executor::ThreadPool;
 use dns::dns_seed;
-use rand::{thread_rng, Rng, RngCore};
+use rand::{thread_rng, RngCore};
 use std::collections::HashSet;
 
 const MAX_PROTOCOL_VERSION :u32 = 70001;
@@ -57,7 +57,7 @@ impl SPV {
     pub fn new(user_agent :String, network: Network, db: &Path) -> Result<SPV, SPVError> {
         let thread_pool = ThreadPool::new()?;
         let db = Arc::new(Mutex::new(DB::new(db, network)?));
-        let birth = create_tables(db.clone())?;
+        let _birth = create_tables(db.clone())?;
         let peers = Arc::new(RwLock::new(PeerMap::new()));
         let p2p = Arc::new(P2P::new(user_agent, network, 0, peers.clone(), db.clone(), MAX_PROTOCOL_VERSION));
         let node = Arc::new(Node::new(p2p.clone(), network, db.clone(), true, peers.clone()));
@@ -73,7 +73,7 @@ impl SPV {
     pub fn new_in_memory(user_agent :String, network: Network) -> Result<SPV, SPVError> {
         let thread_pool = ThreadPool::new()?;
         let db = Arc::new(Mutex::new(DB::mem(network)?));
-        let birth = create_tables(db.clone())?;
+        let _birth = create_tables(db.clone())?;
         let peers = Arc::new(RwLock::new(PeerMap::new()));
         let p2p = Arc::new(P2P::new(user_agent, network, 0, peers.clone(), db.clone(), MAX_PROTOCOL_VERSION));
         let node = Arc::new(Node::new(p2p.clone(), network, db.clone(), true, peers.clone()));

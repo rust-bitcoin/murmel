@@ -33,6 +33,8 @@ use bitcoin::consensus::encode;
 pub enum SPVError {
     /// bad proof of work
     SpvBadProofOfWork,
+    /// unconnected header chain detected
+    UnconnectedHeader,
     /// generic error message
     Generic(String),
     /// Network IO error
@@ -44,13 +46,14 @@ pub enum SPVError {
     /// Bitcoin serialize error
     Serialize(encode::Error),
     /// Hammersbald error
-    Hammersbald(HammersbaldError),
+    Hammersbald(HammersbaldError)
 }
 
 impl Error for SPVError {
     fn description(&self) -> &str {
         match *self {
             SPVError::SpvBadProofOfWork => "bad proof of work",
+            SPVError::UnconnectedHeader => "unconnected header",
             SPVError::Generic(ref s) => s,
             SPVError::IO(ref err) => err.description(),
             SPVError::DB(ref err) => err.description(),
@@ -63,6 +66,7 @@ impl Error for SPVError {
     fn cause(&self) -> Option<&Error> {
         match *self {
             SPVError::SpvBadProofOfWork => None,
+            SPVError::UnconnectedHeader => None,
             SPVError::Generic(_) => None,
             SPVError::IO(ref err) => Some(err),
             SPVError::DB(ref err) => Some(err),
@@ -79,12 +83,13 @@ impl fmt::Display for SPVError {
             // Both underlying errors already impl `Display`, so we defer to
             // their implementations.
             SPVError::SpvBadProofOfWork => write!(f, "bad proof of work"),
+            SPVError::UnconnectedHeader => write!(f, "unconnected header"),
             SPVError::Generic(ref s) => write!(f, "Generic: {}", s),
             SPVError::IO(ref err) => write!(f, "IO error: {}", err),
             SPVError::DB(ref err) => write!(f, "DB error: {}", err),
             SPVError::Util(ref err) => write!(f, "Util error: {}", err),
             SPVError::Hammersbald(ref err) => write!(f, "Hammersbald error: {}", err),
-            SPVError::Serialize(ref err) => write!(f, "Serialize error: {}", err),
+            SPVError::Serialize(ref err) => write!(f, "Serialize error: {}", err)
         }
     }
 }

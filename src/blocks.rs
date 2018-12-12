@@ -23,42 +23,36 @@ use hammersbald:: {
     api::{HammersbaldAPI, Hammersbald},
     pref::PRef,
     error::HammersbaldError,
-    datafile::DagIterator,
-    format::{Payload, Data}
+    datafile::DagIterator
 };
 
 use bitcoin:: {
     blockdata::{
-        block::{BlockHeader, Block},
-        transaction::Transaction,
-        script::Script
+        block::{Block},
+        transaction::Transaction
     },
     util:: {
-        hash::{Sha256dHash, BitcoinHash},
-        uint::Uint256
+        hash::{Sha256dHash, BitcoinHash}
     },
-    consensus::{Decodable, Encodable},
-    network::constants::Network
+    consensus::{Decodable, Encodable}
 };
 
 use byteorder::{ReadBytesExt, WriteBytesExt, BigEndian};
 
 use std:: {
     io::Cursor,
-    error::Error,
-    fmt
+    error::Error
 };
 
 /// Adapter for Hammersbald storing Bitcoin data
 pub struct Blocks {
-    hammersbald: Hammersbald,
-    network: Network
+    hammersbald: Hammersbald
 }
 
 impl Blocks {
     /// create a new Bitcoin adapter wrapping Hammersbald
-    pub fn new(hammersbald: Hammersbald, network: Network) -> Blocks {
-        Blocks { hammersbald, network }
+    pub fn new(hammersbald: Hammersbald) -> Blocks {
+        Blocks { hammersbald }
     }
 
     /// insert a block

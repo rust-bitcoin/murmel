@@ -19,35 +19,34 @@
 //! This module establishes network connections and routes messages between the P2P network and this node
 //!
 
-use bitcoin::network::constants::Network;
 use bitcoin::consensus::{Decodable, Encodable};
+use bitcoin::consensus::encode;
+use bitcoin::network::address::Address;
+use bitcoin::network::constants::Network;
 use bitcoin::network::message::NetworkMessage;
 use bitcoin::network::message::RawNetworkMessage;
 use bitcoin::network::message_network::VersionMessage;
-use bitcoin::network::address::Address;
-use bitcoin::consensus::encode;
-use bitcoin::util;
-use error::SPVError;
-use mio::*;
-use mio::unix::UnixReady;
-use mio::net::{TcpStream, TcpListener};
-use node::{Node, ProcessResult};
 use database::DB;
-use rand::{thread_rng, Rng, RngCore};
-use std::cmp::{min, max};
+use error::SPVError;
+use futures::{Async, Future, FutureExt};
+use futures::future;
+use futures::task::Context;
+use futures::task::Waker;
+use mio::*;
+use mio::net::{TcpListener, TcpStream};
+use mio::unix::UnixReady;
+use node::{Node, ProcessResult};
+use rand::{RngCore, thread_rng};
+use std::cmp::{max, min};
 use std::collections::{HashMap, VecDeque};
 use std::collections::hash_map::Entry;
 use std::fmt;
 use std::io;
 use std::io::{Read, Write};
 use std::net::{Shutdown, SocketAddr};
-use std::sync::{Arc, mpsc, RwLock, Mutex};
-use std::sync::atomic::{AtomicUsize, Ordering,AtomicBool};
+use std::sync::{Arc, mpsc, Mutex, RwLock};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
-use futures::{Future, Async, FutureExt};
-use futures::task::Context;
-use futures::future;
-use futures::task::Waker;
 use std::time::Duration;
 
 const IO_BUFFER_SIZE:usize = 1024*1024;
