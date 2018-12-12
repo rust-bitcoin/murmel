@@ -181,11 +181,11 @@ impl Node {
                     if let Some(mut old_tip) = tx.get_tip()? {
                         // add to in-memory blockchain - this also checks proof of work
                         match tx.insert_header(&header.header) {
-                            Ok(_) => {
+                            Ok(stored) => {
                                 if let Some(new_tip) = tx.get_tip()? {
                                     tip_moved = tip_moved || new_tip != old_tip;
                                     let header_hash = header.header.bitcoin_hash();
-                                    some_new = true;
+                                    some_new = stored;
 
                                     if header_hash == new_tip && header.header.prev_blockhash != old_tip {
                                         // this is a re-org. Compute headers to unwind
@@ -313,12 +313,12 @@ impl Node {
         let locator = tx.locator_hashes();
         if locator.len() > 0 {
             debug!("locator {} {}", locator[0], locator.len());
-            let last = if locator.len() > 0 {
-                *locator.last().unwrap()
+            let first = if locator.len() > 0 {
+                *locator.first().unwrap()
             } else {
                 Sha256dHash::default()
             };
-            return self.send(peer, &NetworkMessage::GetHeaders(GetHeadersMessage::new(locator, last)));
+            return self.send(peer, &NetworkMessage::GetHeaders(GetHeadersMessage::new(locator, first)));
         }
         else {
             debug!("empty locator");

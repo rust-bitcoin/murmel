@@ -275,10 +275,9 @@ impl<'a> DBTX<'a> {
     }
 
     /// Store a header into the DB. This method will return an error if the header is already stored.
-    pub fn insert_header(&self, header: &BlockHeader) -> Result<(), SPVError> {
+    pub fn insert_header(&self, header: &BlockHeader) -> Result<bool, SPVError> {
         let mut hb = self.headers.write().unwrap();
-        hb.insert_header(header)?;
-        Ok(())
+        hb.insert_header(header)
     }
 
     /// Store a transaction

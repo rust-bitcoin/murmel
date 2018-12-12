@@ -67,9 +67,9 @@ impl HeaderStore {
     }
 
     /// Insert a Bitcoin header
-    pub fn insert_header (&mut self, header: &BlockHeader) -> Result<(), SPVError> {
+    pub fn insert_header (&mut self, header: &BlockHeader) -> Result<bool, SPVError> {
         if self.headers.get(&header.bitcoin_hash()).is_some() {
-            return Ok(())
+            return Ok(false)
         }
         let stored;
         if header.prev_blockhash != Sha256dHash::default() {
@@ -99,7 +99,7 @@ impl HeaderStore {
         serialized_header.write_u24::<BigEndian>(stored.height)?; // height
         serialized_header.write_f32::<BigEndian>(stored.log2work)?;
         self.hammersbald.put(&key[..], serialized_header.as_slice(), &vec!())?;
-        Ok(())
+        Ok(true)
     }
 
     fn log2work(header: &BlockHeader) -> f32 {
