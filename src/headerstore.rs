@@ -36,15 +36,19 @@ use hammersbald:: {
     pref::PRef
 };
 use std:: {
-    collections::HashMap,
-    io::Cursor
+    collections::{HashMap,HashSet},
+    io::Cursor,
+    collections::LinkedList,
+    sync::Arc
 };
 
 /// Adapter for Hammersbald storing Bitcoin data
 pub struct HeaderStore {
     hammersbald: Hammersbald,
     network: Network,
-    headers: HashMap<Sha256dHash, StoredHeader>
+    headers: HashMap<Arc<Sha256dHash>, StoredHeader>,
+    trunk: LinkedList<Arc<Sha256dHash>>,
+    trunk_set: HashSet<Arc<Sha256dHash>>
 }
 
 /// A header enriched with information about its position on the blockchain
@@ -61,7 +65,7 @@ pub struct StoredHeader {
 impl HeaderStore {
     /// create a new Bitcoin adapter wrapping Hammersbald
     pub fn new(hammersbald: Hammersbald, network: Network) -> HeaderStore {
-        HeaderStore { hammersbald, network, headers: HashMap::new() }
+        HeaderStore { hammersbald, network, headers: HashMap::new(), trunk: LinkedList::new(), trunk_set: HashSet::new() }
     }
 
     /// Insert a Bitcoin header
@@ -78,14 +82,16 @@ impl HeaderStore {
             stored = self.add_header_to_tree(&previous,header)?;
         }
         else {
-            let new_tip = header.bitcoin_hash();
+            let new_tip = Arc::new(header.bitcoin_hash());
             self.hammersbald.put(&Sha256dHash::default().to_bytes()[..], &new_tip.to_bytes()[..], &vec!())?;
             stored = StoredHeader {
                 header: header.clone(),
                 height: 0,
                 log2work: Self::log2work(header)
             };
-            self.headers.insert(new_tip, stored.clone());
+            self.trunk.push_front(new_tip.clone());
+            self.trunk_set.insert(new_tip.clone());
+            self.headers.insert(new_tip.clone(), stored.clone());
         }
         let key = &header.bitcoin_hash().to_bytes()[..];
         let mut serialized_header = Vec::new();
@@ -181,39 +187,56 @@ impl HeaderStore {
         if stored.header.spv_validate(&required_work).is_err() {
             return Err(SPVError::SpvBadProofOfWork);
         }
-        self.headers.insert(stored.header.bitcoin_hash(), stored.clone());
-        if let Some(tip) = self.tip()? {
-            if tip.log2work < stored.log2work {
-                let new_tip = stored.header.bitcoin_hash();
+        let next_hash = Arc::new(next.bitcoin_hash());
+        self.headers.insert(next_hash.clone(), stored.clone());
+        if let Some(old_tip) = self.tip()? {
+            if old_tip.log2work < stored.log2work {
+                let new_tip = next_hash.clone();
                 self.hammersbald.put(&Sha256dHash::default().to_bytes()[..], &new_tip.to_bytes()[..], &vec!())?;
+                let mut ph = old_tip.header.bitcoin_hash();
+                while self.trunk_set.contains (&ph) {
+                    self.trunk.pop_back();
+                    self.trunk_set.remove(&ph);
+                    if let Some(h) = self.headers.get(&Arc::new(ph)) {
+                        ph = h.header.prev_blockhash;
+                    }
+                    else {
+                        return Err(SPVError::UnconnectedHeader);
+                    }
+                }
+                let mut new_trunk = vec!(next_hash);
+                if let Some(last) = self.trunk.back() {
+                    let mut h = stored.clone();
+                    while **last != h.header.prev_blockhash {
+                        let hh = Arc::new(h.header.bitcoin_hash());
+                        new_trunk.push(hh.clone());
+                        if let Some(p) = self.headers.get(&hh) {
+                            h = p.clone();
+                        }
+                        else {
+                            return Err(SPVError::UnconnectedHeader);
+                        }
+                    }
+                }
+                for h in new_trunk.iter().rev() {
+                    self.trunk_set.insert(h.clone());
+                    self.trunk.push_back(h.clone());
+                }
+            }
+            else {
+                self.trunk_set.insert(next_hash.clone());
+                self.trunk.push_back(next_hash);
             }
         }
         else {
-            let new_tip = stored.header.bitcoin_hash();
-            self.hammersbald.put(&Sha256dHash::default().to_bytes()[..], &new_tip.to_bytes()[..], &vec!())?;
+            return Err(SPVError::NoTip)
         }
         Ok(stored)
     }
 
     /// is the given hash part of the trunk (chain from genesis to tip)
-    pub fn is_on_trunk (&self, hash: &Sha256dHash) -> Result<bool, SPVError> {
-        if let Some(tip) = self.tip()? {
-            let mut th = tip.header.bitcoin_hash();
-            let mut ph = tip.header.prev_blockhash;
-            while th != Sha256dHash::default() {
-                if *hash == th {
-                    return Ok(true);
-                }
-                if let Some(p) = self.headers.get(&ph) {
-                    th = ph;
-                    ph = p.header.prev_blockhash;
-                }
-                else {
-                    return Err(SPVError::UnconnectedHeader);
-                }
-            }
-        }
-        Ok(false)
+    pub fn is_on_trunk (&self, hash: &Sha256dHash) -> bool {
+        self.trunk_set.contains(hash)
     }
 
     /// retrieve the id of the block/header with most work
@@ -265,7 +288,10 @@ impl HeaderStore {
         if let Some(tip) = self.tip()? {
             let mut h = tip.header.bitcoin_hash();
             while let Some(stored) = self.fetch_header(&h)? {
-                self.headers.insert(h, stored.clone());
+                let sh = Arc::new(stored.header.bitcoin_hash());
+                self.trunk.push_front(sh.clone());
+                self.trunk_set.insert(sh.clone());
+                self.headers.insert(sh, stored.clone());
                 if stored.header.prev_blockhash != Sha256dHash::default() {
                     h = stored.header.prev_blockhash;
                 }

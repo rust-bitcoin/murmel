@@ -348,7 +348,7 @@ impl<'a> DBTX<'a> {
     }
 
     /// check if hash is on trunk (chain from genesis to tip)
-    pub fn is_on_trunk(&self, hash: &Sha256dHash) -> Result<bool, SPVError> {
+    pub fn is_on_trunk(&self, hash: &Sha256dHash) -> bool {
         let hb = self.headers.read().unwrap();
         hb.is_on_trunk(hash)
     }

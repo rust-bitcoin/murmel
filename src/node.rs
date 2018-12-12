@@ -197,7 +197,7 @@ impl Node {
 
                                     if header_hash == new_tip && header.header.prev_blockhash != old_tip {
                                         // this is a re-org. Compute headers to unwind
-                                        while !tx.is_on_trunk(&old_tip)? {
+                                        while !tx.is_on_trunk(&old_tip) {
                                             if let Some(old_header) = tx.get_header(&old_tip)? {
                                                 old_tip = old_header.header.prev_blockhash;
                                                 disconnected_headers.push(old_header.header);
