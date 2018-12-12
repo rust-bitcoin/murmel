@@ -108,7 +108,7 @@ impl FilterStore {
             let header = decode(&stored[0..80])?;
             let mut data = Cursor::new(&stored[80..]);
             let txdata_offset = PRef::from(data.read_u48::<BigEndian>()?);
-            let filter_id = Sha256dHash::from (&data.into_inner()[86..86+32]);
+            let filter_id = Sha256dHash::from (&data.into_inner()[6..6+32]);
 
             let mut txdata: Vec<Transaction> = Vec::new();
             if txdata_offset.is_valid() {

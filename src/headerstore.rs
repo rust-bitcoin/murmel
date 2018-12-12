@@ -38,7 +38,6 @@ use hammersbald:: {
 use std:: {
     collections::{HashMap,HashSet},
     io::Cursor,
-    collections::LinkedList,
     sync::Arc
 };
 
@@ -47,8 +46,7 @@ pub struct HeaderStore {
     hammersbald: Hammersbald,
     network: Network,
     headers: HashMap<Arc<Sha256dHash>, StoredHeader>,
-    trunk: LinkedList<Arc<Sha256dHash>>,
-    trunk_set: HashSet<Arc<Sha256dHash>>
+    trunk: Vec<Arc<Sha256dHash>>
 }
 
 /// A header enriched with information about its position on the blockchain
@@ -65,7 +63,7 @@ pub struct StoredHeader {
 impl HeaderStore {
     /// create a new Bitcoin adapter wrapping Hammersbald
     pub fn new(hammersbald: Hammersbald, network: Network) -> HeaderStore {
-        HeaderStore { hammersbald, network, headers: HashMap::new(), trunk: LinkedList::new(), trunk_set: HashSet::new() }
+        HeaderStore { hammersbald, network, headers: HashMap::new(), trunk: Vec::new() }
     }
 
     /// Insert a Bitcoin header
@@ -89,8 +87,7 @@ impl HeaderStore {
                 height: 0,
                 log2work: Self::log2work(header)
             };
-            self.trunk.push_front(new_tip.clone());
-            self.trunk_set.insert(new_tip.clone());
+            self.trunk.push(new_tip.clone());
             self.headers.insert(new_tip.clone(), stored.clone());
         }
         let key = &header.bitcoin_hash().to_bytes()[..];
@@ -189,14 +186,14 @@ impl HeaderStore {
         }
         let next_hash = Arc::new(next.bitcoin_hash());
         self.headers.insert(next_hash.clone(), stored.clone());
-        if let Some(old_tip) = self.tip()? {
-            if old_tip.log2work < stored.log2work {
+        if let Some(tip) = self.tip()? {
+            if tip.log2work < stored.log2work {
+
                 let new_tip = next_hash.clone();
                 self.hammersbald.put(&Sha256dHash::default().to_bytes()[..], &new_tip.to_bytes()[..], &vec!())?;
-                let mut ph = old_tip.header.bitcoin_hash();
-                while self.trunk_set.contains (&ph) {
-                    self.trunk.pop_back();
-                    self.trunk_set.remove(&ph);
+
+                let mut ph = *new_tip.clone();
+                while !self.is_on_trunk(&ph) {
                     if let Some(h) = self.headers.get(&Arc::new(ph)) {
                         ph = h.header.prev_blockhash;
                     }
@@ -204,8 +201,15 @@ impl HeaderStore {
                         return Err(SPVError::UnconnectedHeader);
                     }
                 }
+                if let Some(pos) = self.trunk.iter().rposition(|h| {**h == ph}) {
+                    self.trunk.truncate(pos+1);
+                }
+                else {
+                    return Err(SPVError::UnconnectedHeader);
+                }
+
                 let mut new_trunk = vec!(next_hash);
-                if let Some(last) = self.trunk.back() {
+                if let Some(last) = self.trunk.last() {
                     let mut h = stored.clone();
                     while **last != h.header.prev_blockhash {
                         let hh = Arc::new(h.header.bitcoin_hash());
@@ -219,13 +223,11 @@ impl HeaderStore {
                     }
                 }
                 for h in new_trunk.iter().rev() {
-                    self.trunk_set.insert(h.clone());
-                    self.trunk.push_back(h.clone());
+                    self.trunk.push(h.clone());
                 }
             }
             else {
-                self.trunk_set.insert(next_hash.clone());
-                self.trunk.push_back(next_hash);
+                self.trunk.push(next_hash);
             }
         }
         else {
@@ -236,7 +238,7 @@ impl HeaderStore {
 
     /// is the given hash part of the trunk (chain from genesis to tip)
     pub fn is_on_trunk (&self, hash: &Sha256dHash) -> bool {
-        self.trunk_set.contains(hash)
+        self.trunk.iter().rposition(|e| { **e == *hash }).is_some()
     }
 
     /// retrieve the id of the block/header with most work
@@ -289,8 +291,7 @@ impl HeaderStore {
             let mut h = tip.header.bitcoin_hash();
             while let Some(stored) = self.fetch_header(&h)? {
                 let sh = Arc::new(stored.header.bitcoin_hash());
-                self.trunk.push_front(sh.clone());
-                self.trunk_set.insert(sh.clone());
+                self.trunk.push(sh.clone());
                 self.headers.insert(sh, stored.clone());
                 if stored.header.prev_blockhash != Sha256dHash::default() {
                     h = stored.header.prev_blockhash;
@@ -299,6 +300,7 @@ impl HeaderStore {
                     break;
                 }
             }
+            self.trunk.reverse();
         }
         Ok(())
     }
