@@ -34,7 +34,7 @@ pub fn main() {
         println!("--log level: level is one of trace|debug|info|warn|error");
         println!("--connections n: maintain at least n connections");
         println!("--peer ip_address: connect to the given peer at start. You may use more than one --peer option.");
-        println!("--db file: store data in the given sqlite datbase file. Created if does not exist.");
+        println!("--db file: store data in the given sqlite database file. Created if does not exist.");
         println!("--network net: net is one of main|test for corresponding Bitcoin networks");
         println!("--listen ip_address:port : accept incoming connection requests");
         println!("--nodns : do not use dns seed");

@@ -16,7 +16,7 @@
 //!
 //! # Database layer for the Bitcoin SPV client
 //!
-//! Stores the blockchain (mostly header), the wallet and various runtime and configuration data.
+//! Stores the blockchain (mostly headers), the wallet and various runtime and configuration data.
 //!
 
 
@@ -145,7 +145,7 @@ impl<'a> DBTX<'a> {
 
     /// Create tables suitable for blockchain storage
     /// Tables:
-    ///   * ids - maps hashes to integers for better performance, all othe rtables use integers mapped here for hashes
+    ///   * ids - maps hashes to integers for better performance, all other tables use integers mapped here for hashes
     ///   * tip - hold the highest hash on trunk (the chain with the most work)
     ///   * header - block header
     ///   * tx - transactions

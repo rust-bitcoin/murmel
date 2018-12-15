@@ -272,7 +272,7 @@ impl Node {
     fn inv(&self, v: &Vec<Inventory>, peer: PeerId) -> Result<ProcessResult, SPVError> {
         let mut ask_for_headers = false;
         for inventory in v {
-            // only care of blocks
+            // only care for blocks
             if inventory.inv_type == InvType::Block {
                 let mut db = self.inner.db.lock().unwrap();
                 let tx = db.transaction()?;
@@ -356,12 +356,12 @@ impl Node {
         self.broadcast(&NetworkMessage::Tx(tx.clone()))
     }
 
-    /// retrieve the interface for lighning network
+    /// retrieve the interface for lightning network
     pub fn get_chain_watch_interface(&self) -> Arc<LightningConnector> {
         self.inner.connector.clone()
     }
 
-    /// retrieve the interface a higher application layer e.g. lighning may use to send transactions to the network
+    /// retrieve the interface a higher application layer e.g. lightning may use to send transactions to the network
     #[allow(dead_code)]
     pub fn get_broadcaster(&self) -> Arc<Broadcaster> {
         self.inner.connector.get_broadcaster()

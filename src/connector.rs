@@ -14,7 +14,7 @@
 // limitations under the License.
 //
 //!
-//! # Connector to serve a lighning network implementation
+//! # Connector to serve a lightning network implementation
 //!
 //! This implements an interface to higher level applications
 //!
@@ -41,7 +41,7 @@ impl Logger for LightningLogger {
     }
 }
 
-/// connector to lighning network
+/// connector to lightning network
 pub struct LightningConnector {
     util: ChainWatchInterfaceUtil,
     broadcaster: Arc<Broadcaster>
@@ -57,13 +57,13 @@ impl LightningConnector {
     }
 
     /// called by the node if new block added to trunk (longest chain)
-    /// this will notify listeners on lighning side
+    /// this will notify listeners on lightning side
     pub fn block_connected(&self, block: &Block, height: u32) {
         self.util.block_connected_with_filtering(block, height)
     }
 
-    /// called by the node if a block is removed from trunk (orphaned from logest chain)
-    /// this will notify listeners on lighning side
+    /// called by the node if a block is removed from trunk (orphaned from longest chain)
+    /// this will notify listeners on lightning side
     pub fn block_disconnected(&self, header: &BlockHeader) {
         self.util.block_disconnected(header)
     }
