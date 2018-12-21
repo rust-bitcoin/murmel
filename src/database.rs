@@ -139,7 +139,9 @@ impl<'a> DBTX<'a> {
 
     /// batch hammersbald writes
     pub fn batch (&self) -> Result<(), SPVError> {
-        self.blocks.write().unwrap().batch()?;
+        {
+            self.blocks.write().unwrap().batch()?;
+        }
         Ok(self.headers.write().unwrap().batch()?)
     }
 
