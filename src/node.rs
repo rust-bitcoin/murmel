@@ -267,15 +267,16 @@ impl Node {
 
     // process an incoming inventory announcement
     fn inv(&self, v: &Vec<Inventory>, peer: PeerId) -> Result<ProcessResult, SPVError> {
+        let mut ask_for_headers = false;
         for inventory in v {
             // only care of blocks
             if inventory.inv_type == InvType::Block {
                 let mut db = self.inner.db.lock().unwrap();
                 let tx = db.transaction()?;
-                if tx.get_header(&inventory.hash).is_none() {
+                debug!("received inv for block {}", inventory.hash);
+                if tx.get_header(&inventory.hash).is_some() {
                     // ask for header(s) if observing a new block
-                    self.get_headers(peer)?;
-                    return Ok(ProcessResult::Ack);
+                   ask_for_headers = true;
                 }
             } else {
                 // do not spam us with transactions
@@ -283,7 +284,13 @@ impl Node {
                 return Ok(ProcessResult::Ban(10));
             }
         }
-        Ok(ProcessResult::Ignored)
+        if ask_for_headers {
+            self.get_headers(peer)?;
+            return Ok(ProcessResult::Ack);
+        }
+        else {
+            return Ok(ProcessResult::Ignored);
+        }
     }
 
     // process incoming addr messages
