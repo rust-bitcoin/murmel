@@ -201,6 +201,10 @@ impl Node {
                             Err(SPVError::SpvBadProofOfWork) => {
                                 info!("Incorrect POW, banning peer={}", peer);
                                 return Ok(ProcessResult::Ban(100));
+                            },
+                            Err(SPVError::UnconnectedHeader) => {
+                                debug!("Unconnected header peer={}", peer);
+                                return Ok(ProcessResult::Ignored);
                             }
                             Err(_) => return Ok(ProcessResult::Ignored)
                         }
@@ -312,16 +316,12 @@ impl Node {
         let tx = db.transaction()?;
         let locator = tx.locator_hashes();
         if locator.len() > 0 {
-            debug!("locator {} {}", locator[0], locator.len());
             let first = if locator.len() > 0 {
                 *locator.first().unwrap()
             } else {
                 Sha256dHash::default()
             };
             return self.send(peer, &NetworkMessage::GetHeaders(GetHeadersMessage::new(locator, first)));
-        }
-        else {
-            debug!("empty locator");
         }
         Ok(ProcessResult::Ack)
     }

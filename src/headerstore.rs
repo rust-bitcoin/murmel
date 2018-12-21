@@ -88,7 +88,7 @@ impl HeaderStore {
             stored = StoredHeader {
                 header: header.clone(),
                 height: 0,
-                log2work: Self::log2work(header)
+                log2work: Self::log2(header.work())
             };
             self.trunk.push(new_tip.clone());
             self.headers.insert(new_tip.clone(), stored.clone());
@@ -102,14 +102,20 @@ impl HeaderStore {
         Ok(true)
     }
 
-    fn log2work(header: &BlockHeader) -> f32 {
-        let mut r = 0f32;
-        let base = 64f32.exp2();
-        for i in header.work().0.iter().rev() {
-            r *= base;
-            r += *i as f32;
-        }
-        r.log2()
+    fn log2(work: Uint256) -> f32 {
+        // we will have u256 faster in Rust than 2^128 total work in Bitcoin
+        assert!(work.0[2] == 0 && work.0[3] == 0);
+        ((work.0[0] as u128 + (work.0[1] as u128) << 64) as f32).log2()
+    }
+
+    fn exp2(n: f32) -> Uint256 {
+        // we will have u256 faster in Rust than 2^128 total work in Bitcoin
+        assert!(n < 128.0);
+        let e:u128 = n.exp2() as u128;
+        let mut b = [0u64;4];
+        b[0] = e as u64;
+        b[1] = (e >> 64) as u64;
+        Uint256(b)
     }
 
     fn max_target() -> Uint256 {
@@ -180,23 +186,26 @@ impl HeaderStore {
             } else {
                 prev.header.target()
             };
+
+        if next.spv_validate(&required_work).is_err() {
+            return Err(SPVError::SpvBadProofOfWork);
+        }
+
         let stored = StoredHeader {
             header: next.clone(),
             height: prev.height + 1,
-            log2work: Self::log2work(next) + prev.log2work
+            log2work: Self::log2(next.work() + Self::exp2(prev.log2work))
         };
-        if stored.header.spv_validate(&required_work).is_err() {
-            return Err(SPVError::SpvBadProofOfWork);
-        }
         let next_hash = Arc::new(next.bitcoin_hash());
+
         self.headers.insert(next_hash.clone(), stored.clone());
+
         if let Some(tip) = self.tip()? {
             if tip.log2work < stored.log2work {
 
-                let new_tip = next_hash.clone();
-                self.store_tip(&*new_tip)?;
+                self.store_tip(&*next_hash.clone())?;
 
-                let mut ph = *new_tip.clone();
+                let mut ph = *next_hash.clone();
                 while !self.is_on_trunk(&ph) {
                     if let Some(h) = self.headers.get(&Arc::new(ph)) {
                         ph = h.header.prev_blockhash;
@@ -311,7 +320,6 @@ impl HeaderStore {
         let mut data = Cursor::new(&stored[80..]);
         let height = data.read_u24::<BigEndian>()?;
         let log2work = data.read_f32::<BigEndian>()?;
-
         return Ok(Some(StoredHeader{header, height, log2work: log2work }))
     }
 
