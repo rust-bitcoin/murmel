@@ -185,7 +185,7 @@ impl Node {
                                 if let Some(new_tip) = tx.get_tip()? {
                                     tip_moved = tip_moved || new_tip != old_tip;
                                     let header_hash = header.header.bitcoin_hash();
-                                    some_new = stored;
+                                    some_new = some_new || stored;
                                     if header_hash == new_tip && header.header.prev_blockhash != old_tip {
                                         // this is a re-org. Compute headers to unwind
                                         while !tx.is_on_trunk(&old_tip) {
