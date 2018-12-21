@@ -186,7 +186,6 @@ impl Node {
                                     tip_moved = tip_moved || new_tip != old_tip;
                                     let header_hash = header.header.bitcoin_hash();
                                     some_new = stored;
-
                                     if header_hash == new_tip && header.header.prev_blockhash != old_tip {
                                         // this is a re-org. Compute headers to unwind
                                         while !tx.is_on_trunk(&old_tip) {
@@ -201,12 +200,11 @@ impl Node {
                             Err(SPVError::SpvBadProofOfWork) => {
                                 info!("Incorrect POW, banning peer={}", peer);
                                 return Ok(ProcessResult::Ban(100));
-                            },
-                            Err(SPVError::UnconnectedHeader) => {
-                                debug!("Unconnected header peer={}", peer);
-                                return Ok(ProcessResult::Ignored);
                             }
-                            Err(_) => return Ok(ProcessResult::Ignored)
+                            Err(e) => {
+                                debug!("error {} on {} ", e, header.header.bitcoin_hash());
+                                return Ok(ProcessResult::Ignored)
+                            }
                         }
                     }
                 }

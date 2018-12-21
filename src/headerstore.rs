@@ -105,7 +105,7 @@ impl HeaderStore {
     fn log2(work: Uint256) -> f32 {
         // we will have u256 faster in Rust than 2^128 total work in Bitcoin
         assert!(work.0[2] == 0 && work.0[3] == 0);
-        ((work.0[0] as u128 + (work.0[1] as u128) << 64) as f32).log2()
+        ((work.0[0] as u128 + ((work.0[1] as u128) << 64)) as f32).log2()
     }
 
     fn exp2(n: f32) -> Uint256 {
@@ -200,14 +200,14 @@ impl HeaderStore {
 
         self.headers.insert(next_hash.clone(), stored.clone());
 
-        if let Some(tip) = self.tip()? {
+        if let Some(tip) = self.tip() {
             if tip.log2work < stored.log2work {
 
                 self.store_tip(&*next_hash.clone())?;
 
                 let mut ph = *next_hash.clone();
                 while !self.is_on_trunk(&ph) {
-                    if let Some(h) = self.headers.get(&Arc::new(ph)) {
+                    if let Some(h) = self.headers.get(&ph) {
                         ph = h.header.prev_blockhash;
                     }
                     else {
@@ -255,11 +255,11 @@ impl HeaderStore {
     }
 
     /// retrieve the id of the block/header with most work
-    pub fn tip (&self) -> Result<Option<StoredHeader>, SPVError> {
+    pub fn tip (&self) -> Option<StoredHeader> {
         if let Some(id) = self.tip_hash() {
-            return Ok(self.fetch_header(&id)?);
+            return self.get_header(&id)
         }
-        Ok(None)
+        None
     }
 
     pub fn tip_hash (&self) -> Option<Sha256dHash> {
@@ -434,12 +434,12 @@ mod test {
         let genesis = genesis_block(Network::Bitcoin).header;
 
         db.insert_header(&genesis).unwrap();
-        assert_eq!(genesis.bitcoin_hash(), db.tip().unwrap().unwrap().header.bitcoin_hash());
+        assert_eq!(genesis.bitcoin_hash(), db.tip().unwrap().header.bitcoin_hash());
 
         let next: Block = decode(hex::decode("010000006fe28c0ab6f1b372c1a6a246ae63f74f931e8365e15a089c68d6190000000000982051fd1e4ba744bbbe680e1fee14677ba1a3c3540bf7b1cdb606e857233e0e61bc6649ffff001d01e362990101000000010000000000000000000000000000000000000000000000000000000000000000ffffffff0704ffff001d0104ffffffff0100f2052a0100000043410496b538e853519c726a2c91e61ec11600ae1390813a627c66fb8be7947be63c52da7589379515d4e0a604f8141781e62294721166bf621e73a82cbf2342c858eeac00000000".as_bytes()).unwrap().as_ref()).unwrap();
         db.insert_header(&next.header).unwrap();
 
-        assert_eq!(next.bitcoin_hash(), db.tip().unwrap().unwrap().header.bitcoin_hash());
+        assert_eq!(next.bitcoin_hash(), db.tip().unwrap().header.bitcoin_hash());
         db.batch().unwrap();
         db.shutdown();
     }
