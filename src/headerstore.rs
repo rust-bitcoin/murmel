@@ -134,10 +134,10 @@ impl HeaderStore {
             if (prev.height + 1) % DIFFCHANGE_INTERVAL == 0 {
                 let timespan = {
                     // Scan back DIFFCHANGE_INTERVAL blocks
-                    let mut scan = prev.clone();
+                    let mut scan = prev;
                     for _ in 0..(DIFFCHANGE_INTERVAL - 1) {
                         if let Some(header)  = self.headers.get (&scan.header.prev_blockhash) {
-                            scan = header.clone();
+                            scan = header;
                         }
                         else {
                             return Err(SPVError::UnconnectedHeader);
@@ -169,12 +169,12 @@ impl HeaderStore {
                 // previous rule did not apply, to find the "real" difficulty.
             } else if self.network == Network::Testnet {
                 // Scan back DIFFCHANGE_INTERVAL blocks
-                let mut scan = prev.clone();
+                let mut scan = prev;
                 let mut height = prev.height + 1;
-                while height % DIFFCHANGE_INTERVAL != 0 &&
-                    scan.header.target() == Self::max_target() {
+                let max_target = Self::max_target();
+                while height % DIFFCHANGE_INTERVAL != 0 && scan.header.target() == max_target {
                     if let Some(header)  = self.headers.get(&scan.header.prev_blockhash) {
-                        scan = header.clone();
+                        scan = header;
                         height = header.height;
                     }
                     else {
@@ -215,7 +215,9 @@ impl HeaderStore {
                     }
                 }
                 if let Some(pos) = self.trunk.iter().rposition(|h| {**h == ph}) {
-                    self.trunk.truncate(pos+1);
+                    if pos < self.trunk.len() - 1 {
+                        self.trunk.truncate(pos + 1);
+                    }
                 }
                 else {
                     return Err(SPVError::UnconnectedHeader);
@@ -223,12 +225,12 @@ impl HeaderStore {
 
                 let mut new_trunk = vec!(next_hash);
                 if let Some(last) = self.trunk.last() {
-                    let mut h = stored.clone();
+                    let mut h = &stored;
                     while **last != h.header.prev_blockhash {
                         let hh = Arc::new(h.header.bitcoin_hash());
                         new_trunk.push(hh.clone());
                         if let Some(p) = self.headers.get(&hh) {
-                            h = p.clone();
+                            h = p;
                         }
                         else {
                             return Err(SPVError::UnconnectedHeader);
