@@ -227,7 +227,7 @@ impl SPV {
 /// create tables (if not already there) in the database
 fn create_tables(db: Arc<Mutex<DB>>) -> Result<u32, SPVError> {
     let mut db = db.lock().unwrap();
-    let tx = db.transaction()?;
+    let mut tx = db.transaction()?;
     let birth = tx.create_tables()?;
     tx.commit()?;
     Ok(birth)

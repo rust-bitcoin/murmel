@@ -114,7 +114,7 @@ impl Node {
     pub fn load_headers(&self) -> Result<(), SPVError> {
         info!("loading headers from database...");
         let mut db = self.inner.db.lock().unwrap();
-        let tx = db.transaction()?;
+        let mut tx = db.transaction()?;
         tx.init_node(self.inner.network)?;
         tx.commit()?;
         Ok(())
@@ -175,7 +175,7 @@ impl Node {
             {
                 // new scope to limit lock
                 let mut db = self.inner.db.lock().unwrap();
-                let tx = db.transaction()?;
+                let mut tx = db.transaction()?;
 
                 for header in headers {
                     if let Some(mut old_tip) = tx.get_tip()? {
@@ -254,7 +254,7 @@ impl Node {
     // process an incoming block
     fn block(&self, block: &Block, _peer: PeerId) -> Result<ProcessResult, SPVError> {
         let mut db = self.inner.db.lock().unwrap();
-        let tx = db.transaction()?;
+        let mut tx = db.transaction()?;
         // header should be known already, otherwise it might be spam
         if let Some(_block_node) = tx.get_header(&block.bitcoin_hash()) {
             debug!("store block {}", block.bitcoin_hash());
@@ -292,7 +292,7 @@ impl Node {
         // store if interesting, that is ...
         let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as u32;
         let mut db = self.inner.db.lock().unwrap();
-        let tx = db.transaction()?;
+        let mut tx = db.transaction()?;
         for a in v.iter() {
             // if not tor
             if a.1.socket_addr().is_ok() {

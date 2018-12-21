@@ -66,8 +66,8 @@ use rand::RngCore;
 /// tx.commit();
 pub struct DB {
     conn: Connection,
-    headers: RwLock<HeaderStore>,
-    blocks: RwLock<FilterStore>
+    headers: HeaderStore,
+    blocks: FilterStore
 }
 
 /// All database operations are accessible through this transaction wrapper, that also
@@ -78,8 +78,8 @@ pub struct DB {
 /// tx.commit();
 pub struct DBTX<'a> {
     tx: rusqlite::Transaction<'a>,
-    headers: &'a RwLock<HeaderStore>,
-    blocks: &'a RwLock<FilterStore>,
+    headers: &'a mut HeaderStore,
+    blocks: &'a mut FilterStore,
     dirty: Cell<bool>
 }
 
@@ -91,8 +91,8 @@ impl DB {
         headers.init()?;
         let mut blocks = Transient::new_db("b", 1, 2)?;
         blocks.init()?;
-        Ok(DB { conn: Connection::open_in_memory()?, headers: RwLock::new(HeaderStore::new(headers, network)),
-            blocks: RwLock::new(FilterStore::new(blocks))})
+        Ok(DB { conn: Connection::open_in_memory()?, headers: HeaderStore::new(headers, network),
+            blocks: FilterStore::new(blocks)})
     }
 
     /// Create or open a persistent database instance identified by the path
@@ -105,8 +105,8 @@ impl DB {
         let db = DB {
             conn: Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE |
                 OpenFlags::SQLITE_OPEN_CREATE | OpenFlags::SQLITE_OPEN_FULL_MUTEX)?,
-            headers: RwLock::new(HeaderStore::new(headers, network)),
-            blocks: RwLock::new(FilterStore::new(blocks))
+            headers: HeaderStore::new(headers, network),
+            blocks: FilterStore::new(blocks)
         };
         info!("database {:?} opened", path);
         Ok(db)
@@ -115,13 +115,13 @@ impl DB {
     /// Start a transaction. All operations must happen within the context of a transaction
     pub fn transaction<'a>(&'a mut self) -> Result<DBTX<'a>, SPVError> {
         trace!("starting transaction");
-        Ok(DBTX { tx: self.conn.transaction()?, headers: &self.headers, blocks: &self.blocks, dirty: Cell::new(false) })
+        Ok(DBTX { tx: self.conn.transaction()?, headers: &mut self.headers, blocks: &mut self.blocks, dirty: Cell::new(false) })
     }
 }
 
 impl<'a> DBTX<'a> {
     /// commit the transaction
-    pub fn commit(self) -> Result<(), SPVError> {
+    pub fn commit(mut self) -> Result<(), SPVError> {
         self.batch()?;
         if self.dirty.get() {
             self.tx.commit()?;
@@ -138,11 +138,9 @@ impl<'a> DBTX<'a> {
     }
 
     /// batch hammersbald writes
-    pub fn batch (&self) -> Result<(), SPVError> {
-        {
-            self.blocks.write().unwrap().batch()?;
-        }
-        Ok(self.headers.write().unwrap().batch()?)
+    pub fn batch (&mut self) -> Result<(), SPVError> {
+        self.blocks.batch()?;
+        Ok(self.headers.batch()?)
     }
 
     /// Create tables suitable for blockchain storage
@@ -153,7 +151,7 @@ impl<'a> DBTX<'a> {
     ///   * tx - transactions
     ///   * blk_tx - n:m mapping of header to transactions to form a block.
     ///   * peers - list of known peers
-    pub fn create_tables(&self) -> Result<u32, SPVError> {
+    pub fn create_tables(&mut self) -> Result<u32, SPVError> {
         trace!("creating tables...");
         self.dirty.set(true);
 
@@ -191,7 +189,7 @@ impl<'a> DBTX<'a> {
     ///   * last_seen - in unix epoch seconds
     ///   * banned_until - in unix epoch seconds
     ///   * speed - in ms as measured with ping
-    pub fn store_peer (&self, address: &Address, last_seen: u32, banned_until: u32) -> Result<(), SPVError> {
+    pub fn store_peer (&mut self, address: &Address, last_seen: u32, banned_until: u32) -> Result<(), SPVError> {
         self.dirty.set(true);
         let mut s = String::new();
         for d in address.address.iter() {
@@ -210,7 +208,7 @@ impl<'a> DBTX<'a> {
         Ok(())
     }
 
-    pub fn ban (&self, addr: &SocketAddr) -> Result<i32, SPVError> {
+    pub fn ban (&mut self, addr: &SocketAddr) -> Result<i32, SPVError> {
         self.dirty.set(true);
         let address = Address::new (addr, 0);
         let mut s = String::new();
@@ -221,7 +219,7 @@ impl<'a> DBTX<'a> {
         Ok(self.tx.execute("update peers set banned_until = ? where address = ?", &[&banned_until, &s])?)
     }
 
-    pub fn remove_peer (&self, addr: &SocketAddr) -> Result<i32, SPVError> {
+    pub fn remove_peer (&mut self, addr: &SocketAddr) -> Result<i32, SPVError> {
         self.dirty.set(true);
         let address = Address::new (addr, 0);
         let mut s = String::new();
@@ -272,33 +270,28 @@ impl<'a> DBTX<'a> {
 
     /// Get the hash of the highest hash on the chain with most work
     pub fn get_tip(&self) -> Result<Option<Sha256dHash>, SPVError> {
-        let hb = self.headers.read().unwrap();
-        Ok(hb.tip_hash())
+        Ok(self.headers.tip_hash())
     }
 
     /// Store a header into the DB. This method will return an error if the header is already stored.
-    pub fn insert_header(&self, header: &BlockHeader) -> Result<bool, SPVError> {
-        let mut hb = self.headers.write().unwrap();
-        hb.insert_header(header)
+    pub fn insert_header(&mut self, header: &BlockHeader) -> Result<bool, SPVError> {
+        self.headers.insert_header(header)
     }
 
     /// Store a transaction
-    pub fn store_block (&self, block: &Block) -> Result<(), SPVError> {
-        let mut hb = self.blocks.write().unwrap();
-        hb.insert_block(block, vec!())?;
+    pub fn store_block (&mut self, block: &Block) -> Result<(), SPVError> {
+        self.blocks.insert_block(block, vec!())?;
         Ok(())
     }
 
     /// Get a stored header. This method will return an error for an unknown header.
     pub fn get_header(&self, hash: &Sha256dHash) -> Option<StoredHeader> {
-        let hb = self.headers.read().unwrap();
-        hb.get_header(hash)
+        self.headers.get_header(hash)
     }
 
     /// get locator
     pub fn locator_hashes(&self) -> Vec<Sha256dHash> {
-        let hb = self.headers.read().unwrap();
-        hb.locator_hashes()
+        self.headers.locator_hashes()
     }
 
     pub fn insert_filter (&self, _block_hash: &Sha256dHash, _prev_block_hash: &Sha256dHash, _filter_type: u8, _content: &Vec<u8>) -> Result<Sha256dHash, SPVError> {
@@ -306,17 +299,15 @@ impl<'a> DBTX<'a> {
     }
 
     /// read headers and filters into an in-memory tree, return the number of headers on trunk
-    pub fn init_node(&self, network: Network) -> Result<(), SPVError> {
+    pub fn init_node(&mut self, network: Network) -> Result<(), SPVError> {
         use bitcoin::blockdata::constants::genesis_block;
-        let mut hb = self.headers.write().unwrap();
-        hb.init_cache(genesis_block(network).header)?;
+        self.headers.init_cache(genesis_block(network).header)?;
         Ok(())
     }
 
     /// check if hash is on trunk (chain from genesis to tip)
     pub fn is_on_trunk(&self, hash: &Sha256dHash) -> bool {
-        let hb = self.headers.read().unwrap();
-        hb.is_on_trunk(hash)
+        self.headers.is_on_trunk(hash)
     }
 }
 
@@ -393,7 +384,7 @@ mod test {
     #[test]
     fn test_db1() {
         let mut db = DB::mem(Network::Bitcoin).unwrap();
-        let tx = db.transaction().unwrap();
+        let mut tx = db.transaction().unwrap();
         tx.create_tables().unwrap();
         let genesis = constants::genesis_block(network::constants::Network::Bitcoin);
         tx.insert_header(&genesis.header).unwrap();

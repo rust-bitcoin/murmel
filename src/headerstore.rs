@@ -135,12 +135,16 @@ impl HeaderStore {
                 let timespan = {
                     // Scan back DIFFCHANGE_INTERVAL blocks
                     let mut scan = prev;
-                    for _ in 0..(DIFFCHANGE_INTERVAL - 1) {
-                        if let Some(header)  = self.headers.get (&scan.header.prev_blockhash) {
-                            scan = header;
-                        }
-                        else {
-                            return Err(SPVError::UnconnectedHeader);
+                    if self.tip_hash() == Some(scan.header.prev_blockhash) {
+                        scan = self.headers.get(&self.trunk [self.trunk.len() - DIFFCHANGE_INTERVAL as usize - 2]).unwrap();
+                    }
+                    else {
+                        for _ in 0..(DIFFCHANGE_INTERVAL - 1) {
+                            if let Some(header) = self.headers.get(&scan.header.prev_blockhash) {
+                                scan = header;
+                            } else {
+                                return Err(SPVError::UnconnectedHeader);
+                            }
                         }
                     }
                     // Get clamped timespan between first and last blocks

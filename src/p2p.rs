@@ -161,7 +161,7 @@ impl P2P {
                 peers2.write().unwrap().remove(&pid);
                 if let PeerSource::Outgoing(address) = source {
                     let mut db = db.lock().unwrap();
-                    let transaction = db.transaction().unwrap();
+                    let mut transaction = db.transaction().unwrap();
                     transaction.remove_peer(&address).unwrap_or(0);
                     transaction.commit().unwrap();
                 }
@@ -291,7 +291,7 @@ impl P2P {
         if let Some(peer) = self.peers.read().unwrap().get(&pid) {
             let locked_peer = peer.lock().unwrap();
             let mut db = self.db.lock().unwrap();
-            let transaction = db.transaction()?;
+            let mut transaction = db.transaction()?;
             transaction.ban (&(locked_peer.stream.peer_addr()?))?;
             transaction.commit()?;
         }
