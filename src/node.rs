@@ -167,6 +167,8 @@ impl Node {
         if headers.len() > 0 {
             // headers to unwind due to re-org
             let mut disconnected_headers = Vec::new();
+
+            let mut download = Vec::new();
             // current height
             let height;
             // some received headers were not yet known
@@ -195,6 +197,7 @@ impl Node {
                                             }
                                         }
                                     }
+                                    download.push(new_tip);
                                 }
                             }
                             Err(SPVError::SpvBadProofOfWork) => {
@@ -224,6 +227,7 @@ impl Node {
                         info!("received {} headers new tip={} from peer={}", headers.len(), new_tip, peer);
                     }
                     tx.commit()?;
+                    self.download_blocks(peer, download)?;
                 } else {
                     tx.commit()?;
                     debug!("received {} known or orphan headers from peer={}", headers.len(), peer);
@@ -259,7 +263,6 @@ impl Node {
         if let Some(_block_node) = tx.get_header(&block.bitcoin_hash()) {
             debug!("store block {}", block.bitcoin_hash());
             tx.store_block(block)?;
-            debug!("store block {} done", block.bitcoin_hash());
             return Ok(ProcessResult::Ack);
         }
         Ok(ProcessResult::Ignored)
@@ -274,7 +277,7 @@ impl Node {
                 let mut db = self.inner.db.lock().unwrap();
                 let tx = db.transaction()?;
                 debug!("received inv for block {}", inventory.hash);
-                if tx.get_header(&inventory.hash).is_some() {
+                if tx.get_header(&inventory.hash).is_none() {
                     // ask for header(s) if observing a new block
                    ask_for_headers = true;
                 }
