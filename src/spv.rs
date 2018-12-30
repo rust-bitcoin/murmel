@@ -50,7 +50,7 @@ impl SPV {
     /// Initialize the SPV stack and return a ChainWatchInterface
     /// Set
     ///      network - main or testnet
-    ///      bootstrap - peer adresses (only tested to work with one local node for now)
+    ///      bootstrap - peer addresses (only tested to work with one local node for now)
     ///      db - file path to store the headers and blocks database
     /// The method will read previously stored headers from the database and sync up with the peers
     /// then serve the returned ChainWatchInterface
@@ -88,7 +88,7 @@ impl SPV {
 	/// Start the SPV stack. This should be called AFTER registering listener of the ChainWatchInterface,
 	/// so they are called as the SPV stack catches up with the blockchain
 	/// * peers - connect to these peers at startup (might be empty)
-	/// * min_connections - keep connections with at least this number of peers. Peers will be chosen random
+	/// * min_connections - keep connections with at least this number of peers. Peers will be randomly chosen
 	/// from those discovered in earlier runs
     pub fn start (&mut self, peers: Vec<SocketAddr>, min_connections: usize, nodns: bool) {
         // read stored headers from db
@@ -182,7 +182,7 @@ impl SPV {
                         // found a peer
                         if let Ok(peer) = tx.get_a_peer(&self.earlier) {
                             // have an address for it
-                            // Note: we do not store Tor adresses, so this should always be true
+                            // Note: we do not store Tor addresses, so this should always be true
                             if let Ok(ref sock) = peer.socket_addr() {
                                 self.earlier.insert(*sock);
                                 self.connections.push(self.p2p.add_peer(PeerSource::Outgoing(sock.clone())));

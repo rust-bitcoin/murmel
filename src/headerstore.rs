@@ -161,10 +161,10 @@ impl HeaderStore {
                 // Clamp below MAX_TARGET (difficulty 1)
                 let max = Self::max_target();
                 if target > max { target = max };
-                // Compactify (make expressible in the 8+24 nBits float format
+                // Compactify (make expressible in the 8+24 nBits float format)
                 Self::satoshi_the_precision(target)
                 // On non-diffchange blocks, Testnet has a rule that any 20-minute-long
-                // block intervals result the difficulty
+                // block interval resets the difficulty to 1
             } else if self.network == Network::Testnet &&
                 prev.header.time > prev.header.time + 2*TARGET_BLOCK_SPACING {
                 Self::max_target()
@@ -287,7 +287,7 @@ impl HeaderStore {
         Ok(None)
     }
 
-    /// This function emulates the `GetCompact(SetCompact(n))` in the satoshi code,
+    /// This function emulates the `GetCompact(SetCompact(n))` in the Satoshi code,
     /// which drops the precision to something that can be encoded precisely in
     /// the nBits block header field. Savour the perversity. This is in Bitcoin
     /// consensus code. What. Gaah!

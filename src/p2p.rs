@@ -573,7 +573,7 @@ pub struct Peer {
     stream: TcpStream,
     // temporary buffer for not yet completely read incoming messages
     read_buffer: Buffer,
-    // temporary buffer for not yet completely written outgoind messages
+    // temporary buffer for not yet completely written outgoing messages
     write_buffer: Buffer,
     // did the remote peer already sent a verack?
     got_verack: bool,
