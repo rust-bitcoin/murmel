@@ -520,7 +520,6 @@ impl P2P {
     /// this method does not return unless there is an error obtaining network events
     /// run in its own thread, which will process all network events
     pub fn run(&self, node: Arc<Node>, ctx: &mut Context) -> Result<(), io::Error>{
-        node.init_before_p2p(ctx);
         trace!("start mio event loop");
         loop {
             // events buffer

@@ -36,7 +36,7 @@ use hammersbald:: {
     pref::PRef
 };
 use std:: {
-    collections::{HashMap,HashSet},
+    collections::HashMap,
     io::Cursor,
     sync::Arc
 };
@@ -376,11 +376,13 @@ impl HeaderStore {
 
 
     /// init hammersbald
+    #[allow(unused)]
     pub fn init (&mut self) -> Result<(), HammersbaldError> {
         self.hammersbald.init()
     }
 
     /// shutdown hammersbald
+    #[allow(unused)]
     pub fn shutdown (&mut self) {
         self.hammersbald.shutdown()
     }

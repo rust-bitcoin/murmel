@@ -123,16 +123,9 @@ impl FilterStore {
         }
         Ok(None)
     }
-    pub fn init(&mut self) -> Result<(), HammersbaldError> {
-        self.hammersbald.init()
-    }
 
     pub fn batch(&mut self) -> Result<(), HammersbaldError> {
         self.hammersbald.batch()
-    }
-
-    pub fn shutdown(&mut self) {
-        self.hammersbald.shutdown()
     }
 }
 

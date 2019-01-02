@@ -33,7 +33,7 @@ use database::DB;
 use error::SPVError;
 use futures::task::Context;
 use lightning::chain::chaininterface::BroadcasterInterface;
-use p2p::{P2P, PeerId, PeerMap};
+use p2p::{PeerId, PeerMap};
 use std::sync::{Mutex, RwLock};
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -77,8 +77,6 @@ pub struct Node {
 }
 
 struct Inner {
-    // the connected P2P network
-    p2p: Arc<P2P>,
     // peer map shared with P2P and the LightningConnector's broadcaster
     peers: Arc<RwLock<PeerMap>>,
     // type of the connected network
@@ -92,22 +90,16 @@ struct Inner {
 
 impl Node {
     /// Create a new local node
-    pub fn new(p2p: Arc<P2P>, network: Network, db: Arc<Mutex<DB>>, _server: bool, peers: Arc<RwLock<PeerMap>>) -> Node {
+    pub fn new(network: Network, db: Arc<Mutex<DB>>, _server: bool, peers: Arc<RwLock<PeerMap>>) -> Node {
         let connector = LightningConnector::new(network,Arc::new(Broadcaster { peers: peers.clone() }));
         Node {
             inner: Arc::new(Inner {
-                p2p,
                 peers,
                 network,
                 db,
                 connector: Arc::new(connector)
             })
         }
-    }
-
-    /// Initialize node before P2P communication starts
-    pub fn init_before_p2p(&self, _ctx: &mut Context) {
-        trace!("initialize node before P2P")
     }
 
     /// Load headers from database
@@ -125,11 +117,6 @@ impl Node {
         self.get_headers(pid)?;
 
         Ok(ProcessResult::Ack)
-    }
-
-    // decide if the block was fully processed
-    fn is_processed (&self, _block: &Sha256dHash) -> bool {
-        false
     }
 
     fn download_blocks(&self, pid: PeerId, blocks: Vec<Sha256dHash>) -> Result<ProcessResult, SPVError> {
@@ -356,19 +343,9 @@ impl Node {
         self.broadcast(&NetworkMessage::Tx(tx.clone()))
     }
 
-    /// retrieve the interface for lightning network
-    pub fn get_chain_watch_interface(&self) -> Arc<LightningConnector> {
-        self.inner.connector.clone()
-    }
-
     /// retrieve the interface a higher application layer e.g. lightning may use to send transactions to the network
     #[allow(dead_code)]
     pub fn get_broadcaster(&self) -> Arc<Broadcaster> {
         self.inner.connector.get_broadcaster()
     }
-}
-
-#[inline]
-fn now() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
 }

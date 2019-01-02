@@ -26,7 +26,7 @@ use bitcoin::blockdata::transaction::Transaction;
 use bitcoin::blockdata::script::Script;
 use bitcoin::consensus::{Decodable, Encodable};
 use bitcoin::network::address::Address;
-use bitcoin::util::hash::{BitcoinHash, Sha256dHash};
+use bitcoin::util::hash::Sha256dHash;
 use blockfilter::UTXOAccessor;
 use error::SPVError;
 
@@ -51,7 +51,6 @@ use std::net::SocketAddr;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::io;
-use std::sync::RwLock;
 use std::cell::Cell;
 
 use rand;
@@ -131,6 +130,7 @@ impl<'a> DBTX<'a> {
     }
 
     /// rollback the transaction
+    #[allow(unused)]
     pub fn rollback(self) -> Result<(), SPVError> {
         self.tx.rollback()?;
         trace!("rolled back transaction");

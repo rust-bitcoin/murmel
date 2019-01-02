@@ -22,7 +22,6 @@
 use bitcoin::network::constants::Network;
 use database::DB;
 use error::SPVError;
-use lightning::chain::chaininterface::ChainWatchInterface;
 use node::Node;
 use p2p::P2P;
 use std::net::SocketAddr;
@@ -37,6 +36,7 @@ use rand::{thread_rng, RngCore};
 use std::collections::HashSet;
 
 const MAX_PROTOCOL_VERSION :u32 = 70001;
+
 
 /// The complete SPV stack
 pub struct SPV{
@@ -60,7 +60,7 @@ impl SPV {
         let _birth = create_tables(db.clone())?;
         let peers = Arc::new(RwLock::new(PeerMap::new()));
         let p2p = Arc::new(P2P::new(user_agent, network, 0, peers.clone(), db.clone(), MAX_PROTOCOL_VERSION));
-        let node = Arc::new(Node::new(p2p.clone(), network, db.clone(), true, peers.clone()));
+        let node = Arc::new(Node::new(network, db.clone(), true, peers.clone()));
         Ok(SPV{ node, p2p, thread_pool, db: db.clone() })
     }
 
@@ -76,7 +76,7 @@ impl SPV {
         let _birth = create_tables(db.clone())?;
         let peers = Arc::new(RwLock::new(PeerMap::new()));
         let p2p = Arc::new(P2P::new(user_agent, network, 0, peers.clone(), db.clone(), MAX_PROTOCOL_VERSION));
-        let node = Arc::new(Node::new(p2p.clone(), network, db.clone(), true, peers.clone()));
+        let node = Arc::new(Node::new(network, db.clone(), true, peers.clone()));
         Ok(SPV{ node, p2p, thread_pool, db: db.clone()})
     }
 
@@ -214,12 +214,6 @@ impl SPV {
 
         Box::new(KeepConnected{min_connections, connections: added, db, p2p, dns: Vec::new(), nodns, earlier: HashSet::new() })
 	}
-
-    /// Get the connector to higher level appl layers, such as Lightning
-    pub fn get_chain_watch_interface (&self) -> Arc<ChainWatchInterface> {
-        return self.node.get_chain_watch_interface();
-    }
-
 }
 
 
