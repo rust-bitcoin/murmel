@@ -278,7 +278,7 @@ impl<'a> DBTX<'a> {
         self.headers.insert_header(header)
     }
 
-    /// Store a transaction
+    /// Store a block
     pub fn store_block (&mut self, block: &Block) -> Result<(), SPVError> {
         self.blocks.insert_block(block, vec!())?;
         Ok(())
