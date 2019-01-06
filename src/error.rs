@@ -19,7 +19,7 @@
 //! All modules of this library use this error class to indicate problems.
 //!
 
-use hammersbald::error::HammersbaldError;
+use hammersbald::HammersbaldError;
 
 use rusqlite;
 use bitcoin::util;
@@ -142,5 +142,11 @@ impl convert::From<HammersbaldError> for SPVError {
 impl convert::From<encode::Error> for SPVError {
     fn from(err: encode::Error) -> SPVError {
         SPVError::Serialize(err)
+    }
+}
+
+impl convert::From<Box<Error>> for SPVError {
+    fn from(err: Box<Error>) -> Self {
+        SPVError::Generic(err.description().to_owned())
     }
 }

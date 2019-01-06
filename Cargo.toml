@@ -20,7 +20,7 @@ path = "src/bin/main.rs"
 
 [dependencies]
 bitcoin = { version = "0.15", features = ["bitcoinconsensus"] }
-hammersbald = "1.2"
+hammersbald = {path="../hammersbald", features=["bitcoin_support"]}
 lightning = "0.0.7"
 mio = "0.6"
 rand = "0.5"

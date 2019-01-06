@@ -26,24 +26,29 @@ use bitcoin:: {
     util:: {
         hash::{BitcoinHash, Sha256dHash},
         uint::Uint256
+    },
+    consensus::{
+        encode,
+        encode::{Encoder, Decoder}
     }
 };
-use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
+
 use error::SPVError;
 use hammersbald:: {
-    api::{Hammersbald, HammersbaldAPI},
-    error::HammersbaldError,
-    pref::PRef
+    HammersbaldAPI,
+    HammersbaldError,
+    BitcoinAdaptor
 };
 use std:: {
     collections::HashMap,
     io::Cursor,
-    sync::Arc
+    sync::Arc,
+    error::Error
 };
 
 /// Adapter for Hammersbald storing Bitcoin data
 pub struct HeaderStore {
-    hammersbald: Hammersbald,
+    hammersbald: BitcoinAdaptor,
     network: Network,
     headers: HashMap<Arc<Sha256dHash>, StoredHeader>,
     trunk: Vec<Arc<Sha256dHash>>
@@ -56,14 +61,44 @@ pub struct StoredHeader {
     pub header: BlockHeader,
     /// chain height
     pub height: u32,
-    /// log2 of total work
-    pub log2work: f32
+    /// log2 of total work * LOGWORK_SCALE
+    pub log2work: u64
 }
+
+const LOGWORK_SCALE:f64 = 10_000_000_000f64;
+
+// need to implement if put_hash_keyed and get_hash_keyed should be used
+impl BitcoinHash for StoredHeader {
+    fn bitcoin_hash(&self) -> Sha256dHash {
+        self.header.bitcoin_hash()
+    }
+}
+
+// implement encoder. tedious just repeat the consensus_encode lines
+impl<S: Encoder> Encodable<S> for StoredHeader {
+    fn consensus_encode(&self, s: &mut S) -> Result<(), encode::Error> {
+        self.header.consensus_encode(s)?;
+        self.height.consensus_encode(s)?;
+        self.log2work.consensus_encode(s)?;
+        Ok(())
+    }
+}
+
+// implement decoder. tedious just repeat the consensus_encode lines
+impl<D: Decoder> Decodable<D> for StoredHeader {
+    fn consensus_decode(d: &mut D) -> Result<StoredHeader, encode::Error> {
+        Ok(StoredHeader {
+            header: Decodable::consensus_decode(d)?,
+            height: Decodable::consensus_decode(d)?,
+            log2work: Decodable::consensus_decode(d)? })
+    }
+}
+
 
 impl HeaderStore {
     /// create a new Bitcoin adapter wrapping Hammersbald
-    pub fn new(hammersbald: Hammersbald, network: Network) -> HeaderStore {
-        HeaderStore { hammersbald, network, headers: HashMap::new(), trunk: Vec::new() }
+    pub fn new(hammersbald: Box<HammersbaldAPI>, network: Network) -> HeaderStore {
+        HeaderStore { hammersbald: BitcoinAdaptor::new(hammersbald), network, headers: HashMap::new(), trunk: Vec::new() }
     }
 
     /// Insert a Bitcoin header
@@ -88,27 +123,22 @@ impl HeaderStore {
             stored = StoredHeader {
                 header: header.clone(),
                 height: 0,
-                log2work: Self::log2(header.work())
+                log2work: (Self::log2(header.work()) * LOGWORK_SCALE) as u64
             };
             self.trunk.push(new_tip.clone());
             self.headers.insert(new_tip.clone(), stored.clone());
         }
-        let key = &header.bitcoin_hash().to_bytes()[..];
-        let mut serialized_header = Vec::new();
-        serialized_header.extend(encode(&stored.header)?);
-        serialized_header.write_u24::<BigEndian>(stored.height)?; // height
-        serialized_header.write_f32::<BigEndian>(stored.log2work)?;
-        self.hammersbald.put(&key[..], serialized_header.as_slice(), &vec!())?;
+        self.hammersbald.put_hash_keyed(&stored)?;
         Ok(true)
     }
 
-    fn log2(work: Uint256) -> f32 {
+    fn log2(work: Uint256) -> f64 {
         // we will have u256 faster in Rust than 2^128 total work in Bitcoin
         assert!(work.0[2] == 0 && work.0[3] == 0);
-        ((work.0[0] as u128 + ((work.0[1] as u128) << 64)) as f32).log2()
+        ((work.0[0] as u128 + ((work.0[1] as u128) << 64)) as f64).log2()
     }
 
-    fn exp2(n: f32) -> Uint256 {
+    fn exp2(n: f64) -> Uint256 {
         // we will have u256 faster in Rust than 2^128 total work in Bitcoin
         assert!(n < 128.0);
         let e:u128 = n.exp2() as u128;
@@ -198,7 +228,7 @@ impl HeaderStore {
         let stored = StoredHeader {
             header: next.clone(),
             height: prev.height + 1,
-            log2work: Self::log2(next.work() + Self::exp2(prev.log2work))
+            log2work: (Self::log2(next.work() + Self::exp2(prev.log2work as f64 / LOGWORK_SCALE)) * LOGWORK_SCALE) as u64
         };
         let next_hash = Arc::new(next.bitcoin_hash());
 
@@ -276,13 +306,13 @@ impl HeaderStore {
     }
 
     fn store_tip(&mut self, tip: &Sha256dHash) -> Result<(), SPVError> {
-        self.hammersbald.put(&Sha256dHash::default().to_bytes()[..], &tip.to_bytes()[..], &vec!())?;
+        self.hammersbald.put_keyed(&Sha256dHash::default().to_bytes()[..], &tip.to_bytes()[..])?;
         Ok(())
     }
 
     fn read_tip_hash(&self) -> Result<Option<Sha256dHash>, SPVError> {
-        if let Some((_, h, _)) = self.hammersbald.get(&Sha256dHash::default().to_bytes()[..])? {
-            return Ok(Some(decode(h.as_slice())?))
+        if let Some((_, h)) = self.hammersbald.get_keyed(&Sha256dHash::default().to_bytes()[..])? {
+            return Ok(Some(Sha256dHash::from(h.as_slice())))
         }
         Ok(None)
     }
@@ -313,20 +343,11 @@ impl HeaderStore {
     }
 
     /// Fetch a header by its id from hammersbald
-    fn fetch_header (&self, id: &Sha256dHash)  -> Result<Option<StoredHeader>, SPVError> {
-        let key = &id.to_bytes()[..];
-        if let Some((_,stored,referred)) = self.hammersbald.get(&key)? {
-            return Self::parse_header(stored, referred);
+    fn fetch_header (&self, id: &Sha256dHash)  -> Result<Option<StoredHeader>, Box<Error>> {
+        if let Some((_,stored)) = self.hammersbald.get_hash_keyed::<StoredHeader>(id)? {
+            return Ok(Some(stored));
         }
         Ok(None)
-    }
-
-    fn parse_header(stored: Vec<u8>, _referred: Vec<PRef>) -> Result<Option<StoredHeader>, SPVError> {
-        let header = decode(&stored[0..80])?;
-        let mut data = Cursor::new(&stored[80..]);
-        let height = data.read_u24::<BigEndian>()?;
-        let log2work = data.read_f32::<BigEndian>()?;
-        return Ok(Some(StoredHeader{header, height, log2work: log2work }))
     }
 
     /// initialize cache
@@ -364,21 +385,14 @@ impl HeaderStore {
                 locator.push(*h.clone());
                 count += 1;
                 s = skip;
+                if count > 10 {
+                    skip *= 2;
+                }
             }
             s -= 1;
-            if count > 10 {
-                skip *= 2;
-            }
         }
 
         locator
-    }
-
-
-    /// init hammersbald
-    #[allow(unused)]
-    pub fn init (&mut self) -> Result<(), HammersbaldError> {
-        self.hammersbald.init()
     }
 
     /// shutdown hammersbald
@@ -390,65 +404,5 @@ impl HeaderStore {
     /// batch hammersbald
     pub fn batch (&mut self) -> Result<(), HammersbaldError> {
         self.hammersbald.batch()
-    }
-}
-
-fn decode<'d, T: ? Sized>(data: &'d [u8]) -> Result<T, SPVError>
-    where T: Decodable<Cursor<&'d [u8]>> {
-    let mut decoder  = Cursor::new(data);
-    Decodable::consensus_decode(&mut decoder).map_err(|e| { SPVError::Serialize(e) })
-}
-
-fn encode<T: ? Sized>(data: &T) -> Result<Vec<u8>, SPVError>
-    where T: Encodable<Vec<u8>> {
-    let mut result = vec!();
-    data.consensus_encode(&mut result).map_err(|e| { SPVError::Serialize(e) })?;
-    Ok(result)
-}
-
-#[cfg(test)]
-mod test {
-    extern crate rand;
-    extern crate hex;
-
-    use bitcoin::blockdata::{
-        block::Block,
-        constants::genesis_block
-    };
-    use bitcoin::network::constants::Network;
-    use hammersbald::api::HammersbaldFactory;
-    use hammersbald::transient::Transient;
-    use super::*;
-
-    #[test]
-    fn hashtest() {
-        let mut db = Transient::new_db("first", 1, 1).unwrap();
-        db.init().unwrap();
-        let data = encode(&Sha256dHash::default()).unwrap();
-        let key = encode(&Sha256dHash::default()).unwrap();
-        let pref = db.put(&key[..], data.as_slice(), &vec!()).unwrap();
-        assert_eq!(db.get(&key[..]).unwrap(), Some((pref, data, vec!())));
-        db.shutdown();
-    }
-
-    #[test]
-    fn header_test() {
-        let mut db = HeaderStore::new(
-            Transient::new_db("first", 1, 1).unwrap(),
-            Network::Bitcoin);
-
-        db.init().unwrap();
-
-        let genesis = genesis_block(Network::Bitcoin).header;
-
-        db.insert_header(&genesis).unwrap();
-        assert_eq!(genesis.bitcoin_hash(), db.tip().unwrap().header.bitcoin_hash());
-
-        let next: Block = decode(hex::decode("010000006fe28c0ab6f1b372c1a6a246ae63f74f931e8365e15a089c68d6190000000000982051fd1e4ba744bbbe680e1fee14677ba1a3c3540bf7b1cdb606e857233e0e61bc6649ffff001d01e362990101000000010000000000000000000000000000000000000000000000000000000000000000ffffffff0704ffff001d0104ffffffff0100f2052a0100000043410496b538e853519c726a2c91e61ec11600ae1390813a627c66fb8be7947be63c52da7589379515d4e0a604f8141781e62294721166bf621e73a82cbf2342c858eeac00000000".as_bytes()).unwrap().as_ref()).unwrap();
-        db.insert_header(&next.header).unwrap();
-
-        assert_eq!(next.bitcoin_hash(), db.tip().unwrap().header.bitcoin_hash());
-        db.batch().unwrap();
-        db.shutdown();
     }
 }

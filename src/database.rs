@@ -30,10 +30,10 @@ use bitcoin::util::hash::Sha256dHash;
 use blockfilter::UTXOAccessor;
 use error::SPVError;
 
-use hammersbald::api::HammersbaldAPI;
-use hammersbald::api::HammersbaldFactory;
-use hammersbald::persistent::Persistent;
-use hammersbald::transient::Transient;
+use hammersbald::{
+    persistent,
+    transient
+};
 
 use headerstore::{HeaderStore, StoredHeader};
 use filterstore::FilterStore;
@@ -86,10 +86,8 @@ impl DB {
     /// Create an in-memory database instance
     pub fn mem(network: Network) -> Result<DB, SPVError> {
         info!("working with memory database");
-        let mut headers = Transient::new_db("h", 1, 2)?;
-        headers.init()?;
-        let mut blocks = Transient::new_db("b", 1, 2)?;
-        blocks.init()?;
+        let headers = transient(2)?;
+        let blocks = transient( 2)?;
         Ok(DB { conn: Connection::open_in_memory()?, headers: HeaderStore::new(headers, network),
             blocks: FilterStore::new(blocks)})
     }
@@ -97,10 +95,8 @@ impl DB {
     /// Create or open a persistent database instance identified by the path
     pub fn new(path: &Path, network: Network) -> Result<DB, SPVError> {
         let basename = path.to_str().unwrap().to_string();
-        let mut headers = Persistent::new_db((basename.clone() + ".h").as_str(), 100, 2)?;
-        headers.init()?;
-        let mut blocks = Persistent::new_db((basename + ".b").as_str(), 100, 2)?;
-        blocks.init()?;
+        let headers = persistent((basename.clone() + ".h").as_str(), 100, 2)?;
+        let blocks = persistent((basename + ".b").as_str(), 100, 2)?;
         let db = DB {
             conn: Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE |
                 OpenFlags::SQLITE_OPEN_CREATE | OpenFlags::SQLITE_OPEN_FULL_MUTEX)?,
@@ -311,19 +307,6 @@ impl<'a> DBTX<'a> {
     }
 }
 
-fn decode<'d, T: ? Sized>(data: Vec<u8>) -> Result<T, SPVError>
-    where T: Decodable<Cursor<Vec<u8>>> {
-    let mut decoder  = Cursor::new(data);
-    Decodable::consensus_decode(&mut decoder).map_err(|e| { SPVError::Serialize(e) })
-}
-
-fn encode<T: ? Sized>(data: &T) -> Result<Vec<u8>, SPVError>
-    where T: Encodable<Vec<u8>> {
-    let mut result = vec!();
-    data.consensus_encode(&mut result).map_err(|e| { SPVError::Serialize(e) })?;
-    Ok(result)
-}
-
 fn encode_id(data: &Sha256dHash) -> Result<Vec<u8>, SPVError> {
     Ok(data.be_hex_string().as_bytes().to_vec())
 }
@@ -360,16 +343,7 @@ impl<'a> DBUTXOAccessor<'a> {
 
 impl<'a> UTXOAccessor for DBUTXOAccessor<'a> {
     fn get_utxo(&mut self, txid: &Sha256dHash, ix: u32) -> Result<(Script, u64), io::Error> {
-        if let Some(utxo) = self.same_block_utxo.get(&(*txid, ix)) {
-            return Ok(utxo.clone());
-        }
-        if let Ok(content) = self.query.query_row(&[&encode_id(txid)?], |row| row.get(0)) {
-            let tx: Transaction = decode(content)?;
-            if let Some(output) = tx.output.get(ix as usize) {
-                return Ok((output.script_pubkey.clone(), output.value))
-            }
-        }
-        return Err(io::Error::from(io::ErrorKind::NotFound));
+        unimplemented!()
     }
 }
 
