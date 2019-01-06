@@ -203,11 +203,11 @@ impl Node {
                         height = header.height;
                     }
                     else {
-                        return Err(SPVError::Generic("no tip header stored".to_string()));
+                        return Err(SPVError::NoTip);
                     }
                 }
                 else {
-                    return Err(SPVError::Generic("no tip".to_string()));
+                    return Err(SPVError::NoTip);
                 }
                 if tip_moved {
                     if let Some(new_tip) = tx.get_tip()? {
