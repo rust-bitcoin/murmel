@@ -231,7 +231,7 @@ impl<'a> DBTX<'a> {
             "select count(*) from peers", &[], | row | { row.get(0) })?;
 
         if n_peers == 0 {
-            return Err(SPVError::Generic("no peers in the database".to_owned()));
+            return Err(SPVError::NoPeers);
         }
 
         let mut rng = rand::thread_rng();
@@ -261,7 +261,7 @@ impl<'a> DBTX<'a> {
                 }
             }
         }
-        Err(SPVError::Generic("no useful peers in the database".to_owned()))
+        Err(SPVError::NoPeers)
     }
 
     /// Get the hash of the highest hash on the chain with most work
@@ -318,7 +318,7 @@ fn decode_id(data: Vec<u8>) -> Result<Sha256dHash, SPVError> {
             return Ok(hash);
         }
     }
-    return Err(SPVError::Generic("unable to decode id to a hash".to_owned()));
+    return Err(SPVError::Downstream("unable to decode id to a hash".to_owned()));
 }
 
 pub struct DBUTXOAccessor<'a> {

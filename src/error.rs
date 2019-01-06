@@ -37,8 +37,10 @@ pub enum SPVError {
     UnconnectedHeader,
     /// no chain tip found
     NoTip,
-    /// generic error message
-    Generic(String),
+    /// no peers to connect to
+    NoPeers,
+    /// downstream error
+    Downstream(String),
     /// Network IO error
     IO(io::Error),
     /// Database error
@@ -57,7 +59,8 @@ impl Error for SPVError {
             SPVError::SpvBadProofOfWork => "bad proof of work",
             SPVError::UnconnectedHeader => "unconnected header",
             SPVError::NoTip => "no chain tip found",
-            SPVError::Generic(ref s) => s,
+            SPVError::NoPeers => "no peers",
+            SPVError::Downstream(ref s) => s,
             SPVError::IO(ref err) => err.description(),
             SPVError::DB(ref err) => err.description(),
             SPVError::Util(ref err) => err.description(),
@@ -71,7 +74,8 @@ impl Error for SPVError {
             SPVError::SpvBadProofOfWork => None,
             SPVError::UnconnectedHeader => None,
             SPVError::NoTip => None,
-            SPVError::Generic(_) => None,
+            SPVError::NoPeers => None,
+            SPVError::Downstream(_) => None,
             SPVError::IO(ref err) => Some(err),
             SPVError::DB(ref err) => Some(err),
             SPVError::Util(ref err) => Some(err),
@@ -88,8 +92,9 @@ impl fmt::Display for SPVError {
             // their implementations.
             SPVError::SpvBadProofOfWork |
             SPVError::UnconnectedHeader |
-            SPVError::NoTip => write!(f, "{}", self.description()),
-            SPVError::Generic(ref s) => write!(f, "Generic: {}", s),
+            SPVError::NoTip |
+            SPVError::NoPeers => write!(f, "{}", self.description()),
+            SPVError::Downstream(ref s) => write!(f, "{}", s),
             SPVError::IO(ref err) => write!(f, "IO error: {}", err),
             SPVError::DB(ref err) => write!(f, "DB error: {}", err),
             SPVError::Util(ref err) => write!(f, "Util error: {}", err),
@@ -147,6 +152,6 @@ impl convert::From<encode::Error> for SPVError {
 
 impl convert::From<Box<Error>> for SPVError {
     fn from(err: Box<Error>) -> Self {
-        SPVError::Generic(err.description().to_owned())
+        SPVError::Downstream(err.description().to_owned())
     }
 }

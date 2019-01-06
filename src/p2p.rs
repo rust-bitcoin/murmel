@@ -622,7 +622,7 @@ impl Peer {
     /// send a message to P2P network
     pub fn send (&self, msg: &NetworkMessage) -> Result<(), SPVError> {
         // send to outgoing message channel
-        self.sender.send(msg.clone()).map_err(| _ | SPVError::Generic("can not send to peer queue".to_owned()))?;
+        self.sender.send(msg.clone()).map_err(| _ | SPVError::Downstream("can not send to peer queue".to_owned()))?;
         // register for writable peer events since we have outgoing message
         self.reregister_write()?;
         Ok(())
