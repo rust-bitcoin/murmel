@@ -31,7 +31,6 @@ use bitcoin::util::hash::{BitcoinHash, Sha256dHash};
 use connector::LightningConnector;
 use database::DB;
 use error::SPVError;
-use futures::task::Context;
 use lightning::chain::chaininterface::BroadcasterInterface;
 use p2p::{PeerId, PeerMap};
 use std::sync::{Mutex, RwLock};
@@ -113,7 +112,7 @@ impl Node {
     }
 
     /// called from dispatcher whenever a new peer is connected (after handshake is successful)
-    pub fn connected(&self, pid: PeerId, _ctx: &mut Context) -> Result<ProcessResult, SPVError> {
+    pub fn connected(&self, pid: PeerId) -> Result<ProcessResult, SPVError> {
         self.get_headers(pid)?;
 
         Ok(ProcessResult::Ack)
@@ -132,7 +131,7 @@ impl Node {
     }
 
     /// Process incoming messages
-    pub fn process(&self, msg: &NetworkMessage, peer: PeerId, _: &mut Context) -> Result<ProcessResult, SPVError> {
+    pub fn process(&self, msg: &NetworkMessage, peer: PeerId) -> Result<ProcessResult, SPVError> {
         match msg {
             &NetworkMessage::Ping(nonce) => self.ping(nonce, peer),
             &NetworkMessage::Headers(ref v) => self.headers(v, peer),

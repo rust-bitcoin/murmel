@@ -477,7 +477,7 @@ impl P2P {
                 else {
                     if handshake {
                         info!("handshake peer={}", pid);
-                        node.connected (pid, ctx)?;
+                        node.connected (pid)?;
                         if let Some(w) = self.waker.lock().unwrap().get(&pid) {
                             trace!("waking for handshake");
                             w.wake();
@@ -487,7 +487,7 @@ impl P2P {
                     // as process could call back to P2P
                     for msg in incoming {
                         trace!("processing {} for peer={}", msg.command(), pid);
-                        match node.process (&msg.payload, pid, ctx)? {
+                        match node.process (&msg.payload, pid)? {
                             ProcessResult::Ack => { trace!("ack {} peer={}", msg.command(), pid); },
                             ProcessResult::Ignored => { trace!("ignored {} peer={}", msg.command(), pid); }
                             ProcessResult::Ban(increment) => {
