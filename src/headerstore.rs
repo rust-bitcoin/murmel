@@ -46,6 +46,8 @@ use std:: {
     error::Error
 };
 
+use byteorder::{BigEndian, ByteOrder};
+
 /// Adapter for Hammersbald storing Bitcoin data
 pub struct HeaderStore {
     hammersbald: BitcoinAdaptor,
@@ -61,11 +63,9 @@ pub struct StoredHeader {
     pub header: BlockHeader,
     /// chain height
     pub height: u32,
-    /// log2 of total work * LOGWORK_SCALE
-    pub log2work: u64
+    /// log2 of total work
+    pub log2work: f32
 }
-
-const LOGWORK_SCALE:f64 = 10_000_000_000f64;
 
 // need to implement if put_hash_keyed and get_hash_keyed should be used
 impl BitcoinHash for StoredHeader {
@@ -79,7 +79,9 @@ impl<S: Encoder> Encodable<S> for StoredHeader {
     fn consensus_encode(&self, s: &mut S) -> Result<(), encode::Error> {
         self.header.consensus_encode(s)?;
         self.height.consensus_encode(s)?;
-        self.log2work.consensus_encode(s)?;
+        let mut buf = [0u8;4];
+        BigEndian::write_f32(&mut buf, self.log2work);
+        buf.consensus_encode(s)?;
         Ok(())
     }
 }
@@ -87,10 +89,11 @@ impl<S: Encoder> Encodable<S> for StoredHeader {
 // implement decoder. tedious just repeat the consensus_encode lines
 impl<D: Decoder> Decodable<D> for StoredHeader {
     fn consensus_decode(d: &mut D) -> Result<StoredHeader, encode::Error> {
+        let buf :[u8; 4] = Decodable::consensus_decode(d)?;
         Ok(StoredHeader {
             header: Decodable::consensus_decode(d)?,
             height: Decodable::consensus_decode(d)?,
-            log2work: Decodable::consensus_decode(d)? })
+            log2work: BigEndian::read_f32(&buf) })
     }
 }
 
@@ -123,7 +126,7 @@ impl HeaderStore {
             stored = StoredHeader {
                 header: header.clone(),
                 height: 0,
-                log2work: (Self::log2(header.work()) * LOGWORK_SCALE) as u64
+                log2work: Self::log2(header.work())
             };
             self.trunk.push(new_tip.clone());
             self.headers.insert(new_tip.clone(), stored.clone());
@@ -132,13 +135,13 @@ impl HeaderStore {
         Ok(true)
     }
 
-    fn log2(work: Uint256) -> f64 {
+    fn log2(work: Uint256) -> f32 {
         // we will have u256 faster in Rust than 2^128 total work in Bitcoin
         assert!(work.0[2] == 0 && work.0[3] == 0);
-        ((work.0[0] as u128 + ((work.0[1] as u128) << 64)) as f64).log2()
+        ((work.0[0] as u128 + ((work.0[1] as u128) << 64)) as f32).log2()
     }
 
-    fn exp2(n: f64) -> Uint256 {
+    fn exp2(n: f32) -> Uint256 {
         // we will have u256 faster in Rust than 2^128 total work in Bitcoin
         assert!(n < 128.0);
         let e:u128 = n.exp2() as u128;
@@ -228,7 +231,7 @@ impl HeaderStore {
         let stored = StoredHeader {
             header: next.clone(),
             height: prev.height + 1,
-            log2work: (Self::log2(next.work() + Self::exp2(prev.log2work as f64 / LOGWORK_SCALE)) * LOGWORK_SCALE) as u64
+            log2work: Self::log2(next.work() + Self::exp2(prev.log2work))
         };
         let next_hash = Arc::new(next.bitcoin_hash());
 
