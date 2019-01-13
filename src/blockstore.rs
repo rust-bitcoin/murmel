@@ -36,21 +36,14 @@ use bitcoin:: {
 
 /// Block stored
 pub struct StoredBlock {
-    /// Bitcoin block
-    pub block: Block,
-}
-
-// need to implement if put_hash_keyed and get_hash_keyed should be used
-impl BitcoinHash for StoredBlock {
-    fn bitcoin_hash(&self) -> Sha256dHash {
-        self.block.bitcoin_hash()
-    }
+    // transactions
+    pub txdata: Vec<PRef>,
 }
 
 // implement encoder. tedious just repeat the consensus_encode lines
 impl<S: Encoder> Encodable<S> for StoredBlock {
     fn consensus_encode(&self, s: &mut S) -> Result<(), encode::Error> {
-        self.block.consensus_encode(s)?;
+        self.txdata.consensus_encode(s)?;
         Ok(())
     }
 }
@@ -58,7 +51,7 @@ impl<S: Encoder> Encodable<S> for StoredBlock {
 // implement decoder. tedious just repeat the consensus_encode lines
 impl<D: Decoder> Decodable<D> for StoredBlock {
     fn consensus_decode(d: &mut D) -> Result<StoredBlock, encode::Error> {
-        Ok(StoredBlock { block: Decodable::consensus_decode(d)? })
+        Ok(StoredBlock { txdata: Decodable::consensus_decode(d)? })
     }
 }
 
@@ -72,12 +65,16 @@ impl<'a> BlockStore<'a> {
     }
 
     pub fn store_block(&mut self, block: &Block) -> Result<PRef, SPVError> {
-        let stored = StoredBlock{block: block.clone()};
-        Ok(self.hammersbald.put_hash_keyed(&stored)?)
+        let mut txdata = Vec::new();
+        for tx in &block.txdata {
+            txdata.push(self.hammersbald.put_encodable(tx)?);
+        }
+        let stored = StoredBlock{txdata};
+        Ok(self.hammersbald.put_keyed_encodable(block.bitcoin_hash().as_bytes(), &stored)?)
     }
 
     pub fn fetch_block (&self, id: &Sha256dHash)  -> Result<Option<StoredBlock>, SPVError> {
-        if let Some((_, stored)) = self.hammersbald.get_hash_keyed::<StoredBlock>(id)? {
+        if let Some((_, stored)) = self.hammersbald.get_keyed_decodable::<StoredBlock>(id.as_bytes())? {
             return Ok(Some(stored))
         }
         Ok(None)

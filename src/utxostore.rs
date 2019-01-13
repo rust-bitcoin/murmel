@@ -25,7 +25,7 @@ use blockstore::StoredBlock;
 use bitcoin::{
     BitcoinHash,
     blockdata::{
-        transaction::OutPoint,
+        transaction::{Transaction, OutPoint},
         block::Block,
         script::Script
     },
@@ -36,16 +36,14 @@ use bitcoin::{
 use std::collections::HashMap;
 
 pub struct StoredUTXO {
-    block_ref: PRef,
-    tx_nr: u32,
+    tx_ref: PRef,
     vout: u32
 }
 
 // implement encoder. tedious just repeat the consensus_encode lines
 impl<S: Encoder> Encodable<S> for StoredUTXO {
     fn consensus_encode(&self, s: &mut S) -> Result<(), encode::Error> {
-        self.block_ref.as_u64().consensus_encode(s)?;
-        self.tx_nr.consensus_encode(s)?;
+        self.tx_ref.as_u64().consensus_encode(s)?;
         self.vout.consensus_encode(s)?;
         Ok(())
     }
@@ -54,12 +52,10 @@ impl<S: Encoder> Encodable<S> for StoredUTXO {
 // implement decoder. tedious just repeat the consensus_encode lines
 impl<D: Decoder> Decodable<D> for StoredUTXO {
     fn consensus_decode(d: &mut D) -> Result<StoredUTXO, encode::Error> {
-        Ok(StoredUTXO { block_ref: Decodable::consensus_decode(d)?,
-            tx_nr: Decodable::consensus_decode(d)?,
+        Ok(StoredUTXO { tx_ref: Decodable::consensus_decode(d)?,
             vout: Decodable::consensus_decode(d)? })
     }
 }
-
 
 fn utxo_key (coin: &OutPoint) -> Sha256dHash {
     let mut buf = vec!();
@@ -102,11 +98,12 @@ impl<'a> UTXOStore<'a> {
     }
 
     pub fn apply_block (&mut self, block_ref: PRef) -> Result<(), SPVError> {
-        let block = self.hammersbald.get_encodable::<StoredBlock>(block_ref)?.block;
-        let block_id = block.bitcoin_hash();
+        let (block_id, block) = self.hammersbald.get_decodable::<StoredBlock>(block_ref)?;
+        let block_id = Sha256dHash::from(block_id.as_slice());
         let mut new_utxos = HashMap::new();
         let mut unwinds = Vec::new();
-        for (i, tx) in block.txdata.iter().enumerate() {
+        for (i, tx_ref) in block.txdata.iter().enumerate() {
+            let (_, tx) = self.hammersbald.get_decodable::<Transaction>(*tx_ref)?;
             let tx_nr = i as u32;
             let txid = tx.txid();
             for (idx, output) in tx.output.iter().enumerate() {
@@ -130,25 +127,27 @@ impl<'a> UTXOStore<'a> {
         }
         for (coin, (tx_nr, vout)) in new_utxos {
             self.hammersbald.put_keyed_encodable(utxo_key(&coin).as_bytes(),
-                                                 &StoredUTXO{block_ref, tx_nr, vout})?;
+                                                 &StoredUTXO{tx_ref: block.txdata[tx_nr as usize], vout})?;
         }
         self.hammersbald.put_keyed_encodable(unwind_key(&block_id).as_bytes(), &UTXOUnwind{unwinds})?;
         Ok(())
     }
 
     pub fn unwind (&mut self, block_id: &Sha256dHash) -> Result<(), SPVError> {
-        if let Some((_, stored_block)) = self.hammersbald.get_hash_keyed::<StoredBlock>(block_id)? {
-            for tx in stored_block.block.txdata {
+        if let Some((_, stored_block)) = self.hammersbald.get_keyed_decodable::<StoredBlock>(block_id.as_bytes())? {
+            for tx_ref in stored_block.txdata {
+                let (_, tx) = self.hammersbald.get_decodable::<Transaction>(tx_ref)?;
                 let txid = tx.txid();
                 for vout in 0u32 .. tx.output.len() as u32 {
                     self.hammersbald.forget(utxo_key(&OutPoint{txid, vout}).as_bytes())?;
                 }
             }
-            if let Some((_, utxo_unwind)) = self.hammersbald.get_keyed_encodable::<UTXOUnwind>(unwind_key(block_id).as_bytes())? {
+            if let Some((_, utxo_unwind)) = self.hammersbald.get_keyed_decodable::<UTXOUnwind>(unwind_key(block_id).as_bytes())? {
                 for u in utxo_unwind.unwinds {
-                    let su = self.hammersbald.get_encodable::<StoredUTXO>(u)?;
-                    let block = self.hammersbald.get_encodable::<StoredBlock>(su.block_ref)?.block;
-                    let txid = block.txdata[su.tx_nr as usize].txid();
+                    let su = self.hammersbald.get_decodable::<StoredUTXO>(u)?.1;
+                    let tx_ref = su.tx_ref;
+                    let (_, tx) = self.hammersbald.get_decodable::<Transaction>(tx_ref)?;
+                    let txid = tx.txid();
                     let vout = su.vout;
                     self.hammersbald.put_keyed_encodable(utxo_key(&OutPoint { txid, vout }).as_bytes(), &su)?;
                 }
@@ -158,9 +157,9 @@ impl<'a> UTXOStore<'a> {
     }
 
     pub fn get_utxo(&self, coin: &OutPoint) -> Result<Option<(Script, u64)>, SPVError> {
-        if let Some ((_, utxo)) = self.hammersbald.get_keyed_encodable::<StoredUTXO>(utxo_key(coin).as_bytes())? {
-            let block = self.hammersbald.get_encodable::<StoredBlock>(utxo.block_ref)?.block;
-            let tx = block.txdata[utxo.tx_nr as usize];
+        if let Some ((_, utxo)) = self.hammersbald.get_keyed_decodable::<StoredUTXO>(utxo_key(coin).as_bytes())? {
+            let tx_ref = utxo.tx_ref;
+            let (_, tx) = self.hammersbald.get_decodable::<Transaction>(tx_ref)?;
             let output = tx.output[utxo.vout as usize];
             return Ok(Some((output.script_pubkey, output.value)));
         }
