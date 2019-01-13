@@ -23,7 +23,6 @@ use error::SPVError;
 use blockstore::StoredBlock;
 
 use bitcoin::{
-    BitcoinHash,
     blockdata::{
         transaction::{Transaction, OutPoint},
         block::Block,
