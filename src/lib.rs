@@ -40,9 +40,13 @@ extern crate futures;
 extern crate futures_timer;
 
 mod node;
-mod database;
+mod relationaldb;
 mod headerstore;
 mod filterstore;
+mod blockstore;
+mod blockchaindb;
+mod chaincache;
+mod utxostore;
 mod error;
 #[allow(dead_code)]
 mod connector;

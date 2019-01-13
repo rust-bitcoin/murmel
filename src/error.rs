@@ -39,6 +39,8 @@ pub enum SPVError {
     NoTip,
     /// no peers to connect to
     NoPeers,
+    /// unknown UTXO referred
+    UnknownUTXO,
     /// downstream error
     Downstream(String),
     /// Network IO error
@@ -59,6 +61,7 @@ impl Error for SPVError {
             SPVError::SpvBadProofOfWork => "bad proof of work",
             SPVError::UnconnectedHeader => "unconnected header",
             SPVError::NoTip => "no chain tip found",
+            SPVError::UnknownUTXO => "unknown utxo",
             SPVError::NoPeers => "no peers",
             SPVError::Downstream(ref s) => s,
             SPVError::IO(ref err) => err.description(),
@@ -75,6 +78,7 @@ impl Error for SPVError {
             SPVError::UnconnectedHeader => None,
             SPVError::NoTip => None,
             SPVError::NoPeers => None,
+            SPVError::UnknownUTXO => None,
             SPVError::Downstream(_) => None,
             SPVError::IO(ref err) => Some(err),
             SPVError::DB(ref err) => Some(err),
@@ -93,7 +97,8 @@ impl fmt::Display for SPVError {
             SPVError::SpvBadProofOfWork |
             SPVError::UnconnectedHeader |
             SPVError::NoTip |
-            SPVError::NoPeers => write!(f, "{}", self.description()),
+            SPVError::NoPeers |
+            SPVError::UnknownUTXO => write!(f, "{}", self.description()),
             SPVError::Downstream(ref s) => write!(f, "{}", s),
             SPVError::IO(ref err) => write!(f, "IO error: {}", err),
             SPVError::DB(ref err) => write!(f, "DB error: {}", err),

@@ -14,44 +14,25 @@
 // limitations under the License.
 //
 //!
-//! # Database layer for the Bitcoin SPV client
+//! # Relational Database layer for the Bitcoin SPV client
 //!
-//! Stores the blockchain (mostly headers), the wallet and various runtime and configuration data.
+//! Stores the wallet and various runtime and configuration data.
 //!
 
 
-use bitcoin::blockdata::block::{BlockHeader, Block};
 use bitcoin::network::constants::Network;
-use bitcoin::blockdata::transaction::Transaction;
-use bitcoin::blockdata::script::Script;
-use bitcoin::consensus::{Decodable, Encodable};
 use bitcoin::network::address::Address;
-use bitcoin::util::hash::Sha256dHash;
-use blockfilter::UTXOAccessor;
 use error::SPVError;
-
-use hammersbald::{
-    persistent,
-    transient
-};
-
-use headerstore::{HeaderStore, StoredHeader};
-use filterstore::FilterStore;
-
 use rusqlite;
-use rusqlite::Connection;
-use rusqlite::Error;
-use rusqlite::OpenFlags;
-use rusqlite::Statement;
-use std::io::Cursor;
-use std::path::Path;
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
-use std::net::SocketAddr;
-use std::collections::HashMap;
-use std::collections::HashSet;
-use std::io;
-use std::cell::Cell;
+use rusqlite::{Connection, Error, OpenFlags};
+
+use std::{
+    net::SocketAddr,
+    path::Path,
+    time::{SystemTime, UNIX_EPOCH},
+    collections::HashSet,
+    cell::Cell
+};
 
 use rand;
 use rand::RngCore;
@@ -65,8 +46,7 @@ use rand::RngCore;
 /// tx.commit();
 pub struct DB {
     conn: Connection,
-    headers: HeaderStore,
-    blocks: FilterStore
+    network: Network
 }
 
 /// All database operations are accessible through this transaction wrapper, that also
@@ -77,8 +57,6 @@ pub struct DB {
 /// tx.commit();
 pub struct DBTX<'a> {
     tx: rusqlite::Transaction<'a>,
-    headers: &'a mut HeaderStore,
-    blocks: &'a mut FilterStore,
     dirty: Cell<bool>
 }
 
@@ -86,23 +64,15 @@ impl DB {
     /// Create an in-memory database instance
     pub fn mem(network: Network) -> Result<DB, SPVError> {
         info!("working with memory database");
-        let headers = transient(2)?;
-        let blocks = transient( 2)?;
-        Ok(DB { conn: Connection::open_in_memory()?, headers: HeaderStore::new(headers, network),
-            blocks: FilterStore::new(blocks)})
+        Ok(DB { conn: Connection::open_in_memory()?, network})
     }
 
     /// Create or open a persistent database instance identified by the path
     pub fn new(path: &Path, network: Network) -> Result<DB, SPVError> {
         let basename = path.to_str().unwrap().to_string();
-        let headers = persistent((basename.clone() + ".h").as_str(), 100, 2)?;
-        let blocks = persistent((basename + ".b").as_str(), 100, 2)?;
         let db = DB {
             conn: Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE |
-                OpenFlags::SQLITE_OPEN_CREATE | OpenFlags::SQLITE_OPEN_FULL_MUTEX)?,
-            headers: HeaderStore::new(headers, network),
-            blocks: FilterStore::new(blocks)
-        };
+                OpenFlags::SQLITE_OPEN_CREATE | OpenFlags::SQLITE_OPEN_FULL_MUTEX)?, network };
         info!("database {:?} opened", path);
         Ok(db)
     }
@@ -110,14 +80,13 @@ impl DB {
     /// Start a transaction. All operations must happen within the context of a transaction
     pub fn transaction<'a>(&'a mut self) -> Result<DBTX<'a>, SPVError> {
         trace!("starting transaction");
-        Ok(DBTX { tx: self.conn.transaction()?, headers: &mut self.headers, blocks: &mut self.blocks, dirty: Cell::new(false) })
+        Ok(DBTX { tx: self.conn.transaction()?, dirty: Cell::new(false) })
     }
 }
 
 impl<'a> DBTX<'a> {
     /// commit the transaction
-    pub fn commit(mut self) -> Result<(), SPVError> {
-        self.batch()?;
+    pub fn commit(self) -> Result<(), SPVError> {
         if self.dirty.get() {
             self.tx.commit()?;
             trace!("committed transaction");
@@ -131,12 +100,6 @@ impl<'a> DBTX<'a> {
         self.tx.rollback()?;
         trace!("rolled back transaction");
         Ok(())
-    }
-
-    /// batch hammersbald writes
-    pub fn batch (&mut self) -> Result<(), SPVError> {
-        self.blocks.batch()?;
-        Ok(self.headers.batch()?)
     }
 
     /// Create tables suitable for blockchain storage
@@ -262,109 +225,5 @@ impl<'a> DBTX<'a> {
             }
         }
         Err(SPVError::NoPeers)
-    }
-
-    /// Get the hash of the highest hash on the chain with most work
-    pub fn get_tip(&self) -> Result<Option<Sha256dHash>, SPVError> {
-        Ok(self.headers.tip_hash())
-    }
-
-    /// Store a header into the DB. This method will return an error if the header is already stored.
-    pub fn insert_header(&mut self, header: &BlockHeader) -> Result<bool, SPVError> {
-        self.headers.insert_header(header)
-    }
-
-    /// Store a block
-    pub fn store_block (&mut self, block: &Block) -> Result<(), SPVError> {
-        self.blocks.insert_block(block, vec!())?;
-        Ok(())
-    }
-
-    /// Get a stored header. This method will return an error for an unknown header.
-    pub fn get_header(&self, hash: &Sha256dHash) -> Option<StoredHeader> {
-        self.headers.get_header(hash)
-    }
-
-    /// get locator
-    pub fn locator_hashes(&self) -> Vec<Sha256dHash> {
-        self.headers.locator_hashes()
-    }
-
-    pub fn insert_filter (&self, _block_hash: &Sha256dHash, _prev_block_hash: &Sha256dHash, _filter_type: u8, _content: &Vec<u8>) -> Result<Sha256dHash, SPVError> {
-        unimplemented!()
-    }
-
-    /// read headers and filters into an in-memory tree, return the number of headers on trunk
-    pub fn init_node(&mut self, network: Network) -> Result<(), SPVError> {
-        use bitcoin::blockdata::constants::genesis_block;
-        self.headers.init_cache(genesis_block(network).header)?;
-        Ok(())
-    }
-
-    /// check if hash is on trunk (chain from genesis to tip)
-    pub fn is_on_trunk(&self, hash: &Sha256dHash) -> bool {
-        self.headers.is_on_trunk(hash)
-    }
-}
-
-fn encode_id(data: &Sha256dHash) -> Result<Vec<u8>, SPVError> {
-    Ok(data.be_hex_string().as_bytes().to_vec())
-}
-
-fn decode_id(data: Vec<u8>) -> Result<Sha256dHash, SPVError> {
-    use std::str::from_utf8;
-    if let Ok(s) = from_utf8(data.as_slice()) {
-        if let Ok (hash) = Sha256dHash::from_hex(s) {
-            return Ok(hash);
-        }
-    }
-    return Err(SPVError::Downstream("unable to decode id to a hash".to_owned()));
-}
-
-pub struct DBUTXOAccessor<'a> {
-    tx: &'a DBTX<'a>,
-    same_block_utxo: HashMap<(Sha256dHash, u32), (Script, u64)>,
-    query: Statement<'a>
-}
-
-impl<'a> DBUTXOAccessor<'a> {
-    pub fn new(tx: &'a DBTX<'a>, block: &Block) -> Result<DBUTXOAccessor<'a>, SPVError> {
-        let query = tx.tx.prepare("select content from tx where id = ?")?;
-        let mut acc = DBUTXOAccessor { tx, same_block_utxo: HashMap::new(), query };
-        for t in &block.txdata {
-            let id = t.txid();
-            for (ix, o) in t.output.iter().enumerate() {
-                acc.same_block_utxo.insert((id, ix as u32), (o.script_pubkey.clone(), o.value));
-            }
-        }
-        Ok(acc)
-    }
-}
-
-impl<'a> UTXOAccessor for DBUTXOAccessor<'a> {
-    fn get_utxo(&mut self, txid: &Sha256dHash, ix: u32) -> Result<(Script, u64), io::Error> {
-        unimplemented!()
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use bitcoin::blockdata::constants;
-    use bitcoin::network;
-    use bitcoin::network::constants::Network;
-    use bitcoin::util::hash::{BitcoinHash};
-    use super::DB;
-
-    #[test]
-    fn test_db1() {
-        let mut db = DB::mem(Network::Bitcoin).unwrap();
-        let mut tx = db.transaction().unwrap();
-        tx.create_tables().unwrap();
-        let genesis = constants::genesis_block(network::constants::Network::Bitcoin);
-        tx.insert_header(&genesis.header).unwrap();
-        let header = tx.get_header(&genesis.header.bitcoin_hash()).unwrap();
-        assert_eq!(header.header.bitcoin_hash(), genesis.bitcoin_hash());
-        assert_eq!(Some(genesis.header.bitcoin_hash()), tx.get_tip().unwrap());
-        tx.commit().unwrap();
     }
 }

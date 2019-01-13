@@ -20,7 +20,7 @@
 //!
 
 use bitcoin::network::constants::Network;
-use database::DB;
+use relationaldb::DB;
 use error::SPVError;
 use node::Node;
 use p2p::P2P;

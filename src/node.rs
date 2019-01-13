@@ -29,7 +29,7 @@ use bitcoin::network::message_blockdata::*;
 use bitcoin::network::constants::Network;
 use bitcoin::util::hash::{BitcoinHash, Sha256dHash};
 use connector::LightningConnector;
-use database::DB;
+use relationaldb::DB;
 use error::SPVError;
 use lightning::chain::chaininterface::BroadcasterInterface;
 use p2p::{PeerId, PeerMap};
@@ -37,8 +37,10 @@ use std::sync::{Mutex, RwLock};
 use std::sync::Arc;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
+use std::collections::VecDeque;
 
 /// The node replies with this process result to messages
+#[derive(Clone, Eq, PartialEq)]
 pub enum ProcessResult {
     /// Acknowledgment
     Ack,
@@ -84,7 +86,8 @@ struct Inner {
     db: Arc<Mutex<DB>>,
     // connector serving Layer 2 network
     connector: Arc<LightningConnector>,
-    // header chain with most work
+    // download queue
+    download_queue: Mutex<VecDeque<Sha256dHash>>
 }
 
 impl Node {
@@ -96,7 +99,8 @@ impl Node {
                 peers,
                 network,
                 db,
-                connector: Arc::new(connector)
+                connector: Arc::new(connector),
+                download_queue: Mutex::new(VecDeque::new())
             })
         }
     }
@@ -118,11 +122,19 @@ impl Node {
         Ok(ProcessResult::Ack)
     }
 
-    fn download_blocks(&self, pid: PeerId, blocks: Vec<Sha256dHash>) -> Result<ProcessResult, SPVError> {
-        // TODO decide if we need it (BIP158)
-        let inventory = blocks.iter().map(|b| {Inventory{inv_type: InvType::WitnessBlock, hash: b.clone()}}).collect();
-        self.send(pid, &NetworkMessage::GetData(inventory))?;
-        Ok(ProcessResult::Ack)
+    fn download_blocks(&self, pid: PeerId, blocks: Vec<Sha256dHash>) -> Result<bool, SPVError> {
+        let mut dq = self.inner.download_queue.lock().expect("download queue poisoned");
+
+        if let Some(new_blocks) = blocks.iter ().position(|b| !dq.iter().any(|a| { a == b })) {
+            dq.extend(blocks[new_blocks ..].iter());
+        }
+
+        if let Some (ask) = dq.front() {
+            let inventory = vec!({ Inventory { inv_type: InvType::WitnessBlock, hash: ask.clone() } });
+            self.send(pid, &NetworkMessage::GetData(inventory))?;
+            return Ok(true);
+        }
+        Ok(false)
     }
 
     /// called from dispatcher whenever a peer is disconnected
@@ -242,16 +254,23 @@ impl Node {
     }
 
     // process an incoming block
-    fn block(&self, block: &Block, _peer: PeerId) -> Result<ProcessResult, SPVError> {
-        let mut db = self.inner.db.lock().unwrap();
-        let mut tx = db.transaction()?;
-        // header should be known already, otherwise it might be spam
-        if let Some(_block_node) = tx.get_header(&block.bitcoin_hash()) {
+    fn block(&self, block: &Block, peer: PeerId) -> Result<ProcessResult, SPVError> {
+        {
+            let mut db = self.inner.db.lock().unwrap();
+            let mut tx = db.transaction()?;
             debug!("store block {}", block.bitcoin_hash());
             tx.store_block(block)?;
-            return Ok(ProcessResult::Ack);
+            {
+                let mut dq = self.inner.download_queue.lock().unwrap();
+                if let Some(expected) = dq.pop_front() {
+                    if expected != block.bitcoin_hash() {
+                        dq.push_front(expected);
+                    }
+                }
+            }
         }
-        Ok(ProcessResult::Ignored)
+        self.get_headers(peer)?;
+        Ok(ProcessResult::Ack)
     }
 
     // process an incoming inventory announcement
@@ -304,18 +323,29 @@ impl Node {
         Ok(result)
     }
 
+    fn next_block(&self) -> Option<Sha256dHash> {
+        let dq = self.inner.download_queue.lock().expect("download queue posined");
+        if let Some(f) = dq.front() {
+            return Some(f.clone());
+        }
+        None
+    }
+
     /// get headers this peer is ahead of us
     fn get_headers(&self, peer: PeerId) -> Result<ProcessResult, SPVError> {
-        let mut db = self.inner.db.lock().unwrap();
-        let tx = db.transaction()?;
-        let locator = tx.locator_hashes();
-        if locator.len() > 0 {
-            let first = if locator.len() > 0 {
-                *locator.first().unwrap()
-            } else {
-                Sha256dHash::default()
-            };
-            return self.send(peer, &NetworkMessage::GetHeaders(GetHeadersMessage::new(locator, first)));
+        if !self.download_blocks(peer, vec!())? {
+            let next = self.next_block();
+            let mut db = self.inner.db.lock().unwrap();
+            let tx = db.transaction()?;
+            let locator = tx.locator_hashes();
+            if locator.len() > 0 {
+                let first = if locator.len() > 0 {
+                    *locator.first().unwrap()
+                } else {
+                    Sha256dHash::default()
+                };
+                return self.send(peer, &NetworkMessage::GetHeaders(GetHeadersMessage::new(locator, first)));
+            }
         }
         Ok(ProcessResult::Ack)
     }

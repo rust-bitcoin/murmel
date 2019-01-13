@@ -21,9 +21,11 @@
 //! that minimizes filter size by using Golomb-Rice coding for compression.
 //!
 
+use utxostore::UTXOAccessor;
+use error::SPVError;
+
 use bitcoin;
 use bitcoin::blockdata::block::Block;
-use bitcoin::blockdata::script::Script;
 use bitcoin::consensus::{Decodable, Encodable};
 use bitcoin::consensus::encode::VarInt;
 use bitcoin::util::hash::{BitcoinHash, Sha256dHash};
@@ -46,7 +48,7 @@ pub struct BlockFilter {
 
 impl BlockFilter {
 
-    pub fn compute_wallet_filter (block: &Block, utxo: impl UTXOAccessor) -> Result<BlockFilter, io::Error> {
+    pub fn compute_wallet_filter (block: &Block, utxo: impl UTXOAccessor) -> Result<BlockFilter, SPVError> {
         let mut bytes = Vec::new();
         let mut out = Cursor::new(&mut bytes);
         {
@@ -84,12 +86,16 @@ impl <'a> BlockFilterWriter<'a> {
     }
 
     /// Add consumed output scripts of a block to filter
-    fn add_consumed_scripts (&mut self, mut tx_accessor: impl UTXOAccessor) -> Result<(), io::Error> {
+    fn add_consumed_scripts (&mut self, mut tx_accessor: impl UTXOAccessor) -> Result<(), SPVError> {
         for transaction in &self.block.txdata {
             if !transaction.is_coin_base() {
                 for input in &transaction.input {
-                    let (script, _) = tx_accessor.get_utxo(&input.previous_output.txid, input.previous_output.vout)?;
-                    self.writer.add_element(script.as_bytes());
+                    if let Some((script, _)) = tx_accessor.get_utxo(&input.previous_output)? {
+                        self.writer.add_element(script.as_bytes());
+                    }
+                    else {
+                        return Err(SPVError::UnknownUTXO)
+                    }
                 }
             }
         }
@@ -97,7 +103,7 @@ impl <'a> BlockFilterWriter<'a> {
     }
 
     /// compile a filter useful for wallets
-    pub fn wallet_filter (&mut self, tx_accessor: impl UTXOAccessor) -> Result<(), io::Error> {
+    pub fn wallet_filter (&mut self, tx_accessor: impl UTXOAccessor) -> Result<(), SPVError> {
         self.add_output_scripts();
         self.add_consumed_scripts(tx_accessor)
     }
@@ -106,10 +112,6 @@ impl <'a> BlockFilterWriter<'a> {
     pub fn finish(&mut self) -> Result<usize, io::Error> {
         self.writer.finish()
     }
-}
-
-pub trait UTXOAccessor {
-    fn get_utxo(&mut self, txid: &Sha256dHash, ix: u32) -> Result<(Script, u64), io::Error>;
 }
 
 fn serialize<T: ?Sized>(data: &T) -> Result<Vec<u8>, bitcoin::util::Error>
@@ -396,6 +398,10 @@ impl<'a> BitStreamWriter<'a> {
 
 #[cfg(test)]
 mod test {
+    use bitcoin::blockdata::script::Script;
+    use bitcoin::blockdata::transaction::OutPoint;
+
+    use error::SPVError;
     use blockfilter::test::rustc_serialize::json::Json;
     use rand;
     use rand::RngCore;
@@ -418,13 +424,12 @@ mod test {
     }
 
     impl UTXOAccessor for HashMap<(Sha256dHash, u32), (Script, u64)> {
-        fn get_utxo(&mut self, txid: &Sha256dHash, ix: u32) -> Result<(Script, u64), io::Error> {
-            if let Some (ux) = self.get(&(*txid, ix)) {
-                Ok(ux.clone())
+        fn get_utxo(&self, coin: &OutPoint) -> Result<Option<(Script, u64)>, SPVError> {
+            if let Some (ux) = self.get(&(coin.txid, coin.vout)) {
+                Ok(Some(ux.clone()))
             }
             else {
-                println!("missing {}", txid);
-                Err(io::Error::from(io::ErrorKind::NotFound))
+                panic!("missing {}", coin);
             }
         }
     }

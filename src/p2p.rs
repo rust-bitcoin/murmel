@@ -26,7 +26,7 @@ use bitcoin::network::constants::Network;
 use bitcoin::network::message::NetworkMessage;
 use bitcoin::network::message::RawNetworkMessage;
 use bitcoin::network::message_network::VersionMessage;
-use database::DB;
+use relationaldb::DB;
 use error::SPVError;
 use futures::{Async, Future, FutureExt};
 use futures::future;
