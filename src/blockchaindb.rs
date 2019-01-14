@@ -35,6 +35,7 @@ use hammersbald::{
 use headerstore::HeaderStore;
 use filterstore::FilterStore;
 use blockstore::BlockStore;
+use utxostore::UTXOStore;
 
 use std::{
     path::Path
@@ -82,6 +83,10 @@ impl BlockchainDB {
 
     pub fn blocks (&mut self) -> BlockStore {
         BlockStore::new(&mut self.blocks)
+    }
+
+    pub fn utxos (&mut self) -> UTXOStore {
+        UTXOStore::new(&mut self.blocks)
     }
 
     // Batch writes to hammersbald
