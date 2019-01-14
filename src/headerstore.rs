@@ -34,7 +34,7 @@ use bitcoin:: {
 
 use error::SPVError;
 use hammersbald:: {
-    HammersbaldAPI,
+    PRef,
     BitcoinAdaptor
 };
 use std:: {
@@ -95,9 +95,8 @@ impl<'a> HeaderStore<'a> {
         HeaderStore { hammersbald }
     }
 
-    pub fn store(&mut self, stored: &StoredHeader) -> Result<(), SPVError> {
-        self.hammersbald.put_hash_keyed(stored)?;
-        Ok(())
+    pub fn store(&mut self, stored: &StoredHeader) -> Result<PRef, SPVError> {
+        Ok(self.hammersbald.put_hash_keyed(stored)?)
     }
 
     pub fn store_tip(&mut self, tip: &Sha256dHash) -> Result<(), SPVError> {

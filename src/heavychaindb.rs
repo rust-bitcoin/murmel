@@ -23,16 +23,17 @@
 use error::SPVError;
 
 use blockstore::BlockStore;
-use utxostore::UTXOStore;
+use utxostore::{DBUTXOAccessor, UTXOStore};
 use lightchaindb::LightChainDB;
 
 use bitcoin::{
     BitcoinHash,
-    blockdata::block::Block,
-    network::constants::Network
+    util::hash::Sha256dHash,
+    blockdata::block::Block
 };
 
 use hammersbald::{
+    PRef,
     persistent,
     transient,
     BitcoinAdaptor,
@@ -45,23 +46,22 @@ use std::{
 };
 
 pub struct HeavyChainDB {
-    blocks_and_utxos: BitcoinAdaptor,
-    network: Network,
+    blocks_and_utxos: BitcoinAdaptor
 }
 
 impl HeavyChainDB {
     /// Create an in-memory database instance
-    pub fn mem(network: Network) -> Result<HeavyChainDB, SPVError> {
+    pub fn mem() -> Result<HeavyChainDB, SPVError> {
         info!("working with memory database");
         let blocks = BitcoinAdaptor::new(transient( 2)?);
-        Ok(HeavyChainDB { blocks_and_utxos: blocks, network})
+        Ok(HeavyChainDB { blocks_and_utxos: blocks})
     }
 
     /// Create or open a persistent database instance identified by the path
-    pub fn new(path: &Path, network: Network) -> Result<HeavyChainDB, SPVError> {
+    pub fn new(path: &Path) -> Result<HeavyChainDB, SPVError> {
         let basename = path.to_str().unwrap().to_string();
-        let blocks = BitcoinAdaptor::new(persistent((basename + ".b").as_str(), 100, 2)?);
-        let db = HeavyChainDB { blocks_and_utxos: blocks, network };
+        let blocks = BitcoinAdaptor::new(persistent((basename + ".b").as_str(), 100, 100)?);
+        let db = HeavyChainDB { blocks_and_utxos: blocks };
         info!("heavy block database {:?} opened", path);
         Ok(db)
     }
@@ -74,12 +74,38 @@ impl HeavyChainDB {
         UTXOStore::new(&mut self.blocks_and_utxos)
     }
 
-    pub fn store_block (&mut self, light: &LightChainDB, block: &Block) -> Result<bool, SPVError> {
-        let block_id = block.bitcoin_hash();
-        if light.is_on_trunk(&block_id) {
-            return Ok(false);
+    // store block if extending trunk
+    pub fn extend_blocks (&mut self, light: &LightChainDB, block: &Block) -> Result<Option<PRef>, SPVError> {
+        let ref block_id = block.bitcoin_hash();
+        if light.is_on_trunk(block_id) {
+            return Ok(None);
         }
-        Ok(false)
+        let mut blocks = self.blocks();
+        if let Some (blocks_tip) = blocks.fetch_tip()? {
+            if let Some(header) = light.get_header(block_id) {
+                if header.header.prev_blockhash == blocks_tip {
+                    let sref = blocks.store(block)?;
+                    blocks.store_tip(block_id)?;
+                    return Ok(Some(sref));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    // extend UTXO store
+    pub fn extend_utxo (&mut self, block_ref: PRef) -> Result<(), SPVError> {
+        let mut utxos = self.utxos();
+        utxos.apply_block(block_ref)
+    }
+
+    pub fn unwind_utxo (&mut self, block_id: &Sha256dHash) -> Result<(), SPVError> {
+        let mut utxos = self.utxos();
+        utxos.unwind(block_id)
+    }
+
+    pub fn get_utxo_accessor<'a>(&'a mut self, block: &Block) -> Result<DBUTXOAccessor<'a>, SPVError> {
+        self.utxos().get_utxo_accessor(block)
     }
 
     // Batch writes to hammersbald

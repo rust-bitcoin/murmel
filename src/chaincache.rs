@@ -219,9 +219,19 @@ impl ChainCache {
         }
     }
 
-    /// is the given hash part of the trunk (chain from genesis to tip)
+    /// is the hash part of the trunk (chain from genesis to tip)
     pub fn is_on_trunk(&self, hash: &Sha256dHash) -> bool {
         self.trunk.iter().rposition(|e| { **e == *hash }).is_some()
+    }
+
+    /// is the hash part of the trunk not later than until?
+    pub fn is_on_trunk_until(&self, hash: &Sha256dHash, until: &Sha256dHash) -> bool {
+        if let Some(p1) = self.trunk.iter().rposition(|e| { **e == *until }) {
+            if let Some(p2) = self.trunk.iter().rposition(|e|{**e == *hash}) {
+                return p2 <= p1;
+            }
+        }
+        false
     }
 
     /// retrieve the id of the block/header with most work

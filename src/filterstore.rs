@@ -20,6 +20,7 @@
 use error::SPVError;
 
 use hammersbald:: {
+    PRef,
     BitcoinAdaptor
 };
 
@@ -97,10 +98,8 @@ impl<'a> FilterStore<'a> {
         FilterStore { hammersbald }
     }
 
-    pub fn store(&mut self, id: Arc<Sha256dHash>, previous: Arc<Sha256dHash>, filter: Option<Vec<u8>>) -> Result<StoredFilter, SPVError> {
-        let stored = StoredFilter{id, previous, filter };
-        self.hammersbald.put_hash_keyed(&stored)?;
-        Ok(stored)
+    pub fn store(&mut self, filter: &StoredFilter) -> Result<PRef, SPVError> {
+        Ok(self.hammersbald.put_hash_keyed(filter)?)
     }
 
     pub fn fetch(&self, id: &Sha256dHash) -> Result<Option<StoredFilter>, SPVError> {

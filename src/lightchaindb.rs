@@ -127,6 +127,11 @@ impl LightChainDB {
         self.chaincache.is_on_trunk(hash)
     }
 
+    /// is the hash part of the trunk not later than until?
+    pub fn is_on_trunk_until(&self, hash: &Sha256dHash, until: &Sha256dHash) -> bool {
+        self.chaincache.is_on_trunk_until(hash, until)
+    }
+
     /// retrieve the id of the block/header with most work
     pub fn header_tip(&self) -> Option<StoredHeader> {
         self.chaincache.tip()

@@ -18,16 +18,13 @@
 //!
 
 use bitcoin::{
-    BitcoinHash,
-    blockdata::block::BlockHeader,
     network::constants::Network,
     util::{
-        hash::Sha256dHash,
-        uint::Uint256,
+        hash::Sha256dHash
     },
 };
 use error::SPVError;
-use filterstore::{FilterStore, StoredFilter};
+use filterstore::StoredFilter;
 use std::{
     collections::HashMap,
     sync::Arc

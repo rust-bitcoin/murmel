@@ -39,8 +39,6 @@ extern crate siphasher;
 extern crate futures;
 extern crate futures_timer;
 
-mod node;
-mod relationaldb;
 mod headerstore;
 mod filterstore;
 mod blockstore;
@@ -49,6 +47,9 @@ mod filtercache;
 mod utxostore;
 mod lightchaindb;
 mod heavychaindb;
+mod chaindb;
+mod relationaldb;
+mod node;
 mod error;
 #[allow(dead_code)]
 mod connector;
