@@ -45,6 +45,7 @@ mod headerstore;
 mod filterstore;
 mod blockstore;
 mod chaincache;
+mod filtercache;
 mod utxostore;
 mod lightchaindb;
 mod heavychaindb;
