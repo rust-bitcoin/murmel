@@ -90,20 +90,34 @@ pub struct FilterStore<'a> {
     hammersbald: &'a mut BitcoinAdaptor
 }
 
+const FILTER_TIP_KEY: &[u8] = &[3u8;1];
+
 impl<'a> FilterStore<'a> {
     pub fn new(hammersbald: &mut BitcoinAdaptor) -> FilterStore {
         FilterStore { hammersbald }
     }
 
-    pub fn store_filter(&mut self, id: Arc<Sha256dHash>, previous: Arc<Sha256dHash>, filter: Option<Vec<u8>>) -> Result<StoredFilter, SPVError> {
+    pub fn store(&mut self, id: Arc<Sha256dHash>, previous: Arc<Sha256dHash>, filter: Option<Vec<u8>>) -> Result<StoredFilter, SPVError> {
         let stored = StoredFilter{id, previous, filter };
         self.hammersbald.put_hash_keyed(&stored)?;
         Ok(stored)
     }
 
-    pub fn fetch_filter(&self, id: &Sha256dHash) -> Result<Option<StoredFilter>, SPVError> {
+    pub fn fetch(&self, id: &Sha256dHash) -> Result<Option<StoredFilter>, SPVError> {
         if let Some((_, stored)) = self.hammersbald.get_hash_keyed::<StoredFilter>(id)? {
             return Ok(Some(stored))
+        }
+        Ok(None)
+    }
+
+    pub fn store_tip(&mut self, tip: &Sha256dHash) -> Result<(), SPVError> {
+        self.hammersbald.put_keyed_encodable(FILTER_TIP_KEY, tip)?;
+        Ok(())
+    }
+
+    pub fn fetch_tip(&self) -> Result<Option<Sha256dHash>, SPVError> {
+        if let Some((_, h)) = self.hammersbald.get_keyed_decodable(FILTER_TIP_KEY)? {
+            return Ok(Some(h))
         }
         Ok(None)
     }

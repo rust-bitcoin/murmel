@@ -59,12 +59,14 @@ pub struct BlockStore<'a> {
     hammersbald: &'a mut BitcoinAdaptor
 }
 
+const BLOCK_TIP_KEY: &[u8] = &[1u8;1];
+
 impl<'a> BlockStore<'a> {
     pub fn new(hammersbald: &mut BitcoinAdaptor) -> BlockStore {
         BlockStore { hammersbald }
     }
 
-    pub fn store_block(&mut self, block: &Block) -> Result<PRef, SPVError> {
+    pub fn store(&mut self, block: &Block) -> Result<PRef, SPVError> {
         let mut txdata = Vec::new();
         for tx in &block.txdata {
             txdata.push(self.hammersbald.put_encodable(tx)?);
@@ -73,9 +75,21 @@ impl<'a> BlockStore<'a> {
         Ok(self.hammersbald.put_keyed_encodable(block.bitcoin_hash().as_bytes(), &stored)?)
     }
 
-    pub fn fetch_block (&self, id: &Sha256dHash)  -> Result<Option<StoredBlock>, SPVError> {
+    pub fn fetch(&self, id: &Sha256dHash) -> Result<Option<StoredBlock>, SPVError> {
         if let Some((_, stored)) = self.hammersbald.get_keyed_decodable::<StoredBlock>(id.as_bytes())? {
             return Ok(Some(stored))
+        }
+        Ok(None)
+    }
+
+    pub fn store_tip(&mut self, tip: &Sha256dHash) -> Result<(), SPVError> {
+        self.hammersbald.put_keyed_encodable(BLOCK_TIP_KEY, tip)?;
+        Ok(())
+    }
+
+    pub fn fetch_tip(&self) -> Result<Option<Sha256dHash>, SPVError> {
+        if let Some((_, h)) = self.hammersbald.get_keyed_decodable(BLOCK_TIP_KEY)? {
+            return Ok(Some(h))
         }
         Ok(None)
     }

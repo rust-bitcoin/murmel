@@ -20,8 +20,17 @@
 //!
 
 
-use bitcoin::network::constants::Network;
 use error::SPVError;
+
+use blockstore::BlockStore;
+use utxostore::UTXOStore;
+use lightchaindb::LightChainDB;
+
+use bitcoin::{
+    BitcoinHash,
+    blockdata::block::Block,
+    network::constants::Network
+};
 
 use hammersbald::{
     persistent,
@@ -30,9 +39,6 @@ use hammersbald::{
     HammersbaldAPI
 };
 
-
-use blockstore::BlockStore;
-use utxostore::UTXOStore;
 
 use std::{
     path::Path
@@ -66,6 +72,14 @@ impl HeavyChainDB {
 
     fn utxos (&mut self) -> UTXOStore {
         UTXOStore::new(&mut self.blocks_and_utxos)
+    }
+
+    pub fn store_block (&mut self, light: &LightChainDB, block: &Block) -> Result<bool, SPVError> {
+        let block_id = block.bitcoin_hash();
+        if light.is_on_trunk(&block_id) {
+            return Ok(false);
+        }
+        Ok(false)
     }
 
     // Batch writes to hammersbald

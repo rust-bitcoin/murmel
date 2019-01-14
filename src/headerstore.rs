@@ -88,30 +88,31 @@ impl<D: Decoder> Decodable<D> for StoredHeader {
     }
 }
 
+const HEADER_TIP_KEY: &[u8] = &[0u8;1];
 
 impl<'a> HeaderStore<'a> {
     pub fn new(hammersbald: &mut BitcoinAdaptor) -> HeaderStore {
         HeaderStore { hammersbald }
     }
 
-    pub fn store_header (&mut self, stored: &StoredHeader) -> Result<(), SPVError> {
+    pub fn store(&mut self, stored: &StoredHeader) -> Result<(), SPVError> {
         self.hammersbald.put_hash_keyed(stored)?;
         Ok(())
     }
 
-    pub fn store_tip_hash(&mut self, tip: &Sha256dHash) -> Result<(), SPVError> {
-        self.hammersbald.put_keyed(&Sha256dHash::default().to_bytes()[..], &tip.to_bytes()[..])?;
+    pub fn store_tip(&mut self, tip: &Sha256dHash) -> Result<(), SPVError> {
+        self.hammersbald.put_keyed_encodable(HEADER_TIP_KEY, tip)?;
         Ok(())
     }
 
-    pub fn fetch_tip_hash(&self) -> Result<Option<Sha256dHash>, SPVError> {
-        if let Some((_, h)) = self.hammersbald.get_keyed(&Sha256dHash::default().to_bytes()[..])? {
-            return Ok(Some(Sha256dHash::from(h.as_slice())))
+    pub fn fetch_tip(&self) -> Result<Option<Sha256dHash>, SPVError> {
+        if let Some((_, h)) = self.hammersbald.get_keyed_decodable(HEADER_TIP_KEY)? {
+            return Ok(Some(h))
         }
         Ok(None)
     }
 
-    pub fn fetch_header(&self, id: &Sha256dHash) -> Result<Option<StoredHeader>, Box<Error>> {
+    pub fn fetch(&self, id: &Sha256dHash) -> Result<Option<StoredHeader>, Box<Error>> {
         if let Some((_,stored)) = self.hammersbald.get_hash_keyed::<StoredHeader>(id)? {
             return Ok(Some(stored));
         }

@@ -266,9 +266,9 @@ impl ChainCache {
 
     /// initialize cache from HeaderStore
     pub fn init_cache(&mut self, header_store: &HeaderStore) -> Result<(), SPVError> {
-        if let Some(tip) = header_store.fetch_tip_hash()? {
+        if let Some(tip) = header_store.fetch_tip()? {
             let mut h = tip;
-            while let Some(stored) = header_store.fetch_header(&h)? {
+            while let Some(stored) = header_store.fetch(&h)? {
                 let sh = Arc::new(stored.header.bitcoin_hash());
                 self.trunk.push(sh.clone());
                 self.headers.insert(sh, stored.clone());

@@ -91,6 +91,8 @@ pub struct UTXOStore<'a> {
     hammersbald: &'a mut BitcoinAdaptor
 }
 
+const UTXO_TIP_KEY: &[u8] = &[2u8;1];
+
 impl<'a> UTXOStore<'a> {
     pub fn new(hammersbald: &mut BitcoinAdaptor) -> UTXOStore {
         UTXOStore { hammersbald }
@@ -161,6 +163,18 @@ impl<'a> UTXOStore<'a> {
             let (_, tx) = self.hammersbald.get_decodable::<Transaction>(tx_ref)?;
             let output = tx.output[utxo.vout as usize];
             return Ok(Some((output.script_pubkey, output.value)));
+        }
+        Ok(None)
+    }
+
+    pub fn store_tip(&mut self, tip: &Sha256dHash) -> Result<(), SPVError> {
+        self.hammersbald.put_keyed_encodable(UTXO_TIP_KEY, tip)?;
+        Ok(())
+    }
+
+    pub fn fetch_tip(&self) -> Result<Option<Sha256dHash>, SPVError> {
+        if let Some((_, h)) = self.hammersbald.get_keyed_decodable(UTXO_TIP_KEY)? {
+            return Ok(Some(h))
         }
         Ok(None)
     }

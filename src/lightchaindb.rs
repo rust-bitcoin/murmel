@@ -97,14 +97,14 @@ impl LightChainDB {
 
     fn init_headers (&mut self) -> Result<(), SPVError> {
         let mut headers = self.headers();
-        if let Some(mut current) = headers.fetch_tip_hash()? {
+        if let Some(mut current) = headers.fetch_tip()? {
             self.chaincache.init_cache(&headers)?;
         }
         else {
             let genesis = genesis_block(self.network).header;
             if let Some((stored, _)) = self.chaincache.add_header (&genesis)? {
-                headers.store_header(&stored)?;
-                headers.store_tip_hash(&stored.header.bitcoin_hash())?;
+                headers.store(&stored)?;
+                headers.store_tip(&stored.header.bitcoin_hash())?;
             }
         }
         Ok(())
@@ -113,9 +113,9 @@ impl LightChainDB {
     pub fn add_header(&mut self, header: &BlockHeader) -> Result<Option<StoredHeader>, SPVError> {
         if let Some((stored, new_tip)) = self.chaincache.add_header(header)? {
             let mut headers = self.headers();
-            headers.store_header(&stored)?;
+            headers.store(&stored)?;
             if new_tip {
-                headers.store_tip_hash(&stored.bitcoin_hash())?;
+                headers.store_tip(&stored.bitcoin_hash())?;
             }
             return Ok(Some(stored))
         }
