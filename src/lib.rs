@@ -44,9 +44,10 @@ mod relationaldb;
 mod headerstore;
 mod filterstore;
 mod blockstore;
-mod blockchaindb;
 mod chaincache;
 mod utxostore;
+mod lightchaindb;
+mod heavychaindb;
 mod error;
 #[allow(dead_code)]
 mod connector;

@@ -99,7 +99,7 @@ impl<'a> HeaderStore<'a> {
         Ok(())
     }
 
-    pub fn store_tip(&mut self, tip: &Sha256dHash) -> Result<(), SPVError> {
+    pub fn store_tip_hash(&mut self, tip: &Sha256dHash) -> Result<(), SPVError> {
         self.hammersbald.put_keyed(&Sha256dHash::default().to_bytes()[..], &tip.to_bytes()[..])?;
         Ok(())
     }

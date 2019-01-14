@@ -50,11 +50,10 @@ impl ChainCache {
     }
 
     /// add a Bitcoin header
-    pub fn add_header(&mut self, header: &BlockHeader) -> Result<Option<StoredHeader>, SPVError> {
+    pub fn add_header(&mut self, header: &BlockHeader) -> Result<Option<(StoredHeader, bool)>, SPVError> {
         if self.headers.get(&header.bitcoin_hash()).is_some() {
             return Ok(None);
         }
-        let stored;
         if header.prev_blockhash != Sha256dHash::default() {
             let previous;
             if let Some(prev) = self.headers.get(&header.prev_blockhash) {
@@ -62,18 +61,19 @@ impl ChainCache {
             } else {
                 return Err(SPVError::UnconnectedHeader);
             }
-            stored = self.add_header_to_tree(&previous, header)?;
+            let (stored, new_tip) = self.add_header_to_tree(&previous, header)?;
+            return Ok(Some((stored, new_tip)));
         } else {
             let new_tip = Arc::new(header.bitcoin_hash());
-            stored = StoredHeader {
+            let stored = StoredHeader {
                 header: header.clone(),
                 height: 0,
                 log2work: Self::log2(header.work()),
             };
             self.trunk.push(new_tip.clone());
             self.headers.insert(new_tip.clone(), stored.clone());
+            return Ok(Some((stored, true)));
         }
-        Ok(Some(stored))
     }
 
     fn log2(work: Uint256) -> f32 {
@@ -97,7 +97,7 @@ impl ChainCache {
     }
 
     /// POW comments and code based on a work by Andrew Poelstra
-    fn add_header_to_tree(&mut self, prev: &StoredHeader, next: &BlockHeader) -> Result<StoredHeader, SPVError> {
+    fn add_header_to_tree(&mut self, prev: &StoredHeader, next: &BlockHeader) -> Result<(StoredHeader, bool), SPVError> {
         const DIFFCHANGE_INTERVAL: u32 = 2016;
         const DIFFCHANGE_TIMESPAN: u32 = 14 * 24 * 3600;
         const TARGET_BLOCK_SPACING: u32 = 600;
@@ -209,13 +209,14 @@ impl ChainCache {
                 for h in new_trunk.iter().rev() {
                     self.trunk.push(h.clone());
                 }
+                return Ok((stored, true));
             } else {
                 self.trunk.push(next_hash);
+                return Ok((stored, false));
             }
         } else {
             return Err(SPVError::NoTip);
         }
-        Ok(stored)
     }
 
     /// is the given hash part of the trunk (chain from genesis to tip)
@@ -264,7 +265,7 @@ impl ChainCache {
     }
 
     /// initialize cache from HeaderStore
-    pub fn init_cache(&mut self, header_store: &HeaderStore, genesis: BlockHeader) -> Result<(), SPVError> {
+    pub fn init_cache(&mut self, header_store: &HeaderStore) -> Result<(), SPVError> {
         if let Some(tip) = header_store.fetch_tip_hash()? {
             let mut h = tip;
             while let Some(stored) = header_store.fetch_header(&h)? {
