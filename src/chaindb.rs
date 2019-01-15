@@ -20,10 +20,15 @@
 use lightchaindb::LightChainDB;
 use heavychaindb::HeavyChainDB;
 use error::SPVError;
+use blockfilter::BlockFilter;
 
 use bitcoin::{
-    network::constants::Network
+    BitcoinHash,
+    network::constants::Network,
+    blockdata::block::Block,
 };
+
+use hammersbald::PRef;
 
 pub struct ChainDB {
     light: LightChainDB,
@@ -55,4 +60,43 @@ impl ChainDB {
     pub fn init (&mut self) -> Result<(), SPVError> {
         self.light.init()
     }
+
+    // store block if extending trunk
+    pub fn extend_blocks (&mut self, block: &Block) -> Result<Option<PRef>, SPVError> {
+        let ref block_id = block.bitcoin_hash();
+        if self.light.is_on_trunk(block_id) {
+            return Ok(None);
+        }
+        let mut blocks = self.heavy.blocks();
+        if let Some (blocks_tip) = blocks.fetch_tip()? {
+            if let Some(header) = self.light.get_header(block_id) {
+                if header.header.prev_blockhash == blocks_tip {
+                    let sref = blocks.store(block)?;
+                    blocks.store_tip(block_id)?;
+                    return Ok(Some(sref));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    // extend UTXO store
+    fn extend_utxo (&mut self, block_ref: PRef) -> Result<(), SPVError> {
+        let mut utxos = self.heavy.utxos();
+        utxos.apply_block(block_ref)
+    }
+
+    fn compute_filter(&mut self, block: &Block) -> Result<BlockFilter, SPVError> {
+        let mut utxos = self.heavy.utxos().get_utxo_accessor(block)?;
+        BlockFilter::compute_wallet_filter(block, utxos)
+    }
+
+    pub fn extend_filters (&mut self, block: &Block) -> Result<(), SPVError> {
+        if let Some(block_ref) = self.extend_blocks(block)? {
+            self.extend_utxo(block_ref)?;
+            let filter = self.compute_filter(block)?;
+        }
+        Ok(())
+    }
+
 }

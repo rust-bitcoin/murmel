@@ -18,6 +18,7 @@
 //!
 
 use bitcoin::{
+    BitcoinHash,
     network::constants::Network,
     util::{
         hash::Sha256dHash
@@ -31,51 +32,64 @@ use std::{
 };
 
 pub struct FilterCache {
+    // filters by block_id
+    by_block: HashMap<Sha256dHash, Arc<StoredFilter>>,
     // all known filters
-    filters: HashMap<Arc<Sha256dHash>, StoredFilter>
+    filters: HashMap<Sha256dHash, Arc<StoredFilter>>,
 }
 
 const EXPECTED_CHAIN_LENGTH: usize = 600000;
 
 impl FilterCache {
     pub fn new(network: Network) -> FilterCache {
-        FilterCache { filters: HashMap::with_capacity(EXPECTED_CHAIN_LENGTH) }
+        FilterCache { filters: HashMap::with_capacity(EXPECTED_CHAIN_LENGTH),
+            by_block: HashMap::with_capacity(EXPECTED_CHAIN_LENGTH) }
     }
 
-    /// add a filter with known content
-    pub fn add_filter(&mut self, previous: &Sha256dHash, content: &[u8]) -> Result<Option<StoredFilter>, SPVError> {
-        if let Some(previous) = self.filters.get(previous) {
-
-            let filter_header = Sha256dHash::from_data(content);
-            let mut id_data = [0u8; 64];
-            id_data[0..32].copy_from_slice(&filter_header.as_bytes()[..]);
-            id_data[0..32].copy_from_slice(&previous.id.as_bytes()[..]);
-            let id = Arc::new(Sha256dHash::from_data(&id_data));
-
-            let entry = self.filters.entry(id.clone()).or_insert(
-                StoredFilter { id, previous: previous.id.clone(), filter: None }
-            );
-            entry.filter = Some(content.to_vec());
-            return Ok(Some(entry.clone()))
-        }
-        Ok(None)
+    pub fn add_filter (&mut self, filter: StoredFilter) {
+        let filter = Arc::new(filter);
+        self.by_block.insert (filter.block_id, filter.clone());
+        self.filters.insert(filter.bitcoin_hash(), filter);
     }
-
-    pub fn add_filter_header(&mut self, id: &Sha256dHash, previous: &Sha256dHash) -> Result<Option<StoredFilter>, SPVError> {
-        if let Some(previous) = self.filters.get(previous) {
-            let stored = StoredFilter { id: Arc::new(id.clone()), previous: previous.id.clone(), filter: None };
-            self.filters.insert(stored.id.clone(), stored.clone());
-            return Ok(Some(stored));
-        }
-        Ok(None)
-    }
-
 
     /// Fetch a header by its id from cache
     pub fn get_filter(&self, id: &Sha256dHash) -> Option<StoredFilter> {
-        if let Some(header) = self.filters.get(id) {
-            return Some(header.clone());
+        self.filters.get(id).map(|b|{**b})
+    }
+
+    pub fn get_block_filter(&self, block_id: &Sha256dHash) -> Option<StoredFilter> {
+        self.by_block.get(block_id).map(|b|{**b})
+    }
+
+    /// iterate from id to genesis
+    pub fn iter_from<'a> (&'a self, id: &Sha256dHash) -> FilterIterator<'a> {
+        return FilterIterator::new(self, id)
+    }
+}
+
+pub struct FilterIterator<'a> {
+    current: Sha256dHash,
+    cache: &'a FilterCache
+}
+
+impl<'a> FilterIterator<'a> {
+    pub fn new (cache: &'a FilterCache, tip: &Sha256dHash) -> FilterIterator<'a> {
+        FilterIterator { current: *tip, cache }
+    }
+}
+
+impl<'a> Iterator for FilterIterator<'a> {
+    type Item = Sha256dHash;
+
+    fn next(&mut self) -> Option<<Self as Iterator>::Item> {
+        if self.current == Sha256dHash::default() {
+            return None;
         }
-        None
+        if let Some (filter) = self.cache.filters.get(&self.current) {
+            let current = self.current;
+            self.current = filter.previous;
+            return Some(current)
+        }
+        return None;
     }
 }

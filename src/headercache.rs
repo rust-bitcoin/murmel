@@ -33,7 +33,7 @@ use std::{
     sync::Arc,
 };
 
-pub struct ChainCache {
+pub struct HeaderCache {
     // network
     network: Network,
     // all known headers
@@ -44,9 +44,9 @@ pub struct ChainCache {
 
 const EXPECTED_CHAIN_LENGTH: usize = 600000;
 
-impl ChainCache {
-    pub fn new(network: Network) -> ChainCache {
-        ChainCache { network, headers: HashMap::with_capacity(EXPECTED_CHAIN_LENGTH), trunk: Vec::with_capacity(EXPECTED_CHAIN_LENGTH) }
+impl HeaderCache {
+    pub fn new(network: Network) -> HeaderCache {
+        HeaderCache { network, headers: HashMap::with_capacity(EXPECTED_CHAIN_LENGTH), trunk: Vec::with_capacity(EXPECTED_CHAIN_LENGTH) }
     }
 
     /// add a Bitcoin header
@@ -277,13 +277,12 @@ impl ChainCache {
     /// initialize cache from HeaderStore
     pub fn init_cache(&mut self, header_store: &HeaderStore) -> Result<(), SPVError> {
         if let Some(tip) = header_store.fetch_tip()? {
-            let mut h = tip;
+            let mut h = Arc::new(tip);
             while let Some(stored) = header_store.fetch(&h)? {
-                let sh = Arc::new(stored.header.bitcoin_hash());
-                self.trunk.push(sh.clone());
-                self.headers.insert(sh, stored.clone());
+                self.trunk.push(h.clone());
+                self.headers.insert(h, stored.clone());
                 if stored.header.prev_blockhash != Sha256dHash::default() {
-                    h = stored.header.prev_blockhash;
+                    h = Arc::new(stored.header.prev_blockhash);
                 } else {
                     break;
                 }
@@ -291,6 +290,15 @@ impl ChainCache {
             self.trunk.reverse();
         }
         Ok(())
+    }
+
+    /// iterate from id to genesis
+    pub fn iter_to_genesis<'a> (&'a self, id: &Sha256dHash) -> HeaderIterator<'a> {
+        return HeaderIterator::new(self, id)
+    }
+
+    pub fn iter_to_tip<'a> (&'a self, id: &Sha256dHash) -> TrunkIterator<'a> {
+        return TrunkIterator::new(self, id)
     }
 
     // locator for getheaders message
@@ -314,5 +322,61 @@ impl ChainCache {
         }
 
         locator
+    }
+}
+
+pub struct TrunkIterator<'a> {
+    current: Option<usize>,
+    cache: &'a HeaderCache
+}
+
+impl<'a> TrunkIterator<'a> {
+    pub fn new (cache: &'a HeaderCache, current: &Sha256dHash) -> TrunkIterator<'a> {
+        TrunkIterator { current: cache.trunk.iter().rposition(|s|{ **s == *current }), cache }
+    }
+}
+
+impl<'a> Iterator for TrunkIterator<'a> {
+    type Item = Sha256dHash;
+
+    fn next(&mut self) -> Option<<Self as Iterator>::Item> {
+        if let Some(pos) = self.current {
+            if pos < self.cache.trunk.len () - 1 {
+                let s = *self.cache.trunk[pos+1];
+                self.current = Some(pos+1);
+                return Some(s);
+            }
+            else {
+                self.current = None;
+            }
+        }
+        None
+    }
+}
+
+pub struct HeaderIterator<'a> {
+    current: Sha256dHash,
+    cache: &'a HeaderCache
+}
+
+impl<'a> HeaderIterator<'a> {
+    pub fn new (cache: &'a HeaderCache, tip: &Sha256dHash) -> HeaderIterator<'a> {
+        HeaderIterator { current: tip.clone(), cache }
+    }
+}
+
+impl<'a> Iterator for HeaderIterator<'a> {
+    type Item = Sha256dHash;
+
+    fn next(&mut self) -> Option<<Self as Iterator>::Item> {
+        if self.current == Sha256dHash::default() {
+            return None;
+        }
+        if let Some (filter) = self.cache.headers.get(&self.current) {
+            let ret = self.current.clone();
+            self.current = filter.header.prev_blockhash;
+            return Some(ret)
+        }
+        return None;
     }
 }

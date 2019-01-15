@@ -31,18 +31,15 @@ use bitcoin:: {
     consensus::{Decodable, Encodable, encode, Encoder, Decoder}
 };
 
-use std::{
-    ops::Deref,
-    sync::Arc
-};
-
 /// Filter stored
 #[derive(Clone)]
 pub struct StoredFilter {
-    /// filter id
-    pub id: Arc<Sha256dHash>,
+    /// block
+    pub block_id: Sha256dHash,
+    /// hash of the filter content
+    pub filter_hash: Sha256dHash,
     /// previous filter id
-    pub previous: Arc<Sha256dHash>,
+    pub previous: Sha256dHash,
     /// filter content
     pub filter: Option<Vec<u8>>
 }
@@ -50,14 +47,18 @@ pub struct StoredFilter {
 // need to implement if put_hash_keyed and get_hash_keyed should be used
 impl BitcoinHash for StoredFilter {
     fn bitcoin_hash(&self) -> Sha256dHash {
-        self.id.deref().clone()
+        let mut id_data = [0u8; 64];
+        id_data[0..32].copy_from_slice(&self.filter_hash.as_bytes()[..]);
+        id_data[0..32].copy_from_slice(&self.previous.as_bytes()[..]);
+        Sha256dHash::from_data(&id_data)
     }
 }
 
 // implement encoder. tedious just repeat the consensus_encode lines
 impl<S: Encoder> Encodable<S> for StoredFilter {
     fn consensus_encode(&self, s: &mut S) -> Result<(), encode::Error> {
-        self.id.consensus_encode(s)?;
+        self.block_id.consensus_encode(s)?;
+        self.filter_hash.consensus_encode(s)?;
         self.previous.consensus_encode(s)?;
         if let Some (filter) = self.filter {
             filter.consensus_encode(s)?;
@@ -73,8 +74,9 @@ impl<S: Encoder> Encodable<S> for StoredFilter {
 impl<D: Decoder> Decodable<D> for StoredFilter {
     fn consensus_decode(d: &mut D) -> Result<StoredFilter, encode::Error> {
         Ok(StoredFilter {
-            id: Arc::new(Decodable::consensus_decode(d)?),
-            previous: Arc::new(Decodable::consensus_decode(d)?),
+            block_id: Decodable::consensus_decode(d)?,
+            filter_hash: Decodable::consensus_decode(d)?,
+            previous: Decodable::consensus_decode(d)?,
             filter: {
                 let f:Vec<u8> = Decodable::consensus_decode(d)?;
                 if f.len () == 0 {
@@ -91,8 +93,6 @@ pub struct FilterStore<'a> {
     hammersbald: &'a mut BitcoinAdaptor
 }
 
-const FILTER_TIP_KEY: &[u8] = &[3u8;1];
-
 impl<'a> FilterStore<'a> {
     pub fn new(hammersbald: &mut BitcoinAdaptor) -> FilterStore {
         FilterStore { hammersbald }
@@ -105,18 +105,6 @@ impl<'a> FilterStore<'a> {
     pub fn fetch(&self, id: &Sha256dHash) -> Result<Option<StoredFilter>, SPVError> {
         if let Some((_, stored)) = self.hammersbald.get_hash_keyed::<StoredFilter>(id)? {
             return Ok(Some(stored))
-        }
-        Ok(None)
-    }
-
-    pub fn store_tip(&mut self, tip: &Sha256dHash) -> Result<(), SPVError> {
-        self.hammersbald.put_keyed_encodable(FILTER_TIP_KEY, tip)?;
-        Ok(())
-    }
-
-    pub fn fetch_tip(&self) -> Result<Option<Sha256dHash>, SPVError> {
-        if let Some((_, h)) = self.hammersbald.get_keyed_decodable(FILTER_TIP_KEY)? {
-            return Ok(Some(h))
         }
         Ok(None)
     }

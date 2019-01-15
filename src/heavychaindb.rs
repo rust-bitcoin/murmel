@@ -24,16 +24,13 @@ use error::SPVError;
 
 use blockstore::BlockStore;
 use utxostore::{DBUTXOAccessor, UTXOStore};
-use lightchaindb::LightChainDB;
 
 use bitcoin::{
-    BitcoinHash,
     util::hash::Sha256dHash,
     blockdata::block::Block
 };
 
 use hammersbald::{
-    PRef,
     persistent,
     transient,
     BitcoinAdaptor,
@@ -66,37 +63,12 @@ impl HeavyChainDB {
         Ok(db)
     }
 
-    fn blocks (&mut self) -> BlockStore {
+    pub fn blocks (&mut self) -> BlockStore {
         BlockStore::new(&mut self.blocks_and_utxos)
     }
 
-    fn utxos (&mut self) -> UTXOStore {
+    pub fn utxos (&mut self) -> UTXOStore {
         UTXOStore::new(&mut self.blocks_and_utxos)
-    }
-
-    // store block if extending trunk
-    pub fn extend_blocks (&mut self, light: &LightChainDB, block: &Block) -> Result<Option<PRef>, SPVError> {
-        let ref block_id = block.bitcoin_hash();
-        if light.is_on_trunk(block_id) {
-            return Ok(None);
-        }
-        let mut blocks = self.blocks();
-        if let Some (blocks_tip) = blocks.fetch_tip()? {
-            if let Some(header) = light.get_header(block_id) {
-                if header.header.prev_blockhash == blocks_tip {
-                    let sref = blocks.store(block)?;
-                    blocks.store_tip(block_id)?;
-                    return Ok(Some(sref));
-                }
-            }
-        }
-        Ok(None)
-    }
-
-    // extend UTXO store
-    pub fn extend_utxo (&mut self, block_ref: PRef) -> Result<(), SPVError> {
-        let mut utxos = self.utxos();
-        utxos.apply_block(block_ref)
     }
 
     pub fn unwind_utxo (&mut self, block_id: &Sha256dHash) -> Result<(), SPVError> {
