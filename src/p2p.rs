@@ -26,7 +26,7 @@ use bitcoin::network::constants::Network;
 use bitcoin::network::message::NetworkMessage;
 use bitcoin::network::message::RawNetworkMessage;
 use bitcoin::network::message_network::VersionMessage;
-use relationaldb::DB;
+use configdb::ConfigDB;
 use error::SPVError;
 use futures::{Async, Future, FutureExt};
 use futures::future;
@@ -103,7 +103,7 @@ pub struct P2P {
     // atomic only for interior mutability
     next_peer_id: AtomicUsize,
     // database
-    db: Arc<Mutex<DB>>,
+    db: Arc<Mutex<ConfigDB>>,
     // waker
     waker: Arc<Mutex<HashMap<PeerId, Waker>>>,
     // server
@@ -114,7 +114,7 @@ pub struct P2P {
 
 impl P2P {
     /// create a new P2P network controller
-    pub fn new(user_agent: String, network: Network, height: u32, peers: Arc<RwLock<PeerMap>>, db: Arc<Mutex<DB>>, max_protocol_version: u32) -> P2P {
+    pub fn new(user_agent: String, network: Network, height: u32, peers: Arc<RwLock<PeerMap>>, db: Arc<Mutex<ConfigDB>>, max_protocol_version: u32) -> P2P {
         let mut rng =  thread_rng();
         let magic = network.magic();
         P2P {

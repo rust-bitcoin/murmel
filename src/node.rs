@@ -29,7 +29,7 @@ use bitcoin::network::message_blockdata::*;
 use bitcoin::network::constants::Network;
 use bitcoin::util::hash::{BitcoinHash, Sha256dHash};
 use connector::LightningConnector;
-use relationaldb::DB;
+use configdb::ConfigDB;
 use error::SPVError;
 use lightning::chain::chaininterface::BroadcasterInterface;
 use p2p::{PeerId, PeerMap};
@@ -83,7 +83,7 @@ struct Inner {
     // type of the connected network
     network: Network,
     // the persistent blockchain storing previously downloaded header and blocks
-    db: Arc<Mutex<DB>>,
+    db: Arc<Mutex<ConfigDB>>,
     // connector serving Layer 2 network
     connector: Arc<LightningConnector>,
     // download queue
@@ -92,7 +92,7 @@ struct Inner {
 
 impl Node {
     /// Create a new local node
-    pub fn new(network: Network, db: Arc<Mutex<DB>>, _server: bool, peers: Arc<RwLock<PeerMap>>) -> Node {
+    pub fn new(network: Network, db: Arc<Mutex<ConfigDB>>, _server: bool, peers: Arc<RwLock<PeerMap>>) -> Node {
         let connector = LightningConnector::new(network,Arc::new(Broadcaster { peers: peers.clone() }));
         Node {
             inner: Arc::new(Inner {

@@ -20,7 +20,7 @@
 //!
 
 use bitcoin::network::constants::Network;
-use relationaldb::DB;
+use configdb::ConfigDB;
 use error::SPVError;
 use node::Node;
 use p2p::P2P;
@@ -37,47 +37,46 @@ use std::collections::HashSet;
 
 const MAX_PROTOCOL_VERSION :u32 = 70001;
 
-
-/// The complete SPV stack
-pub struct SPV{
+/// The complete stack
+pub struct Constructor {
 	node: Arc<Node>,
 	p2p: Arc<P2P>,
     thread_pool: ThreadPool,
-    db: Arc<Mutex<DB>>
+    db: Arc<Mutex<ConfigDB>>
 }
 
-impl SPV {
-    /// Initialize the SPV stack and return a ChainWatchInterface
+impl Constructor {
+    /// Initialize the stack and return a ChainWatchInterface
     /// Set
     ///      network - main or testnet
     ///      bootstrap - peer addresses (only tested to work with one local node for now)
-    ///      db - file path to store the headers and blocks database
+    ///      db - file path to data
     /// The method will read previously stored headers from the database and sync up with the peers
     /// then serve the returned ChainWatchInterface
-    pub fn new(user_agent :String, network: Network, db: &Path) -> Result<SPV, SPVError> {
+    pub fn new(user_agent :String, network: Network, db: &Path, server: bool) -> Result<Constructor, SPVError> {
         let thread_pool = ThreadPool::new()?;
-        let db = Arc::new(Mutex::new(DB::new(db, network)?));
+        let db = Arc::new(Mutex::new(ConfigDB::new(db, network)?));
         let _birth = create_tables(db.clone())?;
         let peers = Arc::new(RwLock::new(PeerMap::new()));
         let p2p = Arc::new(P2P::new(user_agent, network, 0, peers.clone(), db.clone(), MAX_PROTOCOL_VERSION));
         let node = Arc::new(Node::new(network, db.clone(), true, peers.clone()));
-        Ok(SPV{ node, p2p, thread_pool, db: db.clone() })
+        Ok(Constructor { node, p2p, thread_pool, db: db.clone() })
     }
 
-    /// Initialize the SPV stack and return a ChainWatchInterface
+    /// Initialize the stack and return a ChainWatchInterface
     /// Set
     ///      network - main or testnet
     ///      bootstrap - peer adresses (only tested to work with one local node for now)
     /// The method will start with an empty in-memory database and sync up with the peers
     /// then serve the returned ChainWatchInterface
-    pub fn new_in_memory(user_agent :String, network: Network) -> Result<SPV, SPVError> {
+    pub fn new_in_memory(user_agent :String, network: Network, server: bool) -> Result<Constructor, SPVError> {
         let thread_pool = ThreadPool::new()?;
-        let db = Arc::new(Mutex::new(DB::mem(network)?));
+        let db = Arc::new(Mutex::new(ConfigDB::mem(network)?));
         let _birth = create_tables(db.clone())?;
         let peers = Arc::new(RwLock::new(PeerMap::new()));
         let p2p = Arc::new(P2P::new(user_agent, network, 0, peers.clone(), db.clone(), MAX_PROTOCOL_VERSION));
         let node = Arc::new(Node::new(network, db.clone(), true, peers.clone()));
-        Ok(SPV{ node, p2p, thread_pool, db: db.clone()})
+        Ok(Constructor { node, p2p, thread_pool, db: db.clone()})
     }
 
     /// add a listener of incoming connection requests
@@ -124,7 +123,7 @@ impl SPV {
         struct KeepConnected {
             min_connections: usize,
             connections: Vec<Box<Future<Item=SocketAddr, Error=SPVError> + Send>>,
-            db: Arc<Mutex<DB>>,
+            db: Arc<Mutex<ConfigDB>>,
             p2p: Arc<P2P>,
             dns: Vec<SocketAddr>,
             earlier: HashSet<SocketAddr>,
@@ -219,7 +218,7 @@ impl SPV {
 
 
 /// create tables (if not already there) in the database
-fn create_tables(db: Arc<Mutex<DB>>) -> Result<u32, SPVError> {
+fn create_tables(db: Arc<Mutex<ConfigDB>>) -> Result<u32, SPVError> {
     let mut db = db.lock().unwrap();
     let mut tx = db.transaction()?;
     let birth = tx.create_tables()?;

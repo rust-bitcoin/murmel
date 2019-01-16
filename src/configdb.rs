@@ -14,7 +14,7 @@
 // limitations under the License.
 //
 //!
-//! # Relational Database layer for the Bitcoin SPV client
+//! # Configuration Database layer for the Bitcoin SPV client
 //!
 //! Stores the wallet and various runtime and configuration data.
 //!
@@ -37,40 +37,27 @@ use std::{
 use rand;
 use rand::RngCore;
 
-/// Database interface to connect
-/// start, commit or rollback transactions
-/// # Example
-/// let mut db = DB::mem();
-/// let tx = db.transaction();
-/// //... database operations through tx
-/// tx.commit();
-pub struct DB {
+pub struct ConfigDB {
     conn: Connection,
     network: Network
 }
 
-/// All database operations are accessible through this transaction wrapper, that also
-/// supports Transaction commit and Rollback
-/// /// let mut db = DB::mem();
-/// let tx = db.transaction();
-/// //... database operations through tx
-/// tx.commit();
-pub struct DBTX<'a> {
+pub struct ConfigTX<'a> {
     tx: rusqlite::Transaction<'a>,
     dirty: Cell<bool>
 }
 
-impl DB {
+impl ConfigDB {
     /// Create an in-memory database instance
-    pub fn mem(network: Network) -> Result<DB, SPVError> {
+    pub fn mem(network: Network) -> Result<ConfigDB, SPVError> {
         info!("working with memory database");
-        Ok(DB { conn: Connection::open_in_memory()?, network})
+        Ok(ConfigDB { conn: Connection::open_in_memory()?, network})
     }
 
     /// Create or open a persistent database instance identified by the path
-    pub fn new(path: &Path, network: Network) -> Result<DB, SPVError> {
+    pub fn new(path: &Path, network: Network) -> Result<ConfigDB, SPVError> {
         let basename = path.to_str().unwrap().to_string();
-        let db = DB {
+        let db = ConfigDB {
             conn: Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE |
                 OpenFlags::SQLITE_OPEN_CREATE | OpenFlags::SQLITE_OPEN_FULL_MUTEX)?, network };
         info!("database {:?} opened", path);
@@ -78,13 +65,13 @@ impl DB {
     }
 
     /// Start a transaction. All operations must happen within the context of a transaction
-    pub fn transaction<'a>(&'a mut self) -> Result<DBTX<'a>, SPVError> {
+    pub fn transaction<'a>(&'a mut self) -> Result<ConfigTX<'a>, SPVError> {
         trace!("starting transaction");
-        Ok(DBTX { tx: self.conn.transaction()?, dirty: Cell::new(false) })
+        Ok(ConfigTX { tx: self.conn.transaction()?, dirty: Cell::new(false) })
     }
 }
 
-impl<'a> DBTX<'a> {
+impl<'a> ConfigTX<'a> {
     /// commit the transaction
     pub fn commit(self) -> Result<(), SPVError> {
         if self.dirty.get() {

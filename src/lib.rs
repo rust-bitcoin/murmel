@@ -48,12 +48,12 @@ mod utxostore;
 mod lightchaindb;
 mod heavychaindb;
 mod chaindb;
-mod relationaldb;
+mod configdb;
 mod node;
 mod error;
 #[allow(dead_code)]
 mod connector;
-pub mod spv;
+pub mod constructor;
 #[allow(dead_code)]
 mod blockfilter;
 mod p2p;

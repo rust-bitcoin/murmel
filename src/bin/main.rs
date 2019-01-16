@@ -22,7 +22,7 @@ extern crate simple_logger;
 use std::env::args;
 
 use bitcoin::network::constants::Network;
-use bitcoin_spv::spv::SPV;
+use bitcoin_spv::constructor::Constructor;
 use log::Level;
 use std::net::SocketAddr;
 use std::path::Path;
@@ -38,6 +38,7 @@ pub fn main() {
         println!("--network net: net is one of main|test for corresponding Bitcoin networks");
         println!("--listen ip_address:port : accept incoming connection requests");
         println!("--nodns : do not use dns seed");
+        println!("--client : use a block filter server");
         println!("defaults:");
         println!("--log info");
         println!("--connections 1");
@@ -74,11 +75,12 @@ pub fn main() {
         connections = numstring.parse().unwrap();
     }
     let mut spv;
+    let server = true;
     if let Some(path) = find_arg("db") {
-        spv = SPV::new("/rust-spv:0.1.0/".to_string(), network, Path::new(path.as_str())).unwrap();
+        spv = Constructor::new("/https://github.com/rust-bitcoin/rust-bitcoin-spv/".to_string(), network, Path::new(path.as_str()), server).unwrap();
     }
     else {
-        spv = SPV::new_in_memory("/rust-spv:0.1.0/".to_string(), network).unwrap();
+        spv = Constructor::new_in_memory("/https://github.com/rust-bitcoin/rust-bitcoin-spv/".to_string(), network, server).unwrap();
     }
     for bind in get_listeners() {
         spv.listen(&bind).expect(format!("can not listen to {:?}", bind).as_str());
