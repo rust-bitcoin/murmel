@@ -86,6 +86,9 @@ impl ChainDB {
                 }
             }
         }
+        else {
+            panic!("configuration error: no heavy chain db");
+        }
         Ok(None)
     }
 
@@ -114,6 +117,9 @@ impl ChainDB {
                     self.light.add_filter(&block.bitcoin_hash(), &block.header.prev_blockhash, filter.content)?;
                 }
             }
+        }
+        else {
+            panic!("configuration error: no heavy chain db");
         }
         Ok(())
     }
