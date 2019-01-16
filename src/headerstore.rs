@@ -34,6 +34,7 @@ use bitcoin:: {
 
 use error::SPVError;
 use hammersbald:: {
+    HammersbaldAPI,
     PRef,
     BitcoinAdaptor
 };
@@ -101,6 +102,11 @@ impl<'a> HeaderStore<'a> {
 
     pub fn store_tip(&mut self, tip: &Sha256dHash) -> Result<(), SPVError> {
         self.hammersbald.put_keyed_encodable(HEADER_TIP_KEY, tip)?;
+        Ok(())
+    }
+
+    pub fn forget_tip(&mut self) -> Result<(), SPVError> {
+        self.hammersbald.forget(HEADER_TIP_KEY)?;
         Ok(())
     }
 

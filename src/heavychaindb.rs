@@ -80,6 +80,13 @@ impl HeavyChainDB {
         self.utxos().get_utxo_accessor(block)
     }
 
+    pub fn unwind_tip (&mut self) -> Result<Option<Sha256dHash>, SPVError> {
+        if let Some(tip) = self.blocks().fetch_tip()? {
+            self.unwind_utxo(&tip)?;
+        }
+        Ok(None)
+    }
+
     // Batch writes to hammersbald
     pub fn batch (&mut self) -> Result<(), SPVError> {
         Ok(self.blocks_and_utxos.batch()?)

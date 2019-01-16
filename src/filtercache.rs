@@ -24,7 +24,7 @@ use bitcoin::{
         hash::Sha256dHash
     },
 };
-use error::SPVError;
+
 use filterstore::StoredFilter;
 use std::{
     collections::HashMap,
@@ -50,6 +50,12 @@ impl FilterCache {
         let filter = Arc::new(filter);
         self.by_block.insert (filter.block_id, filter.clone());
         self.filters.insert(filter.bitcoin_hash(), filter);
+    }
+
+    pub fn remove(&mut self, block_id: &Sha256dHash) {
+        if let Some(filter) = self.by_block.remove(block_id) {
+            self.filters.remove(&filter.bitcoin_hash());
+        }
     }
 
     /// Fetch a header by its id from cache

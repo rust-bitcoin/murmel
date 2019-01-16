@@ -249,6 +249,15 @@ impl HeaderCache {
         None
     }
 
+    pub fn unwind_tip (&mut self) -> Option<Sha256dHash> {
+        if self.trunk.len () > 0 {
+            let tip = *self.trunk.remove(self.trunk.len() - 1);
+            self.headers.remove(&tip);
+            return Some(tip);
+        }
+        None
+    }
+
     /// This function emulates the `GetCompact(SetCompact(n))` in the Satoshi code,
     /// which drops the precision to something that can be encoded precisely in
     /// the nBits block header field. Savour the perversity. This is in Bitcoin

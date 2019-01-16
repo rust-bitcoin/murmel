@@ -152,7 +152,7 @@ impl LightChainDB {
     }
 
     pub fn add_filter_chain (&mut self, prev_block_id : &Sha256dHash, prev_filter_id: &Sha256dHash, filter_hashes: impl Iterator<Item=Sha256dHash>) ->
-    Option<(Sha256dHash, Sha256dHash)> {
+        Result<Option<(Sha256dHash, Sha256dHash)>, SPVError> {
         if let Some(prev_filter) = self.filtercache.get_block_filter(prev_filter_id) {
             if prev_filter.block_id == *prev_block_id {
                 let mut previous = *prev_filter_id;
@@ -165,11 +165,67 @@ impl LightChainDB {
                     previous = filter_id;
                     p_block = block_id;
                     let filter = StoredFilter{ block_id, previous, filter_hash, filter: None};
+                    self.filters().store(&filter)?;
                     self.filtercache.add_filter(filter);
                 }
-                return Some((p_block, previous))
+                return Ok(Some((p_block, previous)))
             }
         }
-        None
+        Ok(None)
+    }
+
+    // update if matching stored filter_header chain
+    pub fn update_filter (&mut self, block_id: &Sha256dHash, filter: Vec<u8>) -> Result<bool, SPVError> {
+        if let Some(filter_header) = self.filtercache.get_block_filter(block_id) {
+            let filter_hash = Sha256dHash::from_data(filter.as_slice());
+            let mut buf = [0u8;64];
+            buf[0..32].copy_from_slice(&filter_hash.to_bytes()[..]);
+            buf[32..].copy_from_slice(&filter_header.previous.to_bytes()[..]);
+            let filter_id = Sha256dHash::from_data(&buf);
+            if filter_id == filter_header.bitcoin_hash() {
+                let stored = StoredFilter{block_id: *block_id, previous: filter_header.previous,
+                    filter_hash, filter: Some(filter)};
+                self.filters().store(&stored)?;
+                self.filtercache.add_filter(stored);
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    // extend filters, only previous filter header must exist
+    pub fn add_filter (&mut self, block_id: &Sha256dHash, prev_block_id: &Sha256dHash, filter: Vec<u8>) -> Result<bool, SPVError> {
+        if let Some(filter_header) = self.filtercache.get_block_filter(prev_block_id) {
+            let filter_hash = Sha256dHash::from_data(filter.as_slice());
+            let mut buf = [0u8; 64];
+            buf[0..32].copy_from_slice(&filter_hash.to_bytes()[..]);
+            buf[32..].copy_from_slice(&filter_header.previous.to_bytes()[..]);
+            let filter_id = Sha256dHash::from_data(&buf);
+            if filter_id == filter_header.bitcoin_hash() {
+                let stored = StoredFilter {
+                    block_id: *block_id,
+                    previous: filter_header.bitcoin_hash(),
+                    filter_hash,
+                    filter: Some(filter)
+                };
+                self.filters().store(&stored)?;
+                self.filtercache.add_filter(stored);
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    // unwind tip, return new tip
+    pub fn unwind_tip(&mut self) -> Result<Option<Sha256dHash>, SPVError> {
+        if let Some(prev) = self.headercache.unwind_tip () {
+            self.filtercache.remove(&prev);
+            self.headers().store_tip(&prev)?;
+            return Ok(Some(prev));
+        }
+        else {
+            self.headers().forget_tip()?;
+            return Ok(None);
+        }
     }
 }

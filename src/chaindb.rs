@@ -26,6 +26,7 @@ use bitcoin::{
     BitcoinHash,
     network::constants::Network,
     blockdata::block::Block,
+    util::hash::Sha256dHash
 };
 
 use hammersbald::PRef;
@@ -91,12 +92,17 @@ impl ChainDB {
         BlockFilter::compute_wallet_filter(block, utxos)
     }
 
-    pub fn extend_filters (&mut self, block: &Block) -> Result<(), SPVError> {
+    pub fn extend_blocks_utxo_filters (&mut self, block: &Block) -> Result<(), SPVError> {
         if let Some(block_ref) = self.extend_blocks(block)? {
             self.extend_utxo(block_ref)?;
             let filter = self.compute_filter(block)?;
+            self.light.add_filter(&block.bitcoin_hash(), &block.header.prev_blockhash, filter.content)?;
         }
         Ok(())
     }
 
+    pub fn unwind_tip (&mut self) -> Result<Option<Sha256dHash>, SPVError> {
+        self.light.unwind_tip()?;
+        self.heavy.unwind_tip()
+    }
 }
