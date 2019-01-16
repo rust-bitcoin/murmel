@@ -24,6 +24,7 @@ use configdb::ConfigDB;
 use error::SPVError;
 use node::Node;
 use p2p::P2P;
+use chaindb::ChainDB;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
@@ -42,7 +43,7 @@ pub struct Constructor {
 	node: Arc<Node>,
 	p2p: Arc<P2P>,
     thread_pool: ThreadPool,
-    db: Arc<Mutex<ConfigDB>>
+    configdb: Arc<Mutex<ConfigDB>>
 }
 
 impl Constructor {
@@ -53,14 +54,15 @@ impl Constructor {
     ///      db - file path to data
     /// The method will read previously stored headers from the database and sync up with the peers
     /// then serve the returned ChainWatchInterface
-    pub fn new(user_agent :String, network: Network, db: &Path, server: bool) -> Result<Constructor, SPVError> {
+    pub fn new(user_agent :String, network: Network, path: &Path, server: bool) -> Result<Constructor, SPVError> {
         let thread_pool = ThreadPool::new()?;
-        let db = Arc::new(Mutex::new(ConfigDB::new(db, network)?));
-        let _birth = create_tables(db.clone())?;
+        let configdb = Arc::new(Mutex::new(ConfigDB::new(path, network)?));
+        let chaindb = ChainDB::new(path, network,server)?;
+        let _birth = create_tables(configdb.clone())?;
         let peers = Arc::new(RwLock::new(PeerMap::new()));
         let p2p = Arc::new(P2P::new(user_agent, network, 0, peers.clone(),  MAX_PROTOCOL_VERSION));
-        let node = Arc::new(Node::new(network, db.clone(), true, peers.clone()));
-        Ok(Constructor { node, p2p, thread_pool, db: db.clone() })
+        let node = Arc::new(Node::new(network, configdb.clone(), chaindb, peers.clone()));
+        Ok(Constructor { node, p2p, thread_pool, configdb: configdb.clone() })
     }
 
     /// Initialize the stack and return a ChainWatchInterface
@@ -72,11 +74,12 @@ impl Constructor {
     pub fn new_in_memory(user_agent :String, network: Network, server: bool) -> Result<Constructor, SPVError> {
         let thread_pool = ThreadPool::new()?;
         let db = Arc::new(Mutex::new(ConfigDB::mem(network)?));
+        let chaindb = ChainDB::mem( network,server)?;
         let _birth = create_tables(db.clone())?;
         let peers = Arc::new(RwLock::new(PeerMap::new()));
         let p2p = Arc::new(P2P::new(user_agent, network, 0, peers.clone(), MAX_PROTOCOL_VERSION));
-        let node = Arc::new(Node::new(network, db.clone(), true, peers.clone()));
-        Ok(Constructor { node, p2p, thread_pool, db: db.clone()})
+        let node = Arc::new(Node::new(network, db.clone(), chaindb, peers.clone()));
+        Ok(Constructor { node, p2p, thread_pool, configdb: db.clone()})
     }
 
     /// add a listener of incoming connection requests
@@ -90,9 +93,7 @@ impl Constructor {
 	/// * min_connections - keep connections with at least this number of peers. Peers will be randomly chosen
 	/// from those discovered in earlier runs
     pub fn start (&mut self, peers: Vec<SocketAddr>, min_connections: usize, nodns: bool) {
-        // read stored headers from db
-        // there is no recovery if this fails
-        self.node.load_headers().unwrap();
+        self.node.init().unwrap();
 
         let p2p = self.p2p.clone();
         let node = self.node.clone();
@@ -112,7 +113,7 @@ impl Constructor {
     fn keep_connected(&self, peers: Vec<SocketAddr>, min_connections: usize, nodns: bool) -> Box<Future<Item=(), Error=Never> + Send> {
 
         let p2p = self.p2p.clone();
-        let db = self.db.clone();
+        let db = self.configdb.clone();
 
         // add initial peers if any
         let mut added = Vec::new();

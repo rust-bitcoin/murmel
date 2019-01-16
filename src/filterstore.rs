@@ -60,7 +60,7 @@ impl<S: Encoder> Encodable<S> for StoredFilter {
         self.block_id.consensus_encode(s)?;
         self.filter_hash.consensus_encode(s)?;
         self.previous.consensus_encode(s)?;
-        if let Some (filter) = self.filter {
+        if let Some (ref filter) = self.filter {
             filter.consensus_encode(s)?;
         }
         else {

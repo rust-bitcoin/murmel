@@ -45,7 +45,8 @@ use hammersbald::{
 
 
 use std::{
-    path::Path
+    path::Path,
+    collections::VecDeque
 };
 
 pub struct LightChainDB {
@@ -100,28 +101,51 @@ impl LightChainDB {
     }
 
     fn init_headers (&mut self) -> Result<(), SPVError> {
-        let mut headers = self.headers();
-        if let Some(current) = headers.fetch_tip()? {
-            self.headercache.init_cache(&headers)?;
+        let mut sl = VecDeque::new();
+        {
+            let headers = self.headers();
+            if let Some(tip) = headers.fetch_tip()? {
+                info!("reading stored header chain ...");
+                let mut h = tip;
+                while let Some(stored) = headers.fetch(&h)? {
+                    sl.push_front(stored.clone());
+                    if stored.header.prev_blockhash != Sha256dHash::default() {
+                        h = stored.header.prev_blockhash;
+                    } else {
+                        break;
+                    }
+                }
+                info!("read {} headers", sl.len());
+            }
+        }
+
+        if sl.is_empty() {
+            info!("Initialized with genesis header.");
+            let genesis = genesis_block(self.network).header;
+            if let Some((stored, tip, _)) = self.headercache.add_header (&genesis)? {
+                self.headers().store(&stored)?;
+                if let Some(tip) = tip {
+                    self.headers().store_tip(&tip)?;
+                }
+            }
         }
         else {
-            let genesis = genesis_block(self.network).header;
-            if let Some((stored, _)) = self.headercache.add_header (&genesis)? {
-                headers.store(&stored)?;
-                headers.store_tip(&stored.header.bitcoin_hash())?;
+            self.headercache.clear();
+            while let Some(stored) = sl.pop_front() {
+                self.headercache.add_header_unchecked(&stored);
             }
         }
         Ok(())
     }
 
-    pub fn add_header(&mut self, header: &BlockHeader) -> Result<Option<StoredHeader>, SPVError> {
-        if let Some((stored, new_tip)) = self.headercache.add_header(header)? {
+    pub fn add_header(&mut self, header: &BlockHeader) -> Result<Option<(StoredHeader, Option<Sha256dHash>, Option<Vec<Sha256dHash>>)>, SPVError> {
+        if let Some((stored, new_tip, unwinds)) = self.headercache.add_header(header)? {
             let mut headers = self.headers();
             headers.store(&stored)?;
-            if new_tip {
-                headers.store_tip(&stored.bitcoin_hash())?;
+            if let Some(new_tip) = new_tip {
+                headers.store_tip(&new_tip)?;
             }
-            return Ok(Some(stored))
+            return Ok(Some((stored, new_tip, unwinds)))
         }
         Ok(None)
     }
@@ -157,6 +181,7 @@ impl LightChainDB {
             if prev_filter.block_id == *prev_block_id {
                 let mut previous = *prev_filter_id;
                 let mut p_block = *prev_block_id;
+                let mut filters = Vec::new();
                 for (block_id, filter_hash) in self.headercache.iter_to_tip(prev_block_id).zip(filter_hashes) {
                     let mut buf = [0u8;64];
                     buf[0..32].copy_from_slice(&filter_hash.to_bytes()[..]);
@@ -165,6 +190,9 @@ impl LightChainDB {
                     previous = filter_id;
                     p_block = block_id;
                     let filter = StoredFilter{ block_id, previous, filter_hash, filter: None};
+                    filters.push(filter);
+                }
+                for filter in filters {
                     self.filters().store(&filter)?;
                     self.filtercache.add_filter(filter);
                 }

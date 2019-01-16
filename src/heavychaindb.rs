@@ -76,10 +76,6 @@ impl HeavyChainDB {
         utxos.unwind(block_id)
     }
 
-    pub fn get_utxo_accessor<'a>(&'a mut self, block: &Block) -> Result<DBUTXOAccessor<'a>, SPVError> {
-        self.utxos().get_utxo_accessor(block)
-    }
-
     pub fn unwind_tip (&mut self) -> Result<Option<Sha256dHash>, SPVError> {
         if let Some(tip) = self.blocks().fetch_tip()? {
             self.unwind_utxo(&tip)?;

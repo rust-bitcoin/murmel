@@ -21,19 +21,25 @@ use lightchaindb::LightChainDB;
 use heavychaindb::HeavyChainDB;
 use error::SPVError;
 use blockfilter::BlockFilter;
+use headerstore::StoredHeader;
+use utxostore::DBUTXOAccessor;
 
 use bitcoin::{
     BitcoinHash,
     network::constants::Network,
-    blockdata::block::Block,
-    util::hash::Sha256dHash
+    blockdata::{
+        block::{BlockHeader, Block},
+        constants::genesis_block
+    },
+    util::hash::Sha256dHash,
 };
 
 use hammersbald::PRef;
 
 pub struct ChainDB {
     light: LightChainDB,
-    heavy: Option<HeavyChainDB>
+    heavy: Option<HeavyChainDB>,
+    network: Network
 }
 
 use std::{
@@ -46,10 +52,10 @@ impl ChainDB {
     pub fn mem(network: Network, heavy: bool) -> Result<ChainDB, SPVError> {
         let light = LightChainDB::mem(network)?;
         if heavy {
-            Ok(ChainDB { light, heavy: Some(HeavyChainDB::mem()?) })
+            Ok(ChainDB { light, heavy: Some(HeavyChainDB::mem()?), network })
         }
         else {
-            Ok(ChainDB { light, heavy: None})
+            Ok(ChainDB { light, heavy: None, network})
         }
     }
 
@@ -57,20 +63,58 @@ impl ChainDB {
     pub fn new(path: &Path, network: Network, heavy: bool) -> Result<ChainDB, SPVError> {
         let light = LightChainDB::new(path, network)?;
         if heavy {
-            Ok(ChainDB { light, heavy: Some(HeavyChainDB::new(path)?) })
+            Ok(ChainDB { light, heavy: Some(HeavyChainDB::new(path)?), network })
         }
         else {
-            Ok(ChainDB { light, heavy: None})
+            Ok(ChainDB { light, heavy: None, network})
         }
     }
 
     pub fn init (&mut self) -> Result<(), SPVError> {
-        self.light.init()
+        self.light.init()?;
+        if self.heavy.is_some() {
+            let genesis = genesis_block(self.network);
+            if let Some(tip) = self.light.header_tip() {
+                if genesis.header.bitcoin_hash() == tip.bitcoin_hash() {
+                    info!("Initialized with genesis block.");
+                    self.extend_blocks_utxo_filters(&genesis)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn batch(&mut self) -> Result<(), SPVError> {
+        self.light.batch()?;
+        if let Some(ref mut heavy) = self.heavy {
+            heavy.batch()?;
+        }
+        Ok(())
+    }
+
+    pub fn is_light (&self) -> bool {
+        self.heavy.is_none()
+    }
+
+    pub fn tip (&self) -> Option<StoredHeader> {
+        self.light.header_tip()
+    }
+
+    pub fn header_locators (&self) -> Vec<Sha256dHash> {
+        self.light.header_locators()
+    }
+
+    pub fn add_header(&mut self, header: &BlockHeader) -> Result<Option<(StoredHeader, Option<Sha256dHash>, Option<Vec<Sha256dHash>>)>, SPVError> {
+        self.light.add_header(header)
+    }
+
+    pub fn get_header(&self, id: &Sha256dHash) -> Option<StoredHeader> {
+        self.light.get_header(id)
     }
 
     // store block if extending trunk
     pub fn extend_blocks (&mut self, block: &Block) -> Result<Option<PRef>, SPVError> {
-        if let Some(heavy) = self.heavy {
+        if let Some(ref mut heavy) = self.heavy {
             let ref block_id = block.bitcoin_hash();
             if self.light.is_on_trunk(block_id) {
                 return Ok(None);
@@ -94,23 +138,24 @@ impl ChainDB {
 
     // extend UTXO store
     fn extend_utxo (&mut self, block_ref: PRef) -> Result<(), SPVError> {
-        if let Some(mut heavy) = self.heavy {
+        if let Some(ref mut heavy) = self.heavy {
             let mut utxos = heavy.utxos();
-            utxos.apply_block(block_ref);
+            utxos.apply_block(block_ref)?;
         }
         Ok(())
     }
 
     fn compute_filter(&mut self, block: &Block) -> Result<Option<BlockFilter>, SPVError> {
-        if let Some(mut heavy) = self.heavy {
-            let mut utxos = heavy.utxos().get_utxo_accessor(block)?;
-            return Ok(Some(BlockFilter::compute_wallet_filter(block, utxos)?));
+        if let Some(ref mut heavy) = self.heavy {
+            let utxos = heavy.utxos();
+            let accessor = DBUTXOAccessor::new(&utxos, block)?;
+            return Ok(Some(BlockFilter::compute_wallet_filter(block, accessor)?));
         }
         Ok(None)
     }
 
     pub fn extend_blocks_utxo_filters (&mut self, block: &Block) -> Result<(), SPVError> {
-        if let Some(heavy) = self.heavy {
+        if self.heavy.is_some() {
             if let Some(block_ref) = self.extend_blocks(block)? {
                 self.extend_utxo(block_ref)?;
                 if let Some(filter) = self.compute_filter(block)? {
@@ -125,7 +170,7 @@ impl ChainDB {
     }
 
     pub fn unwind_tip (&mut self) -> Result<Option<Sha256dHash>, SPVError> {
-        if let Some(mut heavy) = self.heavy {
+        if let Some(ref mut heavy) = self.heavy {
             heavy.unwind_tip()?;
         }
         self.light.unwind_tip()

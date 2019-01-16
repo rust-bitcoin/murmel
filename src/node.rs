@@ -21,23 +21,36 @@
 //!
 
 
-use bitcoin::blockdata::block::{Block, LoneBlockHeader};
-use bitcoin::blockdata::transaction::Transaction;
-use bitcoin::network::address::Address;
-use bitcoin::network::message::NetworkMessage;
-use bitcoin::network::message_blockdata::*;
-use bitcoin::network::constants::Network;
-use bitcoin::util::hash::{BitcoinHash, Sha256dHash};
 use connector::LightningConnector;
 use configdb::ConfigDB;
+use chaindb::ChainDB;
 use error::SPVError;
-use lightning::chain::chaininterface::BroadcasterInterface;
 use p2p::{PeerId, PeerMap};
-use std::sync::{Mutex, RwLock};
-use std::sync::Arc;
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
-use std::collections::VecDeque;
+
+use lightning::chain::chaininterface::BroadcasterInterface;
+
+use bitcoin::{
+    BitcoinHash,
+    blockdata::{
+        block::{Block, LoneBlockHeader},
+        transaction::Transaction,
+    },
+    util::hash::Sha256dHash,
+    network::{
+        address::Address,
+        constants::Network,
+        message::{
+            NetworkMessage
+        },
+        message_blockdata::*
+    }
+};
+
+use std::{
+    sync::{Mutex, RwLock, Arc},
+    time::{SystemTime, UNIX_EPOCH},
+    collections::VecDeque
+};
 
 /// The node replies with this process result to messages
 #[derive(Clone, Eq, PartialEq)]
@@ -71,19 +84,15 @@ impl BroadcasterInterface for Broadcaster {
 }
 
 /// The local node processing incoming messages
-#[derive(Clone)]
 pub struct Node {
-    // all data in inner to simplify passing them into closures
-    inner: Arc<Inner>
-}
-
-struct Inner {
     // peer map shared with P2P and the LightningConnector's broadcaster
     peers: Arc<RwLock<PeerMap>>,
     // type of the connected network
     network: Network,
-    // the persistent blockchain storing previously downloaded header and blocks
+    // the configuration db
     db: Arc<Mutex<ConfigDB>>,
+    // the blockchain db
+    chaindb: RwLock<ChainDB>,
     // connector serving Layer 2 network
     connector: Arc<LightningConnector>,
     // download queue
@@ -92,26 +101,20 @@ struct Inner {
 
 impl Node {
     /// Create a new local node
-    pub fn new(network: Network, db: Arc<Mutex<ConfigDB>>, _server: bool, peers: Arc<RwLock<PeerMap>>) -> Node {
+    pub fn new(network: Network, db: Arc<Mutex<ConfigDB>>, chaindb: ChainDB, peers: Arc<RwLock<PeerMap>>) -> Node {
         let connector = LightningConnector::new(network,Arc::new(Broadcaster { peers: peers.clone() }));
         Node {
-            inner: Arc::new(Inner {
                 peers,
                 network,
                 db,
+                chaindb: RwLock::new(chaindb),
                 connector: Arc::new(connector),
-                download_queue: Mutex::new(VecDeque::new())
-            })
-        }
+                download_queue: Mutex::new(VecDeque::new()) }
     }
 
-    /// Load headers from database
-    pub fn load_headers(&self) -> Result<(), SPVError> {
-        info!("loading headers from database...");
-        let mut db = self.inner.db.lock().unwrap();
-        let mut tx = db.transaction()?;
-        tx.init_node(self.inner.network)?;
-        tx.commit()?;
+    /// initialize node
+    pub fn init(&self) -> Result<(), SPVError> {
+        self.chaindb.write().unwrap().init()?;
         Ok(())
     }
 
@@ -123,7 +126,7 @@ impl Node {
     }
 
     fn download_blocks(&self, pid: PeerId, blocks: Vec<Sha256dHash>) -> Result<bool, SPVError> {
-        let mut dq = self.inner.download_queue.lock().expect("download queue poisoned");
+        let mut dq = self.download_queue.lock().expect("download queue poisoned");
 
         if let Some(new_blocks) = blocks.iter ().position(|b| !dq.iter().any(|a| { a == b })) {
             dq.extend(blocks[new_blocks ..].iter());
@@ -168,36 +171,39 @@ impl Node {
 
             let mut download = Vec::new();
             // current height
-            let height;
+            let mut height = 0;
             // some received headers were not yet known
             let mut some_new = false;
-            let mut tip_moved = false;
+            let mut moved_tip = None;
             {
-                // new scope to limit lock
-                let mut db = self.inner.db.lock().unwrap();
-                let mut tx = db.transaction()?;
+                let mut chaindb = self.chaindb.write().unwrap();
+
+                if let Some(tip) = chaindb.tip() {
+                    height = tip.height;
+                } else {
+                    return Err(SPVError::NoTip);
+                }
 
                 for header in headers {
-                    if let Some(mut old_tip) = tx.get_tip()? {
-                        // add to in-memory blockchain - this also checks proof of work
-                        match tx.insert_header(&header.header) {
-                            Ok(stored) => {
-                                if let Some(new_tip) = tx.get_tip()? {
-                                    tip_moved = tip_moved || new_tip != old_tip;
-                                    let header_hash = header.header.bitcoin_hash();
-                                    some_new = some_new || stored;
-                                    if header_hash == new_tip && header.header.prev_blockhash != old_tip {
-                                        // this is a re-org. Compute headers to unwind
-                                        while !tx.is_on_trunk(&old_tip) {
-                                            if let Some(old_header) = tx.get_header(&old_tip) {
-                                                old_tip = old_header.header.prev_blockhash;
-                                                disconnected_headers.push(old_header.header);
-                                            }
-                                        }
+                    if let Some(mut old_tip) = chaindb.tip() {
+                        // add to blockchain - this also checks proof of work
+                        match chaindb.add_header(&header.header) {
+                            Ok(Some((stored, new_tip, unwinds))) => {
+                                // POW is ok, stored top chaindb
+                                some_new = true;
+
+                                if let Some(new_tip) = new_tip {
+                                    moved_tip = Some(new_tip);
+                                    height = stored.height;
+
+                                    if let Some(unwinds) = unwinds {
+                                        disconnected_headers.extend(unwinds.iter()
+                                            .map(|h| chaindb.get_header(h).unwrap().header));
                                     }
                                     download.push(new_tip);
                                 }
                             }
+                            Ok(None) => {},
                             Err(SPVError::SpvBadProofOfWork) => {
                                 info!("Incorrect POW, banning peer={}", peer);
                                 return Ok(ProcessResult::Ban(100));
@@ -209,44 +215,26 @@ impl Node {
                         }
                     }
                 }
-                if let Some(ref new_tip) = tx.get_tip()? {
-                    if let Some(header) = tx.get_header(new_tip) {
-                        height = header.height;
-                    }
-                    else {
-                        return Err(SPVError::NoTip);
-                    }
-                }
-                else {
-                    return Err(SPVError::NoTip);
-                }
-                if tip_moved {
-                    if let Some(new_tip) = tx.get_tip()? {
-                        info!("received {} headers new tip={} from peer={}", headers.len(), new_tip, peer);
-                    }
-                    tx.commit()?;
-                    self.download_blocks(peer, download)?;
-                } else {
-                    tx.commit()?;
-                    debug!("received {} known or orphan headers from peer={}", headers.len(), peer);
-                    return Ok(ProcessResult::Ban(5));
-                }
+                chaindb.batch()?;
             }
 
             // notify lightning connector of disconnected blocks
             for header in disconnected_headers {
                 // limit context
-                self.inner.connector.block_disconnected(&header);
+                self.connector.block_disconnected(&header);
             }
             if some_new {
                 // ask if peer knows even more
                 self.get_headers(peer)?;
             }
 
-            if tip_moved {
-                Ok(ProcessResult::Height(height))
+            if let Some(new_tip) = moved_tip {
+                info!("received {} headers new tip={} from peer={}", headers.len(), new_tip, peer);
+                self.download_blocks(peer, download)?;
+                return Ok(ProcessResult::Height(height));
             } else {
-                Ok(ProcessResult::Ack)
+                debug!("received {} known or orphan headers from peer={}", headers.len(), peer);
+                return Ok(ProcessResult::Ack);
             }
         } else {
             Ok(ProcessResult::Ignored)
@@ -256,12 +244,11 @@ impl Node {
     // process an incoming block
     fn block(&self, block: &Block, peer: PeerId) -> Result<ProcessResult, SPVError> {
         {
-            let mut db = self.inner.db.lock().unwrap();
-            let mut tx = db.transaction()?;
             debug!("store block {}", block.bitcoin_hash());
-            tx.store_block(block)?;
+            let mut chaindb = self.chaindb.write().unwrap();
+            chaindb.extend_blocks_utxo_filters(block)?;
             {
-                let mut dq = self.inner.download_queue.lock().unwrap();
+                let mut dq = self.download_queue.lock().unwrap();
                 if let Some(expected) = dq.pop_front() {
                     if expected != block.bitcoin_hash() {
                         dq.push_front(expected);
@@ -279,10 +266,9 @@ impl Node {
         for inventory in v {
             // only care for blocks
             if inventory.inv_type == InvType::Block {
-                let mut db = self.inner.db.lock().unwrap();
-                let tx = db.transaction()?;
+                let chaindb = self.chaindb.read().unwrap();
                 debug!("received inv for block {}", inventory.hash);
-                if tx.get_header(&inventory.hash).is_none() {
+                if chaindb.get_header(&inventory.hash).is_none() {
                     // ask for header(s) if observing a new block
                    ask_for_headers = true;
                 }
@@ -306,7 +292,7 @@ impl Node {
         let mut result = ProcessResult::Ignored;
         // store if interesting, that is ...
         let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as u32;
-        let mut db = self.inner.db.lock().unwrap();
+        let mut db = self.db.lock().unwrap();
         let mut tx = db.transaction()?;
         for a in v.iter() {
             // if not tor
@@ -324,7 +310,7 @@ impl Node {
     }
 
     fn next_block(&self) -> Option<Sha256dHash> {
-        let dq = self.inner.download_queue.lock().expect("download queue posined");
+        let dq = self.download_queue.lock().expect("download queue posined");
         if let Some(f) = dq.front() {
             return Some(f.clone());
         }
@@ -335,9 +321,8 @@ impl Node {
     fn get_headers(&self, peer: PeerId) -> Result<ProcessResult, SPVError> {
         if !self.download_blocks(peer, vec!())? {
             let next = self.next_block();
-            let mut db = self.inner.db.lock().unwrap();
-            let tx = db.transaction()?;
-            let locator = tx.locator_hashes();
+            let chaindb = self.chaindb.read().unwrap();
+            let locator = chaindb.header_locators();
             if locator.len() > 0 {
                 let first = if locator.len() > 0 {
                     *locator.first().unwrap()
@@ -352,7 +337,7 @@ impl Node {
 
     /// send to peer
     fn send(&self, peer: PeerId, msg: &NetworkMessage) -> Result<ProcessResult, SPVError> {
-        if let Some(sender) = self.inner.peers.read().unwrap().get(&peer) {
+        if let Some(sender) = self.peers.read().unwrap().get(&peer) {
             sender.lock().unwrap().send(msg)?;
         }
         Ok(ProcessResult::Ack)
@@ -361,7 +346,7 @@ impl Node {
     /// send the same message to all connected peers
     #[allow(dead_code)]
     fn broadcast(&self, msg: &NetworkMessage) -> Result<ProcessResult, SPVError> {
-        for (_, sender) in self.inner.peers.read().unwrap().iter() {
+        for (_, sender) in self.peers.read().unwrap().iter() {
             sender.lock().unwrap().send(msg)?;
         }
         Ok(ProcessResult::Ack)
@@ -375,6 +360,6 @@ impl Node {
     /// retrieve the interface a higher application layer e.g. lightning may use to send transactions to the network
     #[allow(dead_code)]
     pub fn get_broadcaster(&self) -> Arc<Broadcaster> {
-        self.inner.connector.get_broadcaster()
+        self.connector.get_broadcaster()
     }
 }

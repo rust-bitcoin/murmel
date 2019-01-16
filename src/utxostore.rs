@@ -113,10 +113,10 @@ impl<'a> UTXOStore<'a> {
             }
             for input in tx.input {
                 if new_utxos.remove(&input.previous_output).is_none() {
-                    let key = utxo_key(&input.previous_output).as_bytes();
-                    if let Some((pref, _)) = self.hammersbald.get_keyed(key)? {
+                    let key = utxo_key(&input.previous_output).as_bytes().clone();
+                    if let Some((pref, _)) = self.hammersbald.get_keyed(&key)? {
                         unwinds.push(pref);
-                        self.hammersbald.forget(key);
+                        self.hammersbald.forget(&key)?;
                     }
                     else {
                         return Err(SPVError::UnknownUTXO);
@@ -159,14 +159,10 @@ impl<'a> UTXOStore<'a> {
         if let Some ((_, utxo)) = self.hammersbald.get_keyed_decodable::<StoredUTXO>(utxo_key(coin).as_bytes())? {
             let tx_ref = utxo.tx_ref;
             let (_, tx) = self.hammersbald.get_decodable::<Transaction>(tx_ref)?;
-            let output = tx.output[utxo.vout as usize];
+            let output = tx.output[utxo.vout as usize].clone();
             return Ok(Some((output.script_pubkey, output.value)));
         }
         Ok(None)
-    }
-
-    pub fn get_utxo_accessor(&'a self, block: &Block) -> Result<DBUTXOAccessor<'a>, SPVError> {
-        DBUTXOAccessor::new(self, block)
     }
 }
 

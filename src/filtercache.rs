@@ -60,11 +60,11 @@ impl FilterCache {
 
     /// Fetch a header by its id from cache
     pub fn get_filter(&self, id: &Sha256dHash) -> Option<StoredFilter> {
-        self.filters.get(id).map(|b|{**b})
+        self.filters.get(id).map(|b|{(**b).clone()})
     }
 
     pub fn get_block_filter(&self, block_id: &Sha256dHash) -> Option<StoredFilter> {
-        self.by_block.get(block_id).map(|b|{**b})
+        self.by_block.get(block_id).map(|b|{(**b).clone()})
     }
 
     /// iterate from id to genesis

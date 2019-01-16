@@ -86,7 +86,7 @@ impl <'a> BlockFilterWriter<'a> {
     }
 
     /// Add consumed output scripts of a block to filter
-    fn add_consumed_scripts (&mut self, mut tx_accessor: impl UTXOAccessor) -> Result<(), SPVError> {
+    fn add_consumed_scripts (&mut self, tx_accessor: impl UTXOAccessor) -> Result<(), SPVError> {
         for transaction in &self.block.txdata {
             if !transaction.is_coin_base() {
                 for input in &transaction.input {

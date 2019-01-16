@@ -27,7 +27,7 @@ use bitcoin::{
     },
 };
 use error::SPVError;
-use headerstore::{HeaderStore, StoredHeader};
+use headerstore::StoredHeader;
 use std::{
     collections::HashMap,
     sync::Arc,
@@ -49,21 +49,42 @@ impl HeaderCache {
         HeaderCache { network, headers: HashMap::with_capacity(EXPECTED_CHAIN_LENGTH), trunk: Vec::with_capacity(EXPECTED_CHAIN_LENGTH) }
     }
 
+    // chain height / trunk length
+    pub fn height(&self) -> usize {
+        self.trunk.len()
+    }
+
+    pub fn clear(&mut self) {
+        self.headers.clear();
+        self.trunk.truncate(0);
+    }
+
+    pub fn add_header_unchecked (&mut self, stored: &StoredHeader) {
+        let id = Arc::new(stored.bitcoin_hash());
+        self.headers.insert (id.clone(), stored.clone());
+        self.trunk.push(id);
+    }
+
+
     /// add a Bitcoin header
-    pub fn add_header(&mut self, header: &BlockHeader) -> Result<Option<(StoredHeader, bool)>, SPVError> {
+    pub fn add_header(&mut self, header: &BlockHeader) -> Result<Option<(StoredHeader, Option<Sha256dHash>, Option<Vec<Sha256dHash>>)>, SPVError> {
         if self.headers.get(&header.bitcoin_hash()).is_some() {
+            // ignore already known header
             return Ok(None);
         }
         if header.prev_blockhash != Sha256dHash::default() {
+            // regular update
             let previous;
             if let Some(prev) = self.headers.get(&header.prev_blockhash) {
                 previous = prev.clone();
             } else {
+                // reject unconnected
                 return Err(SPVError::UnconnectedHeader);
             }
-            let (stored, new_tip) = self.add_header_to_tree(&previous, header)?;
-            return Ok(Some((stored, new_tip)));
+            // add  to tree
+            return Ok(Some(self.add_header_to_tree(&previous, header)?));
         } else {
+            // insert genesis
             let new_tip = Arc::new(header.bitcoin_hash());
             let stored = StoredHeader {
                 header: header.clone(),
@@ -72,7 +93,7 @@ impl HeaderCache {
             };
             self.trunk.push(new_tip.clone());
             self.headers.insert(new_tip.clone(), stored.clone());
-            return Ok(Some((stored, true)));
+            return Ok(Some((stored, Some(*new_tip), None)));
         }
     }
 
@@ -96,12 +117,13 @@ impl HeaderCache {
         Uint256::from_u64(0xFFFF).unwrap() << 208
     }
 
-    /// POW comments and code based on a work by Andrew Poelstra
-    fn add_header_to_tree(&mut self, prev: &StoredHeader, next: &BlockHeader) -> Result<(StoredHeader, bool), SPVError> {
+    // add header to tree, return stored, new tip with optional list of unwinds
+    fn add_header_to_tree(&mut self, prev: &StoredHeader, next: &BlockHeader) -> Result<(StoredHeader, Option<Sha256dHash>, Option<Vec<Sha256dHash>>), SPVError> {
         const DIFFCHANGE_INTERVAL: u32 = 2016;
         const DIFFCHANGE_TIMESPAN: u32 = 14 * 24 * 3600;
         const TARGET_BLOCK_SPACING: u32 = 600;
 
+        // required work calculation based on an old rust-bitcoin by Andrew Poelstra
         let required_work =
         // Compute required difficulty if this is a diffchange block
             if (prev.height + 1) % DIFFCHANGE_INTERVAL == 0 {
@@ -165,7 +187,7 @@ impl HeaderCache {
         if next.spv_validate(&required_work).is_err() {
             return Err(SPVError::SpvBadProofOfWork);
         }
-
+        // POW is sufficient
         let stored = StoredHeader {
             header: next.clone(),
             height: prev.height + 1,
@@ -173,46 +195,43 @@ impl HeaderCache {
         };
         let next_hash = Arc::new(next.bitcoin_hash());
 
+        // store header in cache
         self.headers.insert(next_hash.clone(), stored.clone());
 
         if let Some(tip) = self.tip() {
             if tip.log2work < stored.log2work {
-                let mut ph = *next_hash.clone();
-                while !self.is_on_trunk(&ph) {
-                    if let Some(h) = self.headers.get(&ph) {
-                        ph = h.header.prev_blockhash;
-                    } else {
-                        return Err(SPVError::UnconnectedHeader);
-                    }
-                }
-                if let Some(pos) = self.trunk.iter().rposition(|h| { **h == ph }) {
+                // higher POW then previous tip
+
+                // compute list of headers no longer on trunk
+                let mut unwinds = Vec::new();
+                if let Some(pos) = self.trunk.iter().rposition(|h| { **h == next.prev_blockhash }) {
                     if pos < self.trunk.len() - 1 {
+                        // store and cut headers that are no longer on trunk
+                        unwinds.extend(self.trunk[pos + 1 ..].iter().rev().map(|h| **h));
                         self.trunk.truncate(pos + 1);
                     }
                 } else {
                     return Err(SPVError::UnconnectedHeader);
                 }
 
-                let mut new_trunk = vec!(next_hash);
-                if let Some(last) = self.trunk.last() {
-                    let mut h = &stored;
-                    while **last != h.header.prev_blockhash {
-                        let hh = Arc::new(h.header.bitcoin_hash());
-                        new_trunk.push(hh.clone());
-                        if let Some(p) = self.headers.get(&hh) {
-                            h = p;
-                        } else {
-                            return Err(SPVError::UnconnectedHeader);
-                        }
+                // compute path to new tip
+                let mut ph = next.prev_blockhash;
+                let mut path_to_new_tip = Vec::new();
+                while !self.is_on_trunk(&ph) {
+                    if let Some(h) = self.headers.get(&ph) {
+                        ph = h.header.prev_blockhash;
+                        path_to_new_tip.push(ph);
+                    } else {
+                        return Err(SPVError::UnconnectedHeader);
                     }
                 }
-                for h in new_trunk.iter().rev() {
-                    self.trunk.push(h.clone());
-                }
-                return Ok((stored, true));
+                self.trunk.extend(path_to_new_tip.iter().rev().map(|h| {Arc::new(*h)}));
+
+                self.trunk.push(next_hash.clone());
+                return Ok((stored, Some(*next_hash), Some(unwinds)));
             } else {
                 self.trunk.push(next_hash);
-                return Ok((stored, false));
+                return Ok((stored, None, None));
             }
         } else {
             return Err(SPVError::NoTip);
@@ -251,13 +270,15 @@ impl HeaderCache {
 
     pub fn unwind_tip (&mut self) -> Option<Sha256dHash> {
         if self.trunk.len () > 0 {
-            let tip = *self.trunk.remove(self.trunk.len() - 1);
+            let len = self.trunk.len();
+            let tip = *self.trunk.remove(len - 1);
             self.headers.remove(&tip);
             return Some(tip);
         }
         None
     }
 
+    /// taken from an early rust-bitcoin by Andrew Poelstra:
     /// This function emulates the `GetCompact(SetCompact(n))` in the Satoshi code,
     /// which drops the precision to something that can be encoded precisely in
     /// the nBits block header field. Savour the perversity. This is in Bitcoin
@@ -281,24 +302,6 @@ impl HeaderCache {
             return Some(header.clone());
         }
         None
-    }
-
-    /// initialize cache from HeaderStore
-    pub fn init_cache(&mut self, header_store: &HeaderStore) -> Result<(), SPVError> {
-        if let Some(tip) = header_store.fetch_tip()? {
-            let mut h = Arc::new(tip);
-            while let Some(stored) = header_store.fetch(&h)? {
-                self.trunk.push(h.clone());
-                self.headers.insert(h, stored.clone());
-                if stored.header.prev_blockhash != Sha256dHash::default() {
-                    h = Arc::new(stored.header.prev_blockhash);
-                } else {
-                    break;
-                }
-            }
-            self.trunk.reverse();
-        }
-        Ok(())
     }
 
     /// iterate from id to genesis
