@@ -58,7 +58,7 @@ impl Constructor {
         let db = Arc::new(Mutex::new(ConfigDB::new(db, network)?));
         let _birth = create_tables(db.clone())?;
         let peers = Arc::new(RwLock::new(PeerMap::new()));
-        let p2p = Arc::new(P2P::new(user_agent, network, 0, peers.clone(), db.clone(), MAX_PROTOCOL_VERSION));
+        let p2p = Arc::new(P2P::new(user_agent, network, 0, peers.clone(),  MAX_PROTOCOL_VERSION));
         let node = Arc::new(Node::new(network, db.clone(), true, peers.clone()));
         Ok(Constructor { node, p2p, thread_pool, db: db.clone() })
     }
@@ -74,7 +74,7 @@ impl Constructor {
         let db = Arc::new(Mutex::new(ConfigDB::mem(network)?));
         let _birth = create_tables(db.clone())?;
         let peers = Arc::new(RwLock::new(PeerMap::new()));
-        let p2p = Arc::new(P2P::new(user_agent, network, 0, peers.clone(), db.clone(), MAX_PROTOCOL_VERSION));
+        let p2p = Arc::new(P2P::new(user_agent, network, 0, peers.clone(), MAX_PROTOCOL_VERSION));
         let node = Arc::new(Node::new(network, db.clone(), true, peers.clone()));
         Ok(Constructor { node, p2p, thread_pool, db: db.clone()})
     }

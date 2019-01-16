@@ -26,7 +26,6 @@ use bitcoin::network::constants::Network;
 use bitcoin::network::message::NetworkMessage;
 use bitcoin::network::message::RawNetworkMessage;
 use bitcoin::network::message_network::VersionMessage;
-use configdb::ConfigDB;
 use error::SPVError;
 use futures::{Async, Future, FutureExt};
 use futures::future;
@@ -102,8 +101,6 @@ pub struct P2P {
     // next peer id
     // atomic only for interior mutability
     next_peer_id: AtomicUsize,
-    // database
-    db: Arc<Mutex<ConfigDB>>,
     // waker
     waker: Arc<Mutex<HashMap<PeerId, Waker>>>,
     // server
@@ -114,7 +111,7 @@ pub struct P2P {
 
 impl P2P {
     /// create a new P2P network controller
-    pub fn new(user_agent: String, network: Network, height: u32, peers: Arc<RwLock<PeerMap>>, db: Arc<Mutex<ConfigDB>>, max_protocol_version: u32) -> P2P {
+    pub fn new(user_agent: String, network: Network, height: u32, peers: Arc<RwLock<PeerMap>>, max_protocol_version: u32) -> P2P {
         let mut rng =  thread_rng();
         let magic = network.magic();
         P2P {
@@ -126,7 +123,6 @@ impl P2P {
             peers,
             poll: Arc::new(Poll::new().unwrap()),
             next_peer_id: AtomicUsize::new(0),
-            db,
             waker: Arc::new(Mutex::new(HashMap::new())),
             listener: Arc::new(Mutex::new(HashMap::new())),
             max_protocol_version: max_protocol_version
@@ -152,19 +148,12 @@ impl P2P {
 
         let peers = self.peers.clone();
         let peers2 = self.peers.clone();
-        let db = self.db.clone();
 
         Box::new(connect
             .map_err (move |e| {
                 // remove peers and candidates entry
                 info!("timeout on handshake peer={}", pid);
                 peers2.write().unwrap().remove(&pid);
-                if let PeerSource::Outgoing(address) = source {
-                    let mut db = db.lock().unwrap();
-                    let mut transaction = db.transaction().unwrap();
-                    transaction.remove_peer(&address).unwrap_or(0);
-                    transaction.commit().unwrap();
-                }
                 e
             })
             .and_then (move|address| {
@@ -283,20 +272,6 @@ impl P2P {
             start_height: self.height.load(Ordering::Relaxed) as i32,
             relay: false, // there is no mempool here therefore no use for inv's of transactions
         })
-    }
-
-    /// ban a peer
-    pub fn ban (&self, pid: PeerId) -> Result<(), SPVError> {
-        info!("banning peer={}", pid);
-        if let Some(peer) = self.peers.read().unwrap().get(&pid) {
-            let locked_peer = peer.lock().unwrap();
-            let mut db = self.db.lock().unwrap();
-            let mut transaction = db.transaction()?;
-            transaction.ban (&(locked_peer.stream.peer_addr()?))?;
-            transaction.commit()?;
-        }
-        self.disconnect(pid);
-        Ok(())
     }
 
     fn disconnect (&self, pid: PeerId) {
@@ -502,7 +477,6 @@ impl P2P {
                                 }
                                 if disconnect {
                                     node.disconnected(pid)?;
-                                    self.ban (pid)?;
                                 }
                             }
                             ProcessResult::Height(new_height) => {
