@@ -81,11 +81,13 @@ impl<S: Encoder> Encodable<S> for StoredHeader {
 // implement decoder. tedious just repeat the consensus_encode lines
 impl<D: Decoder> Decodable<D> for StoredHeader {
     fn consensus_decode(d: &mut D) -> Result<StoredHeader, encode::Error> {
-        let buf :[u8; 4] = Decodable::consensus_decode(d)?;
         Ok(StoredHeader {
             header: Decodable::consensus_decode(d)?,
             height: Decodable::consensus_decode(d)?,
-            log2work: BigEndian::read_f32(&buf) })
+            log2work: {
+                let buf :[u8; 4] = Decodable::consensus_decode(d)?;
+                BigEndian::read_f32(&buf)
+            }})
     }
 }
 

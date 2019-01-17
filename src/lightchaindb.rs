@@ -69,7 +69,7 @@ impl LightChainDB {
     /// Create or open a persistent database instance identified by the path
     pub fn new(path: &Path, network: Network) -> Result<LightChainDB, SPVError> {
         let basename = path.to_str().unwrap().to_string();
-        let headers_and_filters = BitcoinAdaptor::new(persistent((basename.clone() + ".h").as_str(), 100, 2)?);
+        let headers_and_filters = BitcoinAdaptor::new(persistent((basename.clone() + ".h").as_str(), 100, 100)?);
         let headercache = HeaderCache::new(network);
         let filtercache = FilterCache::new();
         let db = LightChainDB { headers_and_filters, headercache: headercache, filtercache, network };
@@ -105,7 +105,7 @@ impl LightChainDB {
         {
             let headers = self.headers();
             if let Some(tip) = headers.fetch_tip()? {
-                info!("reading stored header chain ...");
+                info!("reading stored header chain from tip {}", tip);
                 let mut h = tip;
                 while let Some(stored) = headers.fetch(&h)? {
                     sl.push_front(stored.clone());
