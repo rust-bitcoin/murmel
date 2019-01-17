@@ -126,6 +126,7 @@ impl Node {
     }
 
     fn download_blocks(&self, pid: PeerId, blocks: Vec<Sha256dHash>) -> Result<bool, SPVError> {
+        /*
         let mut dq = self.download_queue.lock().expect("download queue poisoned");
 
         if let Some(new_blocks) = blocks.iter ().position(|b| !dq.iter().any(|a| { a == b })) {
@@ -137,6 +138,7 @@ impl Node {
             self.send(pid, &NetworkMessage::GetData(inventory))?;
             return Ok(true);
         }
+        */
         Ok(false)
     }
 
@@ -166,41 +168,50 @@ impl Node {
     // process headers message
     fn headers(&self, headers: &Vec<LoneBlockHeader>, peer: PeerId) -> Result<ProcessResult, SPVError> {
         if headers.len() > 0 {
-            // headers to unwind due to re-org
-            let mut disconnected_headers = Vec::new();
-
             let mut download = Vec::new();
             // current height
-            let mut height = 0;
+            let mut height;
             // some received headers were not yet known
             let mut some_new = false;
             let mut moved_tip = None;
             {
-                let mut chaindb = self.chaindb.write().unwrap();
+                let chaindb = self.chaindb.read().unwrap();
 
                 if let Some(tip) = chaindb.tip() {
                     height = tip.height;
                 } else {
                     return Err(SPVError::NoTip);
                 }
+            }
 
-                for header in headers {
-                    if let Some(mut old_tip) = chaindb.tip() {
+            let mut headers_queue = VecDeque::new();
+            headers_queue.extend(headers.iter());
+            while !headers_queue.is_empty() {
+                let mut disconnected_headers = Vec::new();
+                {
+                    let mut chaindb = self.chaindb.write().unwrap();
+                    while let Some(header) = headers_queue.pop_front() {
                         // add to blockchain - this also checks proof of work
                         match chaindb.add_header(&header.header) {
-                            Ok(Some((stored, new_tip, unwinds))) => {
+                            Ok(Some((stored, unwinds, forwards))) => {
                                 // POW is ok, stored top chaindb
                                 some_new = true;
 
-                                if let Some(new_tip) = new_tip {
-                                    moved_tip = Some(new_tip);
-                                    height = stored.height;
+                                if let Some(forwards) = forwards {
+                                    moved_tip = Some(forwards.last().unwrap().clone());
+                                    download.extend(forwards.iter());
+                                }
+                                height = stored.height;
 
-                                    if let Some(unwinds) = unwinds {
-                                        disconnected_headers.extend(unwinds.iter()
-                                            .map(|h| chaindb.get_header(h).unwrap().header));
+                                if let Some(unwinds) = unwinds {
+                                    for h in &unwinds {
+                                        if chaindb.unwind_tip(h)? {
+                                            debug!("unwind {}", h);
+                                        }
                                     }
-                                    download.push(new_tip);
+                                    disconnected_headers.extend(unwinds.iter()
+                                        .map(|h| chaindb.get_header(h).unwrap().header));
+                                    break;
                                 }
                             }
                             Ok(None) => {},
@@ -214,15 +225,16 @@ impl Node {
                             }
                         }
                     }
+                    chaindb.batch()?;
                 }
-                chaindb.batch()?;
+
+                // notify lightning connector of disconnected blocks
+                for header in &disconnected_headers {
+                    // limit context
+                    self.connector.block_disconnected(header);
+                }
             }
 
-            // notify lightning connector of disconnected blocks
-            for header in disconnected_headers {
-                // limit context
-                self.connector.block_disconnected(&header);
-            }
             if some_new {
                 // ask if peer knows even more
                 self.get_headers(peer)?;
@@ -320,7 +332,6 @@ impl Node {
     /// get headers this peer is ahead of us
     fn get_headers(&self, peer: PeerId) -> Result<ProcessResult, SPVError> {
         if !self.download_blocks(peer, vec!())? {
-            let next = self.next_block();
             let chaindb = self.chaindb.read().unwrap();
             let locator = chaindb.header_locators();
             if locator.len() > 0 {

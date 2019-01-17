@@ -19,7 +19,6 @@
 
 use bitcoin::{
     BitcoinHash,
-    network::constants::Network,
     util::{
         hash::Sha256dHash
     },
@@ -41,7 +40,7 @@ pub struct FilterCache {
 const EXPECTED_CHAIN_LENGTH: usize = 600000;
 
 impl FilterCache {
-    pub fn new(network: Network) -> FilterCache {
+    pub fn new() -> FilterCache {
         FilterCache { filters: HashMap::with_capacity(EXPECTED_CHAIN_LENGTH),
             by_block: HashMap::with_capacity(EXPECTED_CHAIN_LENGTH) }
     }

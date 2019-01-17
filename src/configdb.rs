@@ -56,7 +56,6 @@ impl ConfigDB {
 
     /// Create or open a persistent database instance identified by the path
     pub fn new(path: &Path, network: Network) -> Result<ConfigDB, SPVError> {
-        let basename = path.to_str().unwrap().to_string();
         let db = ConfigDB {
             conn: Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE |
                 OpenFlags::SQLITE_OPEN_CREATE | OpenFlags::SQLITE_OPEN_FULL_MUTEX)?, network };

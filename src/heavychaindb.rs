@@ -23,11 +23,10 @@
 use error::SPVError;
 
 use blockstore::BlockStore;
-use utxostore::{DBUTXOAccessor, UTXOStore};
+use utxostore::UTXOStore;
 
 use bitcoin::{
-    util::hash::Sha256dHash,
-    blockdata::block::Block
+    util::hash::Sha256dHash
 };
 
 use hammersbald::{
@@ -76,11 +75,16 @@ impl HeavyChainDB {
         utxos.unwind(block_id)
     }
 
-    pub fn unwind_tip (&mut self) -> Result<Option<Sha256dHash>, SPVError> {
+    pub fn unwind_tip (&mut self, ut: &Sha256dHash) -> Result<bool, SPVError> {
         if let Some(tip) = self.blocks().fetch_tip()? {
-            self.unwind_utxo(&tip)?;
+            // unwind might happen before block was actually applied
+            // ignore unwind in this case
+            if *ut == tip {
+                self.unwind_utxo(&tip)?;
+                return Ok(true);
+            }
         }
-        Ok(None)
+        Ok(false)
     }
 
     // Batch writes to hammersbald

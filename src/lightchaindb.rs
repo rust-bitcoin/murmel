@@ -62,7 +62,7 @@ impl LightChainDB {
         info!("working with memory database");
         let headers_and_filters = BitcoinAdaptor::new(transient(2)?);
         let headercache = HeaderCache::new(network);
-        let filtercache = FilterCache::new(network);
+        let filtercache = FilterCache::new();
         Ok(LightChainDB { headers_and_filters, headercache: headercache, filtercache, network})
     }
 
@@ -71,7 +71,7 @@ impl LightChainDB {
         let basename = path.to_str().unwrap().to_string();
         let headers_and_filters = BitcoinAdaptor::new(persistent((basename.clone() + ".h").as_str(), 100, 2)?);
         let headercache = HeaderCache::new(network);
-        let filtercache = FilterCache::new(network);
+        let filtercache = FilterCache::new();
         let db = LightChainDB { headers_and_filters, headercache: headercache, filtercache, network };
         info!("lightchain database {:?} opened", path);
         Ok(db)
@@ -122,11 +122,9 @@ impl LightChainDB {
         if sl.is_empty() {
             info!("Initialized with genesis header.");
             let genesis = genesis_block(self.network).header;
-            if let Some((stored, tip, _)) = self.headercache.add_header (&genesis)? {
+            if let Some((stored, _, _)) = self.headercache.add_header (&genesis)? {
                 self.headers().store(&stored)?;
-                if let Some(tip) = tip {
-                    self.headers().store_tip(&tip)?;
-                }
+                self.headers().store_tip(&stored.bitcoin_hash())?;
             }
         }
         else {
@@ -138,14 +136,16 @@ impl LightChainDB {
         Ok(())
     }
 
-    pub fn add_header(&mut self, header: &BlockHeader) -> Result<Option<(StoredHeader, Option<Sha256dHash>, Option<Vec<Sha256dHash>>)>, SPVError> {
-        if let Some((stored, new_tip, unwinds)) = self.headercache.add_header(header)? {
+    pub fn add_header(&mut self, header: &BlockHeader) -> Result<Option<(StoredHeader, Option<Vec<Sha256dHash>>, Option<Vec<Sha256dHash>>)>, SPVError> {
+        if let Some((stored, unwinds, forward)) = self.headercache.add_header(header)? {
             let mut headers = self.headers();
             headers.store(&stored)?;
-            if let Some(new_tip) = new_tip {
-                headers.store_tip(&new_tip)?;
+            if let Some(forward) = forward.clone() {
+                if forward.len () > 0 {
+                    headers.store_tip(forward.last().unwrap())?;
+                }
             }
-            return Ok(Some((stored, new_tip, unwinds)))
+            return Ok(Some((stored, unwinds, forward)));
         }
         Ok(None)
     }
@@ -153,11 +153,6 @@ impl LightChainDB {
     /// is the given hash part of the trunk (chain from genesis to tip)
     pub fn is_on_trunk(&self, hash: &Sha256dHash) -> bool {
         self.headercache.is_on_trunk(hash)
-    }
-
-    /// is the hash part of the trunk not later than until?
-    pub fn is_on_trunk_until(&self, hash: &Sha256dHash, until: &Sha256dHash) -> bool {
-        self.headercache.is_on_trunk_until(hash, until)
     }
 
     /// retrieve the id of the block/header with most work
@@ -242,18 +237,5 @@ impl LightChainDB {
             }
         }
         Ok(false)
-    }
-
-    // unwind tip, return new tip
-    pub fn unwind_tip(&mut self) -> Result<Option<Sha256dHash>, SPVError> {
-        if let Some(prev) = self.headercache.unwind_tip () {
-            self.filtercache.remove(&prev);
-            self.headers().store_tip(&prev)?;
-            return Ok(Some(prev));
-        }
-        else {
-            self.headers().forget_tip()?;
-            return Ok(None);
-        }
     }
 }

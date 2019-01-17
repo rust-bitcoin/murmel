@@ -92,10 +92,6 @@ impl ChainDB {
         Ok(())
     }
 
-    pub fn is_light (&self) -> bool {
-        self.heavy.is_none()
-    }
-
     pub fn tip (&self) -> Option<StoredHeader> {
         self.light.header_tip()
     }
@@ -104,7 +100,7 @@ impl ChainDB {
         self.light.header_locators()
     }
 
-    pub fn add_header(&mut self, header: &BlockHeader) -> Result<Option<(StoredHeader, Option<Sha256dHash>, Option<Vec<Sha256dHash>>)>, SPVError> {
+    pub fn add_header(&mut self, header: &BlockHeader) -> Result<Option<(StoredHeader, Option<Vec<Sha256dHash>>, Option<Vec<Sha256dHash>>)>, SPVError> {
         self.light.add_header(header)
     }
 
@@ -169,10 +165,11 @@ impl ChainDB {
         Ok(())
     }
 
-    pub fn unwind_tip (&mut self) -> Result<Option<Sha256dHash>, SPVError> {
+    pub fn unwind_tip (&mut self, tip: &Sha256dHash) -> Result<bool, SPVError> {
+        // light chain unwind is implicit through add_header
         if let Some(ref mut heavy) = self.heavy {
-            heavy.unwind_tip()?;
+            return Ok(heavy.unwind_tip(tip)?);
         }
-        self.light.unwind_tip()
+        Ok(false)
     }
 }

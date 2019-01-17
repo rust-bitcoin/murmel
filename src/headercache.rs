@@ -49,11 +49,6 @@ impl HeaderCache {
         HeaderCache { network, headers: HashMap::with_capacity(EXPECTED_CHAIN_LENGTH), trunk: Vec::with_capacity(EXPECTED_CHAIN_LENGTH) }
     }
 
-    // chain height / trunk length
-    pub fn height(&self) -> usize {
-        self.trunk.len()
-    }
-
     pub fn clear(&mut self) {
         self.headers.clear();
         self.trunk.truncate(0);
@@ -67,7 +62,7 @@ impl HeaderCache {
 
 
     /// add a Bitcoin header
-    pub fn add_header(&mut self, header: &BlockHeader) -> Result<Option<(StoredHeader, Option<Sha256dHash>, Option<Vec<Sha256dHash>>)>, SPVError> {
+    pub fn add_header(&mut self, header: &BlockHeader) -> Result<Option<(StoredHeader, Option<Vec<Sha256dHash>>, Option<Vec<Sha256dHash>>)>, SPVError> {
         if self.headers.get(&header.bitcoin_hash()).is_some() {
             // ignore already known header
             return Ok(None);
@@ -93,7 +88,7 @@ impl HeaderCache {
             };
             self.trunk.push(new_tip.clone());
             self.headers.insert(new_tip.clone(), stored.clone());
-            return Ok(Some((stored, Some(*new_tip), None)));
+            return Ok(Some((stored, None, Some(vec!(*new_tip)))));
         }
     }
 
@@ -117,13 +112,12 @@ impl HeaderCache {
         Uint256::from_u64(0xFFFF).unwrap() << 208
     }
 
-    // add header to tree, return stored, new tip with optional list of unwinds
-    fn add_header_to_tree(&mut self, prev: &StoredHeader, next: &BlockHeader) -> Result<(StoredHeader, Option<Sha256dHash>, Option<Vec<Sha256dHash>>), SPVError> {
+    // add header to tree, return stored, optional list of unwinds, optional list of extensions
+    fn add_header_to_tree(&mut self, prev: &StoredHeader, next: &BlockHeader) -> Result<(StoredHeader, Option<Vec<Sha256dHash>>, Option<Vec<Sha256dHash>>), SPVError> {
         const DIFFCHANGE_INTERVAL: u32 = 2016;
         const DIFFCHANGE_TIMESPAN: u32 = 14 * 24 * 3600;
         const TARGET_BLOCK_SPACING: u32 = 600;
 
-        // required work calculation based on an old rust-bitcoin by Andrew Poelstra
         let required_work =
         // Compute required difficulty if this is a diffchange block
             if (prev.height + 1) % DIFFCHANGE_INTERVAL == 0 {
@@ -200,37 +194,47 @@ impl HeaderCache {
 
         if let Some(tip) = self.tip() {
             if tip.log2work < stored.log2work {
-                // higher POW then previous tip
-
-                // compute list of headers no longer on trunk
-                let mut unwinds = Vec::new();
-                if let Some(pos) = self.trunk.iter().rposition(|h| { **h == next.prev_blockhash }) {
-                    if pos < self.trunk.len() - 1 {
-                        // store and cut headers that are no longer on trunk
-                        unwinds.extend(self.trunk[pos + 1 ..].iter().rev().map(|h| **h));
-                        self.trunk.truncate(pos + 1);
-                    }
-                } else {
-                    return Err(SPVError::UnconnectedHeader);
-                }
+                // higher POW than previous tip
 
                 // compute path to new tip
-                let mut ph = next.prev_blockhash;
+                let mut forks_at = next.prev_blockhash;
                 let mut path_to_new_tip = Vec::new();
-                while !self.is_on_trunk(&ph) {
-                    if let Some(h) = self.headers.get(&ph) {
-                        ph = h.header.prev_blockhash;
-                        path_to_new_tip.push(ph);
+                while !self.is_on_trunk(&forks_at) {
+                    if let Some(h) = self.headers.get(&forks_at) {
+                        forks_at = h.header.prev_blockhash;
+                        path_to_new_tip.push(forks_at);
                     } else {
                         return Err(SPVError::UnconnectedHeader);
                     }
                 }
-                self.trunk.extend(path_to_new_tip.iter().rev().map(|h| {Arc::new(*h)}));
+                path_to_new_tip.reverse();
+                path_to_new_tip.push(*next_hash);
 
-                self.trunk.push(next_hash.clone());
-                return Ok((stored, Some(*next_hash), Some(unwinds)));
+
+                // compute list of headers no longer on trunk
+                if forks_at != next.prev_blockhash {
+                    let mut unwinds = Vec::new();
+
+                    if let Some(pos) = self.trunk.iter().rposition(|h| { **h == forks_at }) {
+                        if pos < self.trunk.len() - 1 {
+                            // store and cut headers that are no longer on trunk
+                            unwinds.extend(self.trunk[pos + 1..].iter().rev().map(|h| **h));
+                            self.trunk.truncate(pos + 1);
+                        }
+                    } else {
+                        return Err(SPVError::UnconnectedHeader);
+                    }
+                    self.trunk.extend(path_to_new_tip.iter().map(|h| {Arc::new(*h)}));
+
+                    return Ok((stored, Some(unwinds), Some(path_to_new_tip)));
+                }
+                else {
+                    self.trunk.extend(path_to_new_tip.iter().map(|h| {Arc::new(*h)}));
+
+                    return Ok((stored, None, Some(path_to_new_tip)));
+                }
+
             } else {
-                self.trunk.push(next_hash);
                 return Ok((stored, None, None));
             }
         } else {
@@ -241,16 +245,6 @@ impl HeaderCache {
     /// is the hash part of the trunk (chain from genesis to tip)
     pub fn is_on_trunk(&self, hash: &Sha256dHash) -> bool {
         self.trunk.iter().rposition(|e| { **e == *hash }).is_some()
-    }
-
-    /// is the hash part of the trunk not later than until?
-    pub fn is_on_trunk_until(&self, hash: &Sha256dHash, until: &Sha256dHash) -> bool {
-        if let Some(p1) = self.trunk.iter().rposition(|e| { **e == *until }) {
-            if let Some(p2) = self.trunk.iter().rposition(|e|{**e == *hash}) {
-                return p2 <= p1;
-            }
-        }
-        false
     }
 
     /// retrieve the id of the block/header with most work
@@ -264,16 +258,6 @@ impl HeaderCache {
     pub fn tip_hash(&self) -> Option<Sha256dHash> {
         if let Some(tip) = self.trunk.last() {
             return Some(**tip);
-        }
-        None
-    }
-
-    pub fn unwind_tip (&mut self) -> Option<Sha256dHash> {
-        if self.trunk.len () > 0 {
-            let len = self.trunk.len();
-            let tip = *self.trunk.remove(len - 1);
-            self.headers.remove(&tip);
-            return Some(tip);
         }
         None
     }
