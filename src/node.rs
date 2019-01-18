@@ -120,26 +120,17 @@ impl Node {
 
     /// called from dispatcher whenever a new peer is connected (after handshake is successful)
     pub fn connected(&self, pid: PeerId) -> Result<ProcessResult, SPVError> {
+        info!("connected peer={}", pid);
         self.get_headers(pid)?;
 
         Ok(ProcessResult::Ack)
     }
 
     fn download_blocks(&self, pid: PeerId, blocks: Vec<Sha256dHash>) -> Result<bool, SPVError> {
-        /*
-        let mut dq = self.download_queue.lock().expect("download queue poisoned");
-
-        if let Some(new_blocks) = blocks.iter ().position(|b| !dq.iter().any(|a| { a == b })) {
-            dq.extend(blocks[new_blocks ..].iter());
-        }
-
-        if let Some (ask) = dq.front() {
-            let inventory = vec!({ Inventory { inv_type: InvType::WitnessBlock, hash: ask.clone() } });
-            self.send(pid, &NetworkMessage::GetData(inventory))?;
-            return Ok(true);
-        }
-        */
-        Ok(false)
+        // TODO decide if we need it (BIP158)
+        let inventory = blocks.iter().map(|b| {Inventory{inv_type: InvType::WitnessBlock, hash: b.clone()}}).collect();
+        self.send(pid, &NetworkMessage::GetData(inventory))?;
+        Ok(true)
     }
 
     /// called from dispatcher whenever a peer is disconnected
@@ -268,7 +259,7 @@ impl Node {
                 }
             }
         }
-        self.get_headers(peer)?;
+        //self.get_headers(peer)?;
         Ok(ProcessResult::Ack)
     }
 
@@ -331,17 +322,15 @@ impl Node {
 
     /// get headers this peer is ahead of us
     fn get_headers(&self, peer: PeerId) -> Result<ProcessResult, SPVError> {
-        if !self.download_blocks(peer, vec!())? {
-            let chaindb = self.chaindb.read().unwrap();
-            let locator = chaindb.header_locators();
-            if locator.len() > 0 {
-                let first = if locator.len() > 0 {
-                    *locator.first().unwrap()
-                } else {
-                    Sha256dHash::default()
-                };
-                return self.send(peer, &NetworkMessage::GetHeaders(GetHeadersMessage::new(locator, first)));
-            }
+        let chaindb = self.chaindb.read().unwrap();
+        let locator = chaindb.header_locators();
+        if locator.len() > 0 {
+            let first = if locator.len() > 0 {
+                *locator.first().unwrap()
+            } else {
+                Sha256dHash::default()
+            };
+            return self.send(peer, &NetworkMessage::GetHeaders(GetHeadersMessage::new(locator, first)));
         }
         Ok(ProcessResult::Ack)
     }

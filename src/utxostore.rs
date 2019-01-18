@@ -111,15 +111,16 @@ impl<'a> UTXOStore<'a> {
                     new_utxos.insert(OutPoint{txid, vout}, (tx_nr, vout));
                 }
             }
-            for input in tx.input {
-                if new_utxos.remove(&input.previous_output).is_none() {
-                    let key = utxo_key(&input.previous_output).as_bytes().clone();
-                    if let Some((pref, _)) = self.hammersbald.get_keyed(&key)? {
-                        unwinds.push(pref);
-                        self.hammersbald.forget(&key)?;
-                    }
-                    else {
-                        return Err(SPVError::UnknownUTXO);
+            if !tx.is_coin_base() {
+                for input in tx.input {
+                    if new_utxos.remove(&input.previous_output).is_none() {
+                        let key = utxo_key(&input.previous_output).as_bytes().clone();
+                        if let Some((pref, _)) = self.hammersbald.get_keyed(&key)? {
+                            unwinds.push(pref);
+                            self.hammersbald.forget(&key)?;
+                        } else {
+                            return Err(SPVError::UnknownUTXO);
+                        }
                     }
                 }
             }
@@ -162,6 +163,7 @@ impl<'a> UTXOStore<'a> {
             let output = tx.output[utxo.vout as usize].clone();
             return Ok(Some((output.script_pubkey, output.value)));
         }
+        debug!("no utxo for {}", coin);
         Ok(None)
     }
 }
@@ -191,6 +193,9 @@ pub trait UTXOAccessor {
 
 impl<'a> UTXOAccessor for DBUTXOAccessor<'a> {
     fn get_utxo(&self, coin: &OutPoint) -> Result<Option<(Script, u64)>, SPVError> {
+        if let Some(r) = self.same_block_utxo.get(&(coin.txid, coin.vout)) {
+            return Ok(Some(r.clone()));
+        }
         self.utxostore.get_utxo(coin)
     }
 }

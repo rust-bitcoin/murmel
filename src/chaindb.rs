@@ -76,8 +76,8 @@ impl ChainDB {
             let genesis = genesis_block(self.network);
             if let Some(tip) = self.light.header_tip() {
                 if genesis.header.bitcoin_hash() == tip.bitcoin_hash() {
-                    info!("Initialized with genesis block.");
                     self.extend_blocks_utxo_filters(&genesis)?;
+                    info!("Initialized with genesis block.");
                 }
             }
         }
@@ -112,7 +112,7 @@ impl ChainDB {
     pub fn extend_blocks (&mut self, block: &Block) -> Result<Option<PRef>, SPVError> {
         if let Some(ref mut heavy) = self.heavy {
             let ref block_id = block.bitcoin_hash();
-            if self.light.is_on_trunk(block_id) {
+            if !self.light.is_on_trunk(block_id) {
                 return Ok(None);
             }
             let mut blocks = heavy.blocks();
@@ -124,6 +124,11 @@ impl ChainDB {
                         return Ok(Some(sref));
                     }
                 }
+            }
+            else {
+                let sref = blocks.store(block)?;
+                blocks.store_tip(block_id)?;
+                return Ok(Some(sref));
             }
         }
         else {
@@ -153,10 +158,10 @@ impl ChainDB {
     pub fn extend_blocks_utxo_filters (&mut self, block: &Block) -> Result<(), SPVError> {
         if self.heavy.is_some() {
             if let Some(block_ref) = self.extend_blocks(block)? {
-                self.extend_utxo(block_ref)?;
                 if let Some(filter) = self.compute_filter(block)? {
                     self.light.add_filter(&block.bitcoin_hash(), &block.header.prev_blockhash, filter.content)?;
                 }
+                self.extend_utxo(block_ref)?;
             }
         }
         else {
