@@ -22,7 +22,7 @@ use connector::LightningConnector;
 use configdb::SharedConfigDB;
 use chaindb::SharedChainDB;
 use error::SPVError;
-use p2p::{PeerId, PeerMessageSender, P2PControlSender, P2PControl};
+use p2p::{PeerId, PeerMessageSender, PeerMessageReceiver, P2PControlSender, P2PControl, PeerMessage};
 use blockdownloader::BlockDownloader;
 
 use lightning::chain::chaininterface::BroadcasterInterface;
@@ -77,18 +77,46 @@ pub struct Dispatcher {
 
 impl Dispatcher {
     /// Create a new local node
-    pub fn new(network: Network, configdb: SharedConfigDB, chaindb: SharedChainDB, p2p: P2PControlSender) -> Dispatcher {
+    pub fn new(network: Network, configdb: SharedConfigDB, chaindb: SharedChainDB, p2p: P2PControlSender, incoming: PeerMessageReceiver) -> Arc<Dispatcher> {
         let connector = LightningConnector::new(network, Arc::new(Broadcaster { p2p: p2p.clone() }));
 
         let block_downloader = Self::start_block_downloader(configdb.clone(), chaindb.clone(), p2p.clone());
 
-        Dispatcher {
+        let dispatcher = Arc::new(Dispatcher {
             p2p,
             configdb,
             chaindb,
             connector: Arc::new(connector),
             block_downloader
+        });
+
+        let d2 = dispatcher.clone();
+        thread::spawn(move || { d2.incoming_messages_loop (incoming) });
+
+        dispatcher
+    }
+
+    fn incoming_messages_loop (&self, incoming: PeerMessageReceiver) {
+        while let Ok(pm) = incoming.recv() {
+            match pm {
+                PeerMessage::Message(pid, msg) => {
+                    if let Err(e) = self.process(msg, pid) {
+                        debug!("error processing a message {} peer={}", e, pid);
+                    }
+                }
+                PeerMessage::Connected(pid) => {
+                    if let Err(e) = self.connected(pid) {
+                        debug!("error at connect {} peer={}", e, pid);
+                    }
+                }
+                PeerMessage::Disconnected(pid) => {
+                    if let Err(e) = self.disconnected(pid) {
+                        debug!("error at disconnect {} peer={}", e, pid);
+                    }
+                }
+            }
         }
+        panic!("dispatcher failed");
     }
 
     /// initialize node
@@ -122,13 +150,13 @@ impl Dispatcher {
     }
 
     /// Process incoming messages
-    pub fn process(&self, msg: &NetworkMessage, peer: PeerId) -> Result<(), SPVError> {
+    pub fn process(&self, msg: NetworkMessage, peer: PeerId) -> Result<(), SPVError> {
         Ok(match msg {
-            &NetworkMessage::Ping(nonce) => { self.ping(nonce, peer); Ok(()) },
-            &NetworkMessage::Headers(ref v) => self.headers(v, peer),
-            &NetworkMessage::Block(ref b) => self.block(b, peer),
-            &NetworkMessage::Inv(ref v) => self.inv(v, peer),
-            &NetworkMessage::Addr(ref v) => self.addr(v, peer),
+            NetworkMessage::Ping(nonce) => { self.ping(nonce, peer); Ok(()) },
+            NetworkMessage::Headers(ref v) => self.headers(v, peer),
+            NetworkMessage::Block(ref b) => self.block(b, peer),
+            NetworkMessage::Inv(ref v) => self.inv(v, peer),
+            NetworkMessage::Addr(ref v) => self.addr(v, peer),
             _ => { self.ban(peer,1); Ok(()) }
         }?)
     }

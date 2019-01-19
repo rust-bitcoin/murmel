@@ -19,7 +19,6 @@
 //! This module establishes network connections and routes messages between the P2P network and this node
 //!
 use error::SPVError;
-use dispatcher::Dispatcher;
 
 use bitcoin::{
     consensus::{Decodable, Encodable, encode}
@@ -139,6 +138,8 @@ impl PeerMessageSender {
 /// The P2P network layer
 pub struct P2P {
     pub network: Network,
+    // sender to the dispatcher of incoming messages
+    dispatcher: PeerMessageSender,
     // network specific message prefix
     magic: u32,
     // This node's identifier on the network (random)
@@ -165,14 +166,15 @@ pub struct P2P {
 
 impl P2P {
     /// create a new P2P network controller
-    pub fn new(user_agent: String, network: Network, height: u32, max_protocol_version: u32) -> (Arc<P2P>, P2PControlSender) {
-        let (sender, receiver) = mpsc::channel();
+    pub fn new(user_agent: String, network: Network, height: u32, max_protocol_version: u32, dispatcher: PeerMessageSender) -> (Arc<P2P>, P2PControlSender) {
+        let (control_sender, control_receiver) = mpsc::channel();
 
         let mut rng =  thread_rng();
         let magic = network.magic();
 
         let p2p = Arc::new(P2P {
             network: network,
+            dispatcher,
             magic,
             nonce: rng.next_u64(),
             height: AtomicUsize::new(height as usize),
@@ -187,9 +189,9 @@ impl P2P {
 
         let p2p2 = p2p.clone();
 
-        thread::spawn(move || p2p2.control_loop(receiver));
+        thread::spawn(move || p2p2.control_loop(control_receiver));
 
-        (p2p, P2PControlSender::new(sender))
+        (p2p, P2PControlSender::new(control_sender))
     }
 
     fn control_loop (&self, receiver: P2PControlReceiver) {
@@ -222,7 +224,7 @@ impl P2P {
         panic!("P2P Control loop failed");
     }
 
-    pub fn add_listener (&self, bind: &SocketAddr) -> Result<(), io::Error> {
+    fn add_listener (&self, bind: &SocketAddr) -> Result<(), io::Error> {
         let listener = TcpListener::bind(bind)?;
         let token = Token(self.next_peer_id.fetch_add(1, Ordering::Relaxed));
         self.poll.register(&listener, token, Ready::readable(), PollOpt::edge())?;
@@ -324,7 +326,6 @@ impl P2P {
         // create lock protected peer object
         let peer = Mutex::new(Peer::new(pid, stream,self.poll.clone(), outgoing)?);
 
-        // add peer object to peer map shared between P2P and node
         let mut peers = self.peers.write().unwrap();
 
         // add to peer map
@@ -377,6 +378,11 @@ impl P2P {
             peer_entry.get().lock().unwrap().stream.shutdown(Shutdown::Both).unwrap_or(());
             peer_entry.remove();
         }
+        self.dispatcher.send(PeerMessage::Disconnected(pid));
+    }
+
+    fn connected(&self, pid: PeerId) {
+        self.dispatcher.send(PeerMessage::Connected(pid));
     }
 
     fn ban (&self, pid: PeerId, increment: u32) {
@@ -390,17 +396,15 @@ impl P2P {
             }
         }
         if disconnect {
-            // TODO
-            //node.disconnected(pid)?;
+            self.disconnect(pid);
         }
     }
 
-    fn event_processor (&self, node: Arc<Dispatcher>, event: Event, pid: PeerId, iobuf: &mut [u8]) -> Result<(), SPVError> {
+    fn event_processor (&self, event: Event, pid: PeerId, iobuf: &mut [u8]) -> Result<(), SPVError> {
         let readiness = UnixReady::from(event.readiness());
         // check for error first
         if readiness.is_hup() || readiness.is_error() {
             info!("left us peer={}", pid);
-            node.disconnected(pid)?;
             self.disconnect(pid);
         } else {
             // check for ability to write before read, to get rid of data before buffering more read
@@ -555,13 +559,12 @@ impl P2P {
                 }
                 if disconnect {
                     info!("left us peer={}", pid);
-                    node.disconnected(pid)?;
                     self.disconnect(pid);
                 }
                 else {
                     if handshake {
                         info!("handshake peer={}", pid);
-                        node.connected (pid)?;
+                        self.connected (pid);
                         if let Some(w) = self.waker.lock().unwrap().get(&pid) {
                             trace!("waking for handshake");
                             w.wake();
@@ -571,7 +574,7 @@ impl P2P {
                     // as process could call back to P2P
                     for msg in incoming {
                         trace!("processing {} for peer={}", msg.command(), pid);
-                        node.process (&msg.payload, pid)?;
+                        self.dispatcher.send(PeerMessage::Message(pid, msg.payload));
                     }
                 }
             }
@@ -582,7 +585,7 @@ impl P2P {
     /// run the message dispatcher loop
     /// this method does not return unless there is an error obtaining network events
     /// run in its own thread, which will process all network events
-    pub fn run(&self, node: Arc<Dispatcher>, ctx: &mut Context) -> Result<(), io::Error>{
+    pub fn run(&self, ctx: &mut Context) -> Result<(), io::Error>{
         trace!("start mio event loop");
         loop {
             // events buffer
@@ -606,7 +609,7 @@ impl P2P {
                 else {
                     // construct the id of the peer the event concerns
                     let pid = PeerId { token: event.token() };
-                    if let Err(error) = self.event_processor(node.clone(), event, pid, iobuf.as_mut_slice()) {
+                    if let Err(error) = self.event_processor(event, pid, iobuf.as_mut_slice()) {
                         use std::error::Error;
 
                         warn!("error {} peer={}", error.to_string(), pid);

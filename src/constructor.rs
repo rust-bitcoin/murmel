@@ -22,7 +22,7 @@
 use configdb::{ConfigDB, SharedConfigDB};
 use error::SPVError;
 use dispatcher::Dispatcher;
-use p2p::P2P;
+use p2p::{P2P,PeerMessageSender, P2PControl};
 use chaindb::{ChainDB, SharedChainDB};
 use dns::dns_seed;
 use p2p::PeerSource;
@@ -33,8 +33,7 @@ use std::{
     net::SocketAddr,
     path::Path,
     sync::{Arc, Mutex, RwLock, mpsc},
-    collections::HashSet,
-    thread
+    collections::HashSet
 };
 
 use futures::{
@@ -66,7 +65,7 @@ impl Constructor {
     pub fn new(user_agent :String, network: Network, path: &Path, server: bool, listen: Vec<SocketAddr>) -> Result<Constructor, SPVError> {
         let configdb = Arc::new(Mutex::new(ConfigDB::new(path)?));
         let chaindb = Arc::new(RwLock::new(ChainDB::new(path, network,server)?));
-        let _birth = create_tables(configdb.clone())?;
+        create_tables(configdb.clone())?;
         Ok(Constructor { network, user_agent, configdb, chaindb, listen })
     }
 
@@ -79,7 +78,7 @@ impl Constructor {
     pub fn new_in_memory(user_agent :String, network: Network, server: bool, listen: Vec<SocketAddr>) -> Result<Constructor, SPVError> {
         let configdb = Arc::new(Mutex::new(ConfigDB::mem()?));
         let chaindb = Arc::new(RwLock::new(ChainDB::mem( network,server)?));
-        let _birth = create_tables(configdb.clone())?;
+        create_tables(configdb.clone())?;
         Ok(Constructor { network, user_agent, configdb, chaindb, listen })
     }
 
@@ -90,22 +89,23 @@ impl Constructor {
 	/// * min_connections - keep connections with at least this number of peers. Peers will be randomly chosen
 	/// from those discovered in earlier runs
     pub fn run(&mut self, peers: Vec<SocketAddr>, min_connections: usize, nodns: bool) -> Result<(), SPVError>{
+        let (to_dispatcher, from_p2p) = mpsc::channel();
 
         let (p2p, p2p_control) =
-            P2P::new(self.user_agent.clone(), self.network, 0, MAX_PROTOCOL_VERSION);
+            P2P::new(self.user_agent.clone(), self.network, 0, MAX_PROTOCOL_VERSION, PeerMessageSender::new(to_dispatcher));
 
-        let dispatcher = Arc::new(
-            Dispatcher::new(self.network, self.configdb.clone(), self.chaindb.clone(), p2p_control));
+        let dispatcher =
+            Dispatcher::new(self.network, self.configdb.clone(), self.chaindb.clone(), p2p_control.clone(), from_p2p);
 
         dispatcher.init().unwrap();
 
         for addr in &self.listen {
-            p2p.add_listener(addr)?;
+            p2p_control.send(P2PControl::Bind(addr.clone()));
         }
 
         let p2p2 = p2p.clone();
         let p2p_task = Box::new(future::poll_fn (move |ctx| {
-            p2p2.run(dispatcher.clone(), ctx).unwrap();
+            p2p2.run(ctx).unwrap();
             Ok(Async::Ready(()))
         }));
 
