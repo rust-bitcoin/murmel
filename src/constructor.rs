@@ -22,16 +22,12 @@
 use configdb::{ConfigDB, SharedConfigDB};
 use error::SPVError;
 use dispatcher::Dispatcher;
-use blockdownloader::BlockDownloader;
 use p2p::P2P;
 use chaindb::{ChainDB, SharedChainDB};
 use dns::dns_seed;
-use p2p::{SharedPeers, PeerSource, PeerMap, PeerMessageSender};
+use p2p::PeerSource;
 
-use bitcoin::network::{
-    message::NetworkMessage,
-    constants::Network
-};
+use bitcoin::network::constants::Network;
 
 use std::{
     net::SocketAddr,
@@ -56,7 +52,6 @@ pub struct Constructor {
     user_agent: String,
     configdb: SharedConfigDB,
     chaindb: SharedChainDB,
-    peers: SharedPeers,
     listen: Vec<SocketAddr>
 }
 
@@ -72,8 +67,7 @@ impl Constructor {
         let configdb = Arc::new(Mutex::new(ConfigDB::new(path)?));
         let chaindb = Arc::new(RwLock::new(ChainDB::new(path, network,server)?));
         let _birth = create_tables(configdb.clone())?;
-        let peers = Arc::new(RwLock::new(PeerMap::new()));
-        Ok(Constructor { network, user_agent, peers, configdb, chaindb, listen })
+        Ok(Constructor { network, user_agent, configdb, chaindb, listen })
     }
 
     /// Initialize the stack and return a ChainWatchInterface
@@ -86,20 +80,9 @@ impl Constructor {
         let configdb = Arc::new(Mutex::new(ConfigDB::mem()?));
         let chaindb = Arc::new(RwLock::new(ChainDB::mem( network,server)?));
         let _birth = create_tables(configdb.clone())?;
-        let peers = Arc::new(RwLock::new(PeerMap::new()));
-        Ok(Constructor { network, user_agent, peers, configdb, chaindb, listen })
+        Ok(Constructor { network, user_agent, configdb, chaindb, listen })
     }
 
-    /// Start the thread that downloads blocks
-    pub fn start_downloader (&mut self) -> PeerMessageSender {
-        let (sender, receiver) = mpsc::channel();
-
-        let mut blockdownloader = Box::new(
-            BlockDownloader::new(self.configdb.clone(), self.chaindb.clone(), self.peers.clone(), receiver));
-
-        thread::spawn(move || {blockdownloader.run()});
-        Arc::new(Mutex::new(sender))
-    }
 
 	/// Run the SPV stack. This should be called AFTER registering listener of the ChainWatchInterface,
 	/// so they are called as the SPV stack catches up with the blockchain
@@ -108,17 +91,13 @@ impl Constructor {
 	/// from those discovered in earlier runs
     pub fn run(&mut self, peers: Vec<SocketAddr>, min_connections: usize, nodns: bool) -> Result<(), SPVError>{
 
-        let block_sender = self.start_downloader();
+        let (p2p, p2p_control) =
+            P2P::new(self.user_agent.clone(), self.network, 0, MAX_PROTOCOL_VERSION);
 
-        let node = Arc::new(
-            Dispatcher::new(self.network, self.configdb.clone(), self.chaindb.clone(),
-                            self.peers.clone(), block_sender));
+        let dispatcher = Arc::new(
+            Dispatcher::new(self.network, self.configdb.clone(), self.chaindb.clone(), p2p_control));
 
-        node.init().unwrap();
-
-        let p2p =
-            P2P::new(self.user_agent.clone(), self.network, 0,
-                     self.peers.clone(),  MAX_PROTOCOL_VERSION).0;
+        dispatcher.init().unwrap();
 
         for addr in &self.listen {
             p2p.add_listener(addr)?;
@@ -126,7 +105,7 @@ impl Constructor {
 
         let p2p2 = p2p.clone();
         let p2p_task = Box::new(future::poll_fn (move |ctx| {
-            p2p2.run(node.clone(), ctx).unwrap();
+            p2p2.run(dispatcher.clone(), ctx).unwrap();
             Ok(Async::Ready(()))
         }));
 

@@ -22,7 +22,8 @@ use connector::LightningConnector;
 use configdb::SharedConfigDB;
 use chaindb::SharedChainDB;
 use error::SPVError;
-use p2p::{PeerId, SharedPeers, PeerMessageSender};
+use p2p::{PeerId, PeerMessageSender, P2PControlSender, P2PControl};
+use blockdownloader::BlockDownloader;
 
 use lightning::chain::chaininterface::BroadcasterInterface;
 
@@ -42,46 +43,28 @@ use bitcoin::{
 };
 
 use std::{
-    sync::Arc,
+    thread,
+    sync::{Arc, mpsc},
     time::{SystemTime, UNIX_EPOCH},
     collections::VecDeque,
 };
 
-/// The node replies with this process result to messages
-#[derive(Clone, Eq, PartialEq)]
-pub enum ProcessResult {
-    /// Acknowledgment
-    Ack,
-    /// Acknowledgment, P2P should indicate the new height in future version messages
-    Height(u32),
-    /// message ignored
-    Ignored,
-    /// increase ban score
-    Ban(u32),
-}
-
 
 /// a helper class to implement LightningConnector
 pub struct Broadcaster {
-    // the peer map shared with node and P2P
-    peers: SharedPeers
+    p2p: P2PControlSender
 }
 
 impl BroadcasterInterface for Broadcaster {
     /// send a transaction to all connected peers
     fn broadcast_transaction(&self, tx: &Transaction) {
-        let txid = tx.txid();
-        for (pid, peer) in self.peers.read().unwrap().iter() {
-            debug!("send tx {} peer={}", txid, pid);
-            peer.lock().unwrap().send(&NetworkMessage::Tx(tx.clone())).unwrap_or(());
-        }
+        self.p2p.send(P2PControl::Broadcast(NetworkMessage::Tx(tx.clone())))
     }
 }
 
 /// The local node processing incoming messages
 pub struct Dispatcher {
-    // peer map shared with P2P and the LightningConnector's broadcaster
-    peers: SharedPeers,
+    p2p: P2PControlSender,
     // the configuration db
     configdb: SharedConfigDB,
     // the blockchain db
@@ -94,10 +77,13 @@ pub struct Dispatcher {
 
 impl Dispatcher {
     /// Create a new local node
-    pub fn new(network: Network, configdb: SharedConfigDB, chaindb: SharedChainDB, peers: SharedPeers, block_downloader: PeerMessageSender) -> Dispatcher {
-        let connector = LightningConnector::new(network, Arc::new(Broadcaster { peers: peers.clone() }));
+    pub fn new(network: Network, configdb: SharedConfigDB, chaindb: SharedChainDB, p2p: P2PControlSender) -> Dispatcher {
+        let connector = LightningConnector::new(network, Arc::new(Broadcaster { p2p: p2p.clone() }));
+
+        let block_downloader = Self::start_block_downloader(configdb.clone(), chaindb.clone(), p2p.clone());
+
         Dispatcher {
-            peers,
+            p2p,
             configdb,
             chaindb,
             connector: Arc::new(connector),
@@ -111,39 +97,50 @@ impl Dispatcher {
         Ok(())
     }
 
+    /// Start the thread that downloads blocks
+    pub fn start_block_downloader(configdb: SharedConfigDB, chaindb: SharedChainDB, p2p: P2PControlSender) -> PeerMessageSender {
+        let (sender, receiver) = mpsc::channel();
+
+        let mut blockdownloader = Box::new(
+            BlockDownloader::new(configdb, chaindb, p2p, receiver));
+
+        thread::spawn(move || {blockdownloader.run()});
+        PeerMessageSender::new(sender)
+    }
+
     /// called from dispatcher whenever a new peer is connected (after handshake is successful)
-    pub fn connected(&self, pid: PeerId) -> Result<ProcessResult, SPVError> {
+    pub fn connected(&self, pid: PeerId) -> Result<(), SPVError> {
         info!("connected peer={}", pid);
         self.get_headers(pid)?;
 
-        Ok(ProcessResult::Ack)
+        Ok(())
     }
 
     /// called from dispatcher whenever a peer is disconnected
-    pub fn disconnected(&self, _pid: PeerId) -> Result<ProcessResult, SPVError> {
-        Ok(ProcessResult::Ack)
+    pub fn disconnected(&self, _pid: PeerId) -> Result<(), SPVError> {
+        Ok(())
     }
 
     /// Process incoming messages
-    pub fn process(&self, msg: &NetworkMessage, peer: PeerId) -> Result<ProcessResult, SPVError> {
-        match msg {
-            &NetworkMessage::Ping(nonce) => self.ping(nonce, peer),
+    pub fn process(&self, msg: &NetworkMessage, peer: PeerId) -> Result<(), SPVError> {
+        Ok(match msg {
+            &NetworkMessage::Ping(nonce) => { self.ping(nonce, peer); Ok(()) },
             &NetworkMessage::Headers(ref v) => self.headers(v, peer),
             &NetworkMessage::Block(ref b) => self.block(b, peer),
             &NetworkMessage::Inv(ref v) => self.inv(v, peer),
             &NetworkMessage::Addr(ref v) => self.addr(v, peer),
-            _ => Ok(ProcessResult::Ban(1))
-        }
+            _ => { self.ban(peer,1); Ok(()) }
+        }?)
     }
 
     // received ping
-    fn ping(&self, nonce: u64, peer: PeerId) -> Result<ProcessResult, SPVError> {
+    fn ping(&self, nonce: u64, peer: PeerId) {
         // send pong
-        self.send(peer, &NetworkMessage::Pong(nonce))
+        self.send(peer, NetworkMessage::Pong(nonce))
     }
 
     // process headers message
-    fn headers(&self, headers: &Vec<LoneBlockHeader>, peer: PeerId) -> Result<ProcessResult, SPVError> {
+    fn headers(&self, headers: &Vec<LoneBlockHeader>, peer: PeerId) -> Result<(), SPVError> {
         if headers.len() > 0 {
             // current height
             let mut height;
@@ -192,11 +189,12 @@ impl Dispatcher {
                             Ok(None) => {}
                             Err(SPVError::SpvBadProofOfWork) => {
                                 info!("Incorrect POW, banning peer={}", peer);
-                                return Ok(ProcessResult::Ban(100));
+                                self.ban(peer, 100);
+                                return Ok(());
                             }
                             Err(e) => {
                                 debug!("error {} processing header {} ", e, header.header.bitcoin_hash());
-                                return Ok(ProcessResult::Ignored);
+                                return Ok(());
                             }
                         }
                     }
@@ -217,23 +215,21 @@ impl Dispatcher {
 
             if let Some(new_tip) = moved_tip {
                 info!("received {} headers new tip={} from peer={}", headers.len(), new_tip, peer);
-                return Ok(ProcessResult::Height(height));
+                self.height(height);
             } else {
                 debug!("received {} known or orphan headers from peer={}", headers.len(), peer);
-                return Ok(ProcessResult::Ack);
             }
-        } else {
-            Ok(ProcessResult::Ignored)
         }
+        Ok(())
     }
 
     // process an incoming block
-    fn block(&self, _block: &Block, _peer: PeerId) -> Result<ProcessResult, SPVError> {
-        Ok(ProcessResult::Ack)
+    fn block(&self, _block: &Block, _peer: PeerId) -> Result<(), SPVError> {
+        Ok(())
     }
 
     // process an incoming inventory announcement
-    fn inv(&self, v: &Vec<Inventory>, peer: PeerId) -> Result<ProcessResult, SPVError> {
+    fn inv(&self, v: &Vec<Inventory>, peer: PeerId) -> Result<(), SPVError> {
         let mut ask_for_headers = false;
         for inventory in v {
             // only care for blocks
@@ -247,20 +243,19 @@ impl Dispatcher {
             } else {
                 // do not spam us with transactions
                 debug!("received unwanted inv {:?} peer={}", inventory.inv_type, peer);
-                return Ok(ProcessResult::Ban(10));
+                self.ban(peer, 10);
+                return Ok(())
             }
         }
         if ask_for_headers {
             self.get_headers(peer)?;
-            return Ok(ProcessResult::Ack);
         } else {
-            return Ok(ProcessResult::Ignored);
         }
+        Ok(())
     }
 
     // process incoming addr messages
-    fn addr(&self, v: &Vec<(u32, Address)>, peer: PeerId) -> Result<ProcessResult, SPVError> {
-        let mut result = ProcessResult::Ignored;
+    fn addr(&self, v: &Vec<(u32, Address)>, peer: PeerId) -> Result<(), SPVError> {
         // store if interesting, that is ...
         let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as u32;
         let mut db = self.configdb.lock().unwrap();
@@ -271,17 +266,16 @@ impl Dispatcher {
                 // if segwit full node and not older than 3 hours
                 if a.1.services & 9 == 9 && a.0 > now - 3 * 60 * 30 {
                     tx.store_peer(&a.1, a.0, 0)?;
-                    result = ProcessResult::Ack;
                     debug!("stored address {:?} peer={}", a.1.socket_addr()?, peer);
                 }
             }
         }
         tx.commit()?;
-        Ok(result)
+        Ok(())
     }
 
     /// get headers this peer is ahead of us
-    fn get_headers(&self, peer: PeerId) -> Result<ProcessResult, SPVError> {
+    fn get_headers(&self, peer: PeerId) -> Result<(), SPVError> {
         let chaindb = self.chaindb.read().unwrap();
         let locator = chaindb.header_locators();
         if locator.len() > 0 {
@@ -290,31 +284,33 @@ impl Dispatcher {
             } else {
                 Sha256dHash::default()
             };
-            return self.send(peer, &NetworkMessage::GetHeaders(GetHeadersMessage::new(locator, first)));
+            self.send(peer, NetworkMessage::GetHeaders(GetHeadersMessage::new(locator, first)));
         }
-        Ok(ProcessResult::Ack)
+        Ok(())
+    }
+
+    fn height (&self, height: u32) {
+        self.p2p.send(P2PControl::Height(height))
+    }
+
+    fn ban (&self, peer: PeerId, score: u32) {
+        self.p2p.send(P2PControl::Ban(peer, score))
     }
 
     /// send to peer
-    fn send(&self, peer: PeerId, msg: &NetworkMessage) -> Result<ProcessResult, SPVError> {
-        if let Some(sender) = self.peers.read().unwrap().get(&peer) {
-            sender.lock().unwrap().send(msg)?;
-        }
-        Ok(ProcessResult::Ack)
+    fn send(&self, peer: PeerId, msg: NetworkMessage) {
+        self.p2p.send(P2PControl::Send(peer, msg))
     }
 
     /// send the same message to all connected peers
     #[allow(dead_code)]
-    fn broadcast(&self, msg: &NetworkMessage) -> Result<ProcessResult, SPVError> {
-        for (_, sender) in self.peers.read().unwrap().iter() {
-            sender.lock().unwrap().send(msg)?;
-        }
-        Ok(ProcessResult::Ack)
+    fn broadcast(&self, msg: NetworkMessage) {
+        self.p2p.send(P2PControl::Broadcast(msg))
     }
     /// send a transaction to all connected peers
     #[allow(dead_code)]
-    pub fn broadcast_transaction(&self, tx: &Transaction) -> Result<ProcessResult, SPVError> {
-        self.broadcast(&NetworkMessage::Tx(tx.clone()))
+    pub fn broadcast_transaction(&self, tx: &Transaction) {
+        self.broadcast(NetworkMessage::Tx(tx.clone()))
     }
 
     /// retrieve the interface a higher application layer e.g. lightning may use to send transactions to the network

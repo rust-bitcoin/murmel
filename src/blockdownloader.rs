@@ -19,7 +19,7 @@
 
 use configdb::SharedConfigDB;
 use chaindb::SharedChainDB;
-use p2p::{SharedPeers, PeerMessageReceiver};
+use p2p::{PeerMessageReceiver, P2PControlSender};
 
 use bitcoin::{
     blockdata::block::Block
@@ -29,13 +29,13 @@ use bitcoin::{
 pub struct BlockDownloader {
     configdb: SharedConfigDB,
     chaindb: SharedChainDB,
-    peers: SharedPeers,
+    p2p: P2PControlSender,
     messages: PeerMessageReceiver
 }
 
 impl BlockDownloader {
-    pub fn new (configdb: SharedConfigDB, chaindb: SharedChainDB, peers: SharedPeers, messages: PeerMessageReceiver) -> BlockDownloader {
-        BlockDownloader{ configdb, chaindb, peers, messages }
+    pub fn new (configdb: SharedConfigDB, chaindb: SharedChainDB, p2p: P2PControlSender, messages: PeerMessageReceiver) -> BlockDownloader {
+        BlockDownloader{ configdb, chaindb, p2p, messages }
     }
 
     pub fn run(&mut self) {

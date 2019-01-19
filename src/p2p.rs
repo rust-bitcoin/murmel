@@ -19,7 +19,7 @@
 //! This module establishes network connections and routes messages between the P2P network and this node
 //!
 use error::SPVError;
-use dispatcher::{Dispatcher, ProcessResult};
+use dispatcher::Dispatcher;
 
 use bitcoin::{
     consensus::{Decodable, Encodable, encode}
@@ -80,20 +80,36 @@ impl fmt::Display for PeerId {
     }
 }
 
-pub struct PeerMessage {
-    pub peer_id: PeerId,
-    pub message: NetworkMessage
+pub enum PeerMessage {
+    Message(PeerId, NetworkMessage),
+    Connected(PeerId),
+    Disconnected(PeerId)
 }
 
 pub enum P2PControl {
     Send(PeerId, NetworkMessage),
+    Broadcast(NetworkMessage),
     Ban(PeerId, u32),
     Height(u32),
     Bind(SocketAddr)
 }
 
-pub type P2PControlSender = Arc<Mutex<mpsc::Sender<P2PControl>>>;
 pub type P2PControlReceiver = mpsc::Receiver<P2PControl>;
+
+#[derive(Clone)]
+pub struct P2PControlSender {
+    sender: Arc<Mutex<mpsc::Sender<P2PControl>>>
+}
+
+impl P2PControlSender {
+    pub fn new (sender: mpsc::Sender<P2PControl>) -> P2PControlSender {
+        P2PControlSender { sender: Arc::new(Mutex::new(sender)) }
+    }
+
+    pub fn send (&self, control: P2PControl) {
+        self.sender.lock().unwrap().send(control).expect("P2P control send failed");
+    }
+}
 
 #[derive(Clone)]
 pub enum PeerSource {
@@ -102,14 +118,23 @@ pub enum PeerSource {
 }
 
 /// a map of peer id to peers
-/// This map is shared between P2P and node
-/// and is protected with an rw lock
-/// Peers are mutex protected as sends
-/// to them may be coming from different peers
 pub type PeerMap = HashMap<PeerId, Mutex<Peer>>;
-pub type SharedPeers = Arc<RwLock<PeerMap>>;
-pub type PeerMessageSender = Arc<Mutex<mpsc::Sender<PeerMessage>>>;
 pub type PeerMessageReceiver = mpsc::Receiver<PeerMessage>;
+
+#[derive(Clone)]
+pub struct PeerMessageSender {
+    sender: Arc<Mutex<mpsc::Sender<PeerMessage>>>
+}
+
+impl PeerMessageSender {
+    pub fn new (sender: mpsc::Sender<PeerMessage>) -> PeerMessageSender {
+        PeerMessageSender { sender: Arc::new(Mutex::new(sender)) }
+    }
+
+    pub fn send (&self, msg: PeerMessage) {
+        self.sender.lock().unwrap().send(msg).expect("P2P message send failed");
+    }
+}
 
 /// The P2P network layer
 pub struct P2P {
@@ -123,7 +148,6 @@ pub struct P2P {
     // This node's human readable type identification
     user_agent: String,
     // The collection of connected peers
-    // access to this is shared with node and is rw lock protected
     peers: Arc<RwLock<PeerMap>>,
     // The poll object of the async IO layer (mio)
     // access to this is shared by P2P and Peer
@@ -141,7 +165,7 @@ pub struct P2P {
 
 impl P2P {
     /// create a new P2P network controller
-    pub fn new(user_agent: String, network: Network, height: u32, peers: Arc<RwLock<PeerMap>>, max_protocol_version: u32) -> (Arc<P2P>, P2PControlSender) {
+    pub fn new(user_agent: String, network: Network, height: u32, max_protocol_version: u32) -> (Arc<P2P>, P2PControlSender) {
         let (sender, receiver) = mpsc::channel();
 
         let mut rng =  thread_rng();
@@ -153,7 +177,7 @@ impl P2P {
             nonce: rng.next_u64(),
             height: AtomicUsize::new(height as usize),
             user_agent,
-            peers,
+            peers: Arc::new(RwLock::new(PeerMap::new())),
             poll: Arc::new(Poll::new().unwrap()),
             next_peer_id: AtomicUsize::new(0),
             waker: Arc::new(Mutex::new(HashMap::new())),
@@ -165,14 +189,14 @@ impl P2P {
 
         thread::spawn(move || p2p2.control_loop(receiver));
 
-        (p2p, Arc::new(Mutex::new(sender)))
+        (p2p, P2PControlSender::new(sender))
     }
 
     fn control_loop (&self, receiver: P2PControlReceiver) {
         while let Ok(control) = receiver.recv() {
             match control {
                 P2PControl::Ban(peer_id, score) => {
-                    // TODO
+                    self.ban(peer_id, score);
                 },
                 P2PControl::Height(height) => {
                     self.height.store (height as usize, Ordering::Relaxed);
@@ -183,6 +207,11 @@ impl P2P {
                         Err(err) => info!("failed to listen to {} with {}", addr, err)
                     }
                 },
+                P2PControl::Broadcast(message) => {
+                    for peer in self.peers.read().unwrap().values() {
+                        peer.lock().unwrap().send(&message).expect("could not send to peer");
+                    }
+                }
                 P2PControl::Send(peer_id, message) => {
                     if let Some (peer) = self.peers.read().unwrap().get (&peer_id) {
                         peer.lock().unwrap().send(&message).expect("could not send to peer");
@@ -347,6 +376,22 @@ impl P2P {
         if let Entry::Occupied(peer_entry) = self.peers.write().unwrap().entry(pid) {
             peer_entry.get().lock().unwrap().stream.shutdown(Shutdown::Both).unwrap_or(());
             peer_entry.remove();
+        }
+    }
+
+    fn ban (&self, pid: PeerId, increment: u32) {
+        let mut disconnect = false;
+        if let Some(peer) = self.peers.read().unwrap().get(&pid) {
+            let mut locked_peer = peer.lock().unwrap();
+            locked_peer.ban += increment;
+            trace!("ban score {} for peer={}", locked_peer.ban, pid);
+            if locked_peer.ban >= BAN {
+                disconnect = true;
+            }
+        }
+        if disconnect {
+            // TODO
+            //node.disconnected(pid)?;
         }
     }
 
@@ -526,27 +571,7 @@ impl P2P {
                     // as process could call back to P2P
                     for msg in incoming {
                         trace!("processing {} for peer={}", msg.command(), pid);
-                        match node.process (&msg.payload, pid)? {
-                            ProcessResult::Ack => { trace!("ack {} peer={}", msg.command(), pid); },
-                            ProcessResult::Ignored => { trace!("ignored {} peer={}", msg.command(), pid); }
-                            ProcessResult::Ban(increment) => {
-                                let mut disconnect = false;
-                                if let Some(peer) = self.peers.read().unwrap().get(&pid) {
-                                    let mut locked_peer = peer.lock().unwrap();
-                                    locked_peer.ban += increment;
-                                    trace!("ban score {} for peer={}", locked_peer.ban, pid);
-                                    if locked_peer.ban >= BAN {
-                                       disconnect = true;
-                                    }
-                                }
-                                if disconnect {
-                                    node.disconnected(pid)?;
-                                }
-                            }
-                            ProcessResult::Height(new_height) => {
-                                self.height.store(new_height as usize, Ordering::Relaxed);
-                            }
-                        }
+                        node.process (&msg.payload, pid)?;
                     }
                 }
             }
