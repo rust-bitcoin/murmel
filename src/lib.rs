@@ -50,6 +50,7 @@ mod heavychaindb;
 mod chaindb;
 mod configdb;
 mod node;
+mod blockdownloader;
 mod error;
 #[allow(dead_code)]
 mod connector;

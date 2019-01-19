@@ -39,17 +39,15 @@ use bitcoin::{
     network::{
         address::Address,
         constants::Network,
-        message::{
-            NetworkMessage
-        },
-        message_blockdata::*
-    }
+        message::NetworkMessage,
+        message_blockdata::*,
+    },
 };
 
 use std::{
     sync::{Mutex, RwLock, Arc},
     time::{SystemTime, UNIX_EPOCH},
-    collections::VecDeque
+    collections::VecDeque,
 };
 
 /// The node replies with this process result to messages
@@ -88,22 +86,23 @@ pub struct Node {
     // peer map shared with P2P and the LightningConnector's broadcaster
     peers: Arc<RwLock<PeerMap>>,
     // the configuration db
-    db: Arc<Mutex<ConfigDB>>,
+    configdb: Arc<Mutex<ConfigDB>>,
     // the blockchain db
-    chaindb: RwLock<ChainDB>,
+    chaindb: Arc<RwLock<ChainDB>>,
     // connector serving Layer 2 network
-    connector: Arc<LightningConnector>
+    connector: Arc<LightningConnector>,
 }
 
 impl Node {
     /// Create a new local node
-    pub fn new(network: Network, db: Arc<Mutex<ConfigDB>>, chaindb: ChainDB, peers: Arc<RwLock<PeerMap>>) -> Node {
-        let connector = LightningConnector::new(network,Arc::new(Broadcaster { peers: peers.clone() }));
+    pub fn new(network: Network, configdb: Arc<Mutex<ConfigDB>>, chaindb: Arc<RwLock<ChainDB>>, peers: Arc<RwLock<PeerMap>>) -> Node {
+        let connector = LightningConnector::new(network, Arc::new(Broadcaster { peers: peers.clone() }));
         Node {
-                peers,
-                db,
-                chaindb: RwLock::new(chaindb),
-                connector: Arc::new(connector) }
+            peers,
+            configdb,
+            chaindb,
+            connector: Arc::new(connector),
+        }
     }
 
     /// initialize node
@@ -118,13 +117,6 @@ impl Node {
         self.get_headers(pid)?;
 
         Ok(ProcessResult::Ack)
-    }
-
-    fn download_blocks(&self, _pid: PeerId, _blocks: Vec<Sha256dHash>) -> Result<bool, SPVError> {
-        // TODO decide if we need it (BIP158)
-        // let inventory = blocks.iter().map(|b| {Inventory{inv_type: InvType::WitnessBlock, hash: b.clone()}}).collect();
-        // self.send(pid, &NetworkMessage::GetData(inventory))?;
-        Ok(true)
     }
 
     /// called from dispatcher whenever a peer is disconnected
@@ -153,7 +145,6 @@ impl Node {
     // process headers message
     fn headers(&self, headers: &Vec<LoneBlockHeader>, peer: PeerId) -> Result<ProcessResult, SPVError> {
         if headers.len() > 0 {
-            let mut download = Vec::new();
             // current height
             let mut height;
             // some received headers were not yet known
@@ -184,14 +175,13 @@ impl Node {
 
                                 if let Some(forwards) = forwards {
                                     moved_tip = Some(forwards.last().unwrap().clone());
-                                    download.extend(forwards.iter());
                                 }
                                 height = stored.height;
 
                                 if let Some(unwinds) = unwinds {
                                     for h in &unwinds {
                                         if chaindb.unwind_tip(h)? {
-                                            debug!("unwind {}", h);
+                                            debug!("unwind header {}", h);
                                         }
                                     }
                                     disconnected_headers.extend(unwinds.iter()
@@ -199,14 +189,14 @@ impl Node {
                                     break;
                                 }
                             }
-                            Ok(None) => {},
+                            Ok(None) => {}
                             Err(SPVError::SpvBadProofOfWork) => {
                                 info!("Incorrect POW, banning peer={}", peer);
                                 return Ok(ProcessResult::Ban(100));
                             }
                             Err(e) => {
-                                debug!("error {} on {} ", e, header.header.bitcoin_hash());
-                                return Ok(ProcessResult::Ignored)
+                                debug!("error {} processing header {} ", e, header.header.bitcoin_hash());
+                                return Ok(ProcessResult::Ignored);
                             }
                         }
                     }
@@ -227,7 +217,6 @@ impl Node {
 
             if let Some(new_tip) = moved_tip {
                 info!("received {} headers new tip={} from peer={}", headers.len(), new_tip, peer);
-                self.download_blocks(peer, download)?;
                 return Ok(ProcessResult::Height(height));
             } else {
                 debug!("received {} known or orphan headers from peer={}", headers.len(), peer);
@@ -253,7 +242,7 @@ impl Node {
                 debug!("received inv for block {}", inventory.hash);
                 if chaindb.get_header(&inventory.hash).is_none() {
                     // ask for header(s) if observing a new block
-                   ask_for_headers = true;
+                    ask_for_headers = true;
                 }
             } else {
                 // do not spam us with transactions
@@ -264,8 +253,7 @@ impl Node {
         if ask_for_headers {
             self.get_headers(peer)?;
             return Ok(ProcessResult::Ack);
-        }
-        else {
+        } else {
             return Ok(ProcessResult::Ignored);
         }
     }
@@ -275,7 +263,7 @@ impl Node {
         let mut result = ProcessResult::Ignored;
         // store if interesting, that is ...
         let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as u32;
-        let mut db = self.db.lock().unwrap();
+        let mut db = self.configdb.lock().unwrap();
         let mut tx = db.transaction()?;
         for a in v.iter() {
             // if not tor
@@ -284,7 +272,7 @@ impl Node {
                 if a.1.services & 9 == 9 && a.0 > now - 3 * 60 * 30 {
                     tx.store_peer(&a.1, a.0, 0)?;
                     result = ProcessResult::Ack;
-                    info!("stored address {:?} peer={}", a.1.socket_addr()?, peer);
+                    debug!("stored address {:?} peer={}", a.1.socket_addr()?, peer);
                 }
             }
         }

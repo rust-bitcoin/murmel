@@ -82,8 +82,8 @@ fn download() {
     let mut peers = Vec::new();
     peers.push(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 28333));
     thread::spawn(|| {
-        let mut spv = Constructor::new_in_memory("/rust-spv:0.1.0/".to_string(), Network::Regtest, true).unwrap();
-        spv.start(peers, 1, true);
+        let mut spv = Constructor::new_in_memory("/rust-spv:0.1.0/".to_string(), Network::Regtest, true, vec!()).unwrap();
+        spv.run(peers, 1, true).unwrap();
     });
     thread::sleep(time::Duration::from_secs(5));
 }

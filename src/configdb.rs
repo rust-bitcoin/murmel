@@ -94,7 +94,7 @@ impl<'a> ConfigTX<'a> {
     ///   * tx - transactions
     ///   * blk_tx - n:m mapping of header to transactions to form a block.
     ///   * peers - list of known peers
-    pub fn create_tables(&mut self) -> Result<u32, SPVError> {
+    pub fn create_tables(&mut self) -> Result<(), SPVError> {
         trace!("creating tables...");
         self.dirty.set(true);
 
@@ -115,11 +115,11 @@ impl<'a> ConfigTX<'a> {
             self.tx.execute("insert into birth (inception) values (?)", &[&birth])?;
         }
         trace!("created tables");
-        self.get_birth()
+        Ok(())
     }
 
 
-    /// get the integer proxy for a hash. All tables use integers mapped here for better performance.
+    #[allow(unused)]
     pub fn get_birth(&self) -> Result<u32, SPVError> {
         Ok(self.tx.query_row("select inception from birth",
                              &[],

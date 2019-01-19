@@ -19,31 +19,42 @@
 //! Assembles modules of this library to a complete SPV service
 //!
 
-use bitcoin::network::constants::Network;
 use configdb::ConfigDB;
 use error::SPVError;
 use node::Node;
+use blockdownloader::BlockDownloader;
 use p2p::P2P;
 use chaindb::ChainDB;
-use std::net::SocketAddr;
-use std::path::Path;
-use std::sync::{Arc, Mutex, RwLock};
-use p2p::{PeerMap, PeerSource};
-use futures::future;
-use futures::prelude::*;
-use futures::executor::ThreadPool;
 use dns::dns_seed;
+use p2p::{PeerMap, PeerSource};
+
+use bitcoin::network::constants::Network;
+
+use std::{
+    net::SocketAddr,
+    path::Path,
+    sync::{Arc, Mutex, RwLock},
+    collections::HashSet,
+    thread
+};
+
+use futures::{
+    future,
+    prelude::*,
+    executor::ThreadPool
+};
 use rand::{thread_rng, RngCore};
-use std::collections::HashSet;
 
 const MAX_PROTOCOL_VERSION :u32 = 70001;
 
 /// The complete stack
 pub struct Constructor {
-	node: Arc<Node>,
-	p2p: Arc<P2P>,
-    thread_pool: ThreadPool,
-    configdb: Arc<Mutex<ConfigDB>>
+    network: Network,
+    user_agent: String,
+    configdb: Arc<Mutex<ConfigDB>>,
+    chaindb: Arc<RwLock<ChainDB>>,
+    peers: Arc<RwLock<PeerMap>>,
+    listen: Vec<SocketAddr>
 }
 
 impl Constructor {
@@ -54,15 +65,12 @@ impl Constructor {
     ///      db - file path to data
     /// The method will read previously stored headers from the database and sync up with the peers
     /// then serve the returned ChainWatchInterface
-    pub fn new(user_agent :String, network: Network, path: &Path, server: bool) -> Result<Constructor, SPVError> {
-        let thread_pool = ThreadPool::new()?;
+    pub fn new(user_agent :String, network: Network, path: &Path, server: bool, listen: Vec<SocketAddr>) -> Result<Constructor, SPVError> {
         let configdb = Arc::new(Mutex::new(ConfigDB::new(path)?));
-        let chaindb = ChainDB::new(path, network,server)?;
+        let chaindb = Arc::new(RwLock::new(ChainDB::new(path, network,server)?));
         let _birth = create_tables(configdb.clone())?;
         let peers = Arc::new(RwLock::new(PeerMap::new()));
-        let p2p = Arc::new(P2P::new(user_agent, network, 0, peers.clone(),  MAX_PROTOCOL_VERSION));
-        let node = Arc::new(Node::new(network, configdb.clone(), chaindb, peers.clone()));
-        Ok(Constructor { node, p2p, thread_pool, configdb: configdb.clone() })
+        Ok(Constructor { network, user_agent, peers, configdb, chaindb, listen })
     }
 
     /// Initialize the stack and return a ChainWatchInterface
@@ -71,48 +79,55 @@ impl Constructor {
     ///      bootstrap - peer adresses (only tested to work with one local node for now)
     /// The method will start with an empty in-memory database and sync up with the peers
     /// then serve the returned ChainWatchInterface
-    pub fn new_in_memory(user_agent :String, network: Network, server: bool) -> Result<Constructor, SPVError> {
-        let thread_pool = ThreadPool::new()?;
-        let db = Arc::new(Mutex::new(ConfigDB::mem()?));
-        let chaindb = ChainDB::mem( network,server)?;
-        let _birth = create_tables(db.clone())?;
+    pub fn new_in_memory(user_agent :String, network: Network, server: bool, listen: Vec<SocketAddr>) -> Result<Constructor, SPVError> {
+        let configdb = Arc::new(Mutex::new(ConfigDB::mem()?));
+        let chaindb = Arc::new(RwLock::new(ChainDB::mem( network,server)?));
+        let _birth = create_tables(configdb.clone())?;
         let peers = Arc::new(RwLock::new(PeerMap::new()));
-        let p2p = Arc::new(P2P::new(user_agent, network, 0, peers.clone(), MAX_PROTOCOL_VERSION));
-        let node = Arc::new(Node::new(network, db.clone(), chaindb, peers.clone()));
-        Ok(Constructor { node, p2p, thread_pool, configdb: db.clone()})
+        Ok(Constructor { network, user_agent, peers, configdb, chaindb, listen })
     }
 
-    /// add a listener of incoming connection requests
-    pub fn listen (&self, addr: &SocketAddr) -> Result<(), SPVError> {
-        Ok(self.p2p.add_listener(addr)?)
-    }
-
-	/// Start the SPV stack. This should be called AFTER registering listener of the ChainWatchInterface,
+	/// Run the SPV stack. This should be called AFTER registering listener of the ChainWatchInterface,
 	/// so they are called as the SPV stack catches up with the blockchain
 	/// * peers - connect to these peers at startup (might be empty)
 	/// * min_connections - keep connections with at least this number of peers. Peers will be randomly chosen
 	/// from those discovered in earlier runs
-    pub fn start (&mut self, peers: Vec<SocketAddr>, min_connections: usize, nodns: bool) {
-        self.node.init().unwrap();
+    pub fn run(&mut self, peers: Vec<SocketAddr>, min_connections: usize, nodns: bool) -> Result<(), SPVError>{
 
-        let p2p = self.p2p.clone();
-        let node = self.node.clone();
+        let node = Arc::new(Node::new(self.network, self.configdb.clone(), self.chaindb.clone(), self.peers.clone()));
+
+        node.init().unwrap();
+
+        let mut blockdownloader = Box::new(BlockDownloader::new(self.configdb.clone(), self.chaindb.clone()));
+
+        thread::spawn(move || {blockdownloader.start()});
+
+
+        let p2p = Arc::new(P2P::new(self.user_agent.clone(), self.network, 0, self.peers.clone(),  MAX_PROTOCOL_VERSION));
+
+        for addr in &self.listen {
+            p2p.add_listener(addr)?;
+        }
+
+        let p2p2 = p2p.clone();
+        let p2p_task = Box::new(future::poll_fn (move |ctx| {
+            p2p2.run(node.clone(), ctx).unwrap();
+            Ok(Async::Ready(()))
+        }));
+
+        let mut thread_pool = ThreadPool::new()?;
 
         // start the task that runs all network communication
-        self.thread_pool.spawn (Box::new(future::poll_fn (move |ctx| {
-            p2p.run(node.clone(), ctx).unwrap();
-            Ok(Async::Ready(()))
-        }))).unwrap();
-
-        let connector = self.keep_connected(peers, min_connections, nodns);
+        thread_pool.spawn (p2p_task).unwrap();
 
         // the task that keeps us connected
-        self.thread_pool.run(connector).unwrap();
+        // note that this call does not return
+        thread_pool.run(self.keep_connected(p2p, peers, min_connections, nodns)).unwrap();
+        Ok(())
     }
 
-    fn keep_connected(&self, peers: Vec<SocketAddr>, min_connections: usize, nodns: bool) -> Box<Future<Item=(), Error=Never> + Send> {
+    fn keep_connected(&self, p2p: Arc<P2P>, peers: Vec<SocketAddr>, min_connections: usize, nodns: bool) -> Box<Future<Item=(), Error=Never> + Send> {
 
-        let p2p = self.p2p.clone();
         let db = self.configdb.clone();
 
         // add initial peers if any
@@ -219,10 +234,10 @@ impl Constructor {
 
 
 /// create tables (if not already there) in the database
-fn create_tables(db: Arc<Mutex<ConfigDB>>) -> Result<u32, SPVError> {
+fn create_tables(db: Arc<Mutex<ConfigDB>>) -> Result<(), SPVError> {
     let mut db = db.lock().unwrap();
     let mut tx = db.transaction()?;
-    let birth = tx.create_tables()?;
+    tx.create_tables()?;
     tx.commit()?;
-    Ok(birth)
+    Ok(())
 }

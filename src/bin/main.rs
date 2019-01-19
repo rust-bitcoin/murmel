@@ -76,16 +76,14 @@ pub fn main() {
     }
     let mut spv;
     let server = true;
+    let listen = get_listeners();
     if let Some(path) = find_arg("db") {
-        spv = Constructor::new("/https://github.com/rust-bitcoin/rust-bitcoin-spv/".to_string(), network, Path::new(path.as_str()), server).unwrap();
+        spv = Constructor::new("/https://github.com/rust-bitcoin/rust-bitcoin-spv/".to_string(), network, Path::new(path.as_str()), server, listen).unwrap();
     }
     else {
-        spv = Constructor::new_in_memory("/https://github.com/rust-bitcoin/rust-bitcoin-spv/".to_string(), network, server).unwrap();
+        spv = Constructor::new_in_memory("/https://github.com/rust-bitcoin/rust-bitcoin-spv/".to_string(), network, server, listen).unwrap();
     }
-    for bind in get_listeners() {
-        spv.listen(&bind).expect(format!("can not listen to {:?}", bind).as_str());
-    }
-    spv.start(peers, connections, find_opt("nodns"));
+    spv.run(peers, connections, find_opt("nodns")).expect("can not start SPV");
 }
 
 use std::str::FromStr;
