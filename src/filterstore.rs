@@ -101,12 +101,5 @@ impl<'a> FilterStore<'a> {
     pub fn store(&mut self, filter: &StoredFilter) -> Result<PRef, SPVError> {
         Ok(self.hammersbald.put_hash_keyed(filter)?)
     }
-
-    pub fn fetch(&self, id: &Sha256dHash) -> Result<Option<StoredFilter>, SPVError> {
-        if let Some((_, stored)) = self.hammersbald.get_hash_keyed::<StoredFilter>(id)? {
-            return Ok(Some(stored))
-        }
-        Ok(None)
-    }
 }
 

@@ -87,16 +87,12 @@ impl BroadcasterInterface for Broadcaster {
 pub struct Node {
     // peer map shared with P2P and the LightningConnector's broadcaster
     peers: Arc<RwLock<PeerMap>>,
-    // type of the connected network
-    network: Network,
     // the configuration db
     db: Arc<Mutex<ConfigDB>>,
     // the blockchain db
     chaindb: RwLock<ChainDB>,
     // connector serving Layer 2 network
-    connector: Arc<LightningConnector>,
-    // download queue
-    download_queue: Mutex<VecDeque<Sha256dHash>>
+    connector: Arc<LightningConnector>
 }
 
 impl Node {
@@ -105,11 +101,9 @@ impl Node {
         let connector = LightningConnector::new(network,Arc::new(Broadcaster { peers: peers.clone() }));
         Node {
                 peers,
-                network,
                 db,
                 chaindb: RwLock::new(chaindb),
-                connector: Arc::new(connector),
-                download_queue: Mutex::new(VecDeque::new()) }
+                connector: Arc::new(connector) }
     }
 
     /// initialize node
@@ -126,10 +120,10 @@ impl Node {
         Ok(ProcessResult::Ack)
     }
 
-    fn download_blocks(&self, pid: PeerId, blocks: Vec<Sha256dHash>) -> Result<bool, SPVError> {
+    fn download_blocks(&self, _pid: PeerId, _blocks: Vec<Sha256dHash>) -> Result<bool, SPVError> {
         // TODO decide if we need it (BIP158)
-        let inventory = blocks.iter().map(|b| {Inventory{inv_type: InvType::WitnessBlock, hash: b.clone()}}).collect();
-        self.send(pid, &NetworkMessage::GetData(inventory))?;
+        // let inventory = blocks.iter().map(|b| {Inventory{inv_type: InvType::WitnessBlock, hash: b.clone()}}).collect();
+        // self.send(pid, &NetworkMessage::GetData(inventory))?;
         Ok(true)
     }
 
@@ -245,21 +239,7 @@ impl Node {
     }
 
     // process an incoming block
-    fn block(&self, block: &Block, peer: PeerId) -> Result<ProcessResult, SPVError> {
-        {
-            debug!("store block {}", block.bitcoin_hash());
-            let mut chaindb = self.chaindb.write().unwrap();
-            chaindb.extend_blocks_utxo_filters(block)?;
-            {
-                let mut dq = self.download_queue.lock().unwrap();
-                if let Some(expected) = dq.pop_front() {
-                    if expected != block.bitcoin_hash() {
-                        dq.push_front(expected);
-                    }
-                }
-            }
-        }
-        //self.get_headers(peer)?;
+    fn block(&self, _block: &Block, _peer: PeerId) -> Result<ProcessResult, SPVError> {
         Ok(ProcessResult::Ack)
     }
 
@@ -310,14 +290,6 @@ impl Node {
         }
         tx.commit()?;
         Ok(result)
-    }
-
-    fn next_block(&self) -> Option<Sha256dHash> {
-        let dq = self.download_queue.lock().expect("download queue posined");
-        if let Some(f) = dq.front() {
-            return Some(f.clone());
-        }
-        None
     }
 
     /// get headers this peer is ahead of us

@@ -56,7 +56,7 @@ impl Constructor {
     /// then serve the returned ChainWatchInterface
     pub fn new(user_agent :String, network: Network, path: &Path, server: bool) -> Result<Constructor, SPVError> {
         let thread_pool = ThreadPool::new()?;
-        let configdb = Arc::new(Mutex::new(ConfigDB::new(path, network)?));
+        let configdb = Arc::new(Mutex::new(ConfigDB::new(path)?));
         let chaindb = ChainDB::new(path, network,server)?;
         let _birth = create_tables(configdb.clone())?;
         let peers = Arc::new(RwLock::new(PeerMap::new()));
@@ -73,7 +73,7 @@ impl Constructor {
     /// then serve the returned ChainWatchInterface
     pub fn new_in_memory(user_agent :String, network: Network, server: bool) -> Result<Constructor, SPVError> {
         let thread_pool = ThreadPool::new()?;
-        let db = Arc::new(Mutex::new(ConfigDB::mem(network)?));
+        let db = Arc::new(Mutex::new(ConfigDB::mem()?));
         let chaindb = ChainDB::mem( network,server)?;
         let _birth = create_tables(db.clone())?;
         let peers = Arc::new(RwLock::new(PeerMap::new()));

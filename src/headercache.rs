@@ -289,10 +289,12 @@ impl HeaderCache {
     }
 
     /// iterate from id to genesis
+    #[allow(unused)]
     pub fn iter_to_genesis<'a> (&'a self, id: &Sha256dHash) -> HeaderIterator<'a> {
         return HeaderIterator::new(self, id)
     }
 
+    #[allow(unused)]
     pub fn iter_to_tip<'a> (&'a self, id: &Sha256dHash) -> TrunkIterator<'a> {
         return TrunkIterator::new(self, id)
     }

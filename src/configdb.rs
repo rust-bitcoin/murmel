@@ -20,7 +20,6 @@
 //!
 
 
-use bitcoin::network::constants::Network;
 use bitcoin::network::address::Address;
 use error::SPVError;
 use rusqlite;
@@ -38,8 +37,7 @@ use rand;
 use rand::RngCore;
 
 pub struct ConfigDB {
-    conn: Connection,
-    network: Network
+    conn: Connection
 }
 
 pub struct ConfigTX<'a> {
@@ -49,16 +47,16 @@ pub struct ConfigTX<'a> {
 
 impl ConfigDB {
     /// Create an in-memory database instance
-    pub fn mem(network: Network) -> Result<ConfigDB, SPVError> {
+    pub fn mem() -> Result<ConfigDB, SPVError> {
         info!("working with memory database");
-        Ok(ConfigDB { conn: Connection::open_in_memory()?, network})
+        Ok(ConfigDB { conn: Connection::open_in_memory()?})
     }
 
     /// Create or open a persistent database instance identified by the path
-    pub fn new(path: &Path, network: Network) -> Result<ConfigDB, SPVError> {
+    pub fn new(path: &Path) -> Result<ConfigDB, SPVError> {
         let db = ConfigDB {
             conn: Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE |
-                OpenFlags::SQLITE_OPEN_CREATE | OpenFlags::SQLITE_OPEN_FULL_MUTEX)?, network };
+                OpenFlags::SQLITE_OPEN_CREATE | OpenFlags::SQLITE_OPEN_FULL_MUTEX)? };
         info!("database {:?} opened", path);
         Ok(db)
     }
@@ -153,6 +151,7 @@ impl<'a> ConfigTX<'a> {
         Ok(())
     }
 
+    #[allow(unused)]
     pub fn ban (&mut self, addr: &SocketAddr) -> Result<i32, SPVError> {
         self.dirty.set(true);
         let address = Address::new (addr, 0);
@@ -164,6 +163,7 @@ impl<'a> ConfigTX<'a> {
         Ok(self.tx.execute("update peers set banned_until = ? where address = ?", &[&banned_until, &s])?)
     }
 
+    #[allow(unused)]
     pub fn remove_peer (&mut self, addr: &SocketAddr) -> Result<i32, SPVError> {
         self.dirty.set(true);
         let address = Address::new (addr, 0);

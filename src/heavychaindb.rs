@@ -93,6 +93,7 @@ impl HeavyChainDB {
     }
 
     /// Shutdown hammersbald
+    #[allow(unused)]
     pub fn shutdown (&mut self) {
         self.blocks_and_utxos.shutdown();
     }

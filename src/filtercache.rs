@@ -39,6 +39,7 @@ pub struct FilterCache {
 
 const EXPECTED_CHAIN_LENGTH: usize = 600000;
 
+#[allow(unused)]
 impl FilterCache {
     pub fn new() -> FilterCache {
         FilterCache { filters: HashMap::with_capacity(EXPECTED_CHAIN_LENGTH),

@@ -286,7 +286,7 @@ impl P2P {
         }
     }
 
-    fn event_processor (&self, node: Arc<Node>, event: Event, pid: PeerId, iobuf: &mut [u8], ctx: &mut Context) -> Result<(), SPVError> {
+    fn event_processor (&self, node: Arc<Node>, event: Event, pid: PeerId, iobuf: &mut [u8]) -> Result<(), SPVError> {
         let readiness = UnixReady::from(event.readiness());
         // check for error first
         if readiness.is_hup() || readiness.is_error() {
@@ -517,7 +517,7 @@ impl P2P {
                 else {
                     // construct the id of the peer the event concerns
                     let pid = PeerId { token: event.token() };
-                    if let Err(error) = self.event_processor(node.clone(), event, pid, iobuf.as_mut_slice(), ctx) {
+                    if let Err(error) = self.event_processor(node.clone(), event, pid, iobuf.as_mut_slice()) {
                         use std::error::Error;
 
                         warn!("error {} peer={}", error.to_string(), pid);

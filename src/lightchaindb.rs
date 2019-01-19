@@ -90,6 +90,7 @@ impl LightChainDB {
         Ok(self.headers_and_filters.batch()?)
     }
 
+    #[allow(unused)]
     pub fn shutdown (&mut self) {
         self.headers_and_filters.shutdown();
     }
@@ -170,6 +171,7 @@ impl LightChainDB {
         self.headercache.locator_hashes()
     }
 
+    #[allow(unused)]
     pub fn add_filter_chain (&mut self, prev_block_id : &Sha256dHash, prev_filter_id: &Sha256dHash, filter_hashes: impl Iterator<Item=Sha256dHash>) ->
         Result<Option<(Sha256dHash, Sha256dHash)>, SPVError> {
         if let Some(prev_filter) = self.filtercache.get_block_filter(prev_filter_id) {
@@ -198,6 +200,7 @@ impl LightChainDB {
     }
 
     // update if matching stored filter_header chain
+    #[allow(unused)]
     pub fn update_filter (&mut self, block_id: &Sha256dHash, filter: Vec<u8>) -> Result<bool, SPVError> {
         if let Some(filter_header) = self.filtercache.get_block_filter(block_id) {
             let filter_hash = Sha256dHash::from_data(filter.as_slice());
