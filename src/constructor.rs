@@ -116,9 +116,9 @@ impl Constructor {
 
         node.init().unwrap();
 
-        let p2p = Arc::new(
+        let p2p =
             P2P::new(self.user_agent.clone(), self.network, 0,
-                     self.peers.clone(),  MAX_PROTOCOL_VERSION));
+                     self.peers.clone(),  MAX_PROTOCOL_VERSION).0;
 
         for addr in &self.listen {
             p2p.add_listener(addr)?;

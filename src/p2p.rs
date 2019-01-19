@@ -18,35 +18,47 @@
 //!
 //! This module establishes network connections and routes messages between the P2P network and this node
 //!
-
-use bitcoin::consensus::{Decodable, Encodable};
-use bitcoin::consensus::encode;
-use bitcoin::network::address::Address;
-use bitcoin::network::constants::Network;
-use bitcoin::network::message::NetworkMessage;
-use bitcoin::network::message::RawNetworkMessage;
-use bitcoin::network::message_network::VersionMessage;
 use error::SPVError;
-use futures::{Async, Future, FutureExt};
-use futures::future;
-use futures::task::Context;
-use futures::task::Waker;
-use mio::*;
-use mio::net::{TcpListener, TcpStream};
-use mio::unix::UnixReady;
 use dispatcher::{Dispatcher, ProcessResult};
+
+use bitcoin::{
+    consensus::{Decodable, Encodable, encode}
+};
+
+use bitcoin::network::{
+    address::Address,
+    constants::Network,
+    message::{NetworkMessage, RawNetworkMessage},
+    message_network::VersionMessage
+};
+
+use futures::{
+    Async, Future, FutureExt, future,
+    task::{Context, Waker}
+};
+
+use mio::{
+    Token, Poll, PollOpt, Ready, Events, Event,
+    net::{TcpListener, TcpStream},
+    unix::UnixReady
+};
+
 use rand::{RngCore, thread_rng};
-use std::cmp::{max, min};
-use std::collections::{HashMap, VecDeque};
-use std::collections::hash_map::Entry;
-use std::fmt;
-use std::io;
-use std::io::{Read, Write};
-use std::net::{Shutdown, SocketAddr};
-use std::sync::{Arc, mpsc, Mutex, RwLock};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
-use std::time::Duration;
+
+use std::{
+    cmp::{max, min},
+    collections::{HashMap, VecDeque, hash_map::Entry},
+    fmt,
+    io,
+    io::{Read, Write},
+    net::{SocketAddr, Shutdown},
+    sync::{Arc, mpsc, Mutex, RwLock,
+           atomic::{AtomicBool, AtomicUsize, Ordering}
+    },
+    time::{SystemTime, Duration, UNIX_EPOCH},
+    thread
+};
+
 
 const IO_BUFFER_SIZE:usize = 1024*1024;
 const EVENT_BUFFER_SIZE:usize = 1024;
@@ -73,6 +85,15 @@ pub struct PeerMessage {
     pub message: NetworkMessage
 }
 
+pub enum P2PControl {
+    Send(PeerId, NetworkMessage),
+    Ban(PeerId, u32),
+    Height(u32),
+    Bind(SocketAddr)
+}
+
+pub type P2PControlSender = Arc<Mutex<mpsc::Sender<P2PControl>>>;
+pub type P2PControlReceiver = mpsc::Receiver<P2PControl>;
 
 #[derive(Clone)]
 pub enum PeerSource {
@@ -115,15 +136,18 @@ pub struct P2P {
     // server
     listener: Arc<Mutex<HashMap<Token, Arc<TcpListener>>>>,
     // this node's maximum protocol version
-    max_protocol_version: u32,
+    max_protocol_version: u32
 }
 
 impl P2P {
     /// create a new P2P network controller
-    pub fn new(user_agent: String, network: Network, height: u32, peers: Arc<RwLock<PeerMap>>, max_protocol_version: u32) -> P2P {
+    pub fn new(user_agent: String, network: Network, height: u32, peers: Arc<RwLock<PeerMap>>, max_protocol_version: u32) -> (Arc<P2P>, P2PControlSender) {
+        let (sender, receiver) = mpsc::channel();
+
         let mut rng =  thread_rng();
         let magic = network.magic();
-        P2P {
+
+        let p2p = Arc::new(P2P {
             network: network,
             magic,
             nonce: rng.next_u64(),
@@ -135,7 +159,38 @@ impl P2P {
             waker: Arc::new(Mutex::new(HashMap::new())),
             listener: Arc::new(Mutex::new(HashMap::new())),
             max_protocol_version: max_protocol_version
+        });
+
+        let p2p2 = p2p.clone();
+
+        thread::spawn(move || p2p2.control_loop(receiver));
+
+        (p2p, Arc::new(Mutex::new(sender)))
+    }
+
+    fn control_loop (&self, receiver: P2PControlReceiver) {
+        while let Ok(control) = receiver.recv() {
+            match control {
+                P2PControl::Ban(peer_id, score) => {
+                    // TODO
+                },
+                P2PControl::Height(height) => {
+                    self.height.store (height as usize, Ordering::Relaxed);
+                }
+                P2PControl::Bind(addr) => {
+                    match self.add_listener(&addr) {
+                        Ok(()) => info!("listen to {}", addr),
+                        Err(err) => info!("failed to listen to {} with {}", addr, err)
+                    }
+                },
+                P2PControl::Send(peer_id, message) => {
+                    if let Some (peer) = self.peers.read().unwrap().get (&peer_id) {
+                        peer.lock().unwrap().send(&message).expect("could not send to peer");
+                    }
+                }
+            }
         }
+        panic!("P2P Control loop failed");
     }
 
     pub fn add_listener (&self, bind: &SocketAddr) -> Result<(), io::Error> {
