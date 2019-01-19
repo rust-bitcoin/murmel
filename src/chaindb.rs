@@ -112,22 +112,32 @@ impl ChainDB {
     pub fn extend_blocks (&mut self, block: &Block) -> Result<Option<PRef>, SPVError> {
         if let Some(ref mut heavy) = self.heavy {
             let ref block_id = block.bitcoin_hash();
+
+            // do not store if not on trunk
             if !self.light.is_on_trunk(block_id) {
                 return Ok(None);
             }
-            let mut blocks = heavy.blocks();
-            if let Some(blocks_tip) = blocks.fetch_tip()? {
+            // do not store if already stored
+            if let Some((sref, _)) = heavy.blocks().fetch(&block.bitcoin_hash())? {
+                return Ok(Some(sref));
+            }
+
+            if let Some(blocks_tip) = heavy.blocks().fetch_tip()? {
+                // header must be known in advance
                 if let Some(header) = self.light.get_header(block_id) {
+                    // store
+                    let sref = heavy.blocks().store(block)?;
+                    // move tip if next on trunk
                     if header.header.prev_blockhash == blocks_tip {
-                        let sref = blocks.store(block)?;
-                        blocks.store_tip(block_id)?;
-                        return Ok(Some(sref));
+                        heavy.blocks().store_tip(block_id)?;
                     }
+                    return Ok(Some(sref));
                 }
             }
             else {
-                let sref = blocks.store(block)?;
-                blocks.store_tip(block_id)?;
+                // init empty db with genesis block
+                let sref = heavy.blocks().store(block)?;
+                heavy.blocks().store_tip(block_id)?;
                 return Ok(Some(sref));
             }
         }

@@ -75,9 +75,9 @@ impl<'a> BlockStore<'a> {
         Ok(self.hammersbald.put_keyed_encodable(block.bitcoin_hash().as_bytes(), &stored)?)
     }
 
-    pub fn fetch(&self, id: &Sha256dHash) -> Result<Option<StoredBlock>, SPVError> {
-        if let Some((_, stored)) = self.hammersbald.get_keyed_decodable::<StoredBlock>(id.as_bytes())? {
-            return Ok(Some(stored))
+    pub fn fetch(&self, id: &Sha256dHash) -> Result<Option<(PRef, StoredBlock)>, SPVError> {
+        if let Some((pref, stored)) = self.hammersbald.get_keyed_decodable::<StoredBlock>(id.as_bytes())? {
+            return Ok(Some((pref, stored)))
         }
         Ok(None)
     }
