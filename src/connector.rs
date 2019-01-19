@@ -26,7 +26,7 @@ use bitcoin::util::hash::Sha256dHash;
 use lightning::chain::chaininterface::{ChainListener,ChainWatchInterface, ChainWatchInterfaceUtil};
 use lightning::chain::chaininterface::ChainError;
 use lightning::util::logger::{Logger, Record, Level};
-use node::Broadcaster;
+use dispatcher::Broadcaster;
 use std::sync::{Weak,Arc};
 
 struct LightningLogger{

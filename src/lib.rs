@@ -49,7 +49,7 @@ mod lightchaindb;
 mod heavychaindb;
 mod chaindb;
 mod configdb;
-mod node;
+mod dispatcher;
 mod blockdownloader;
 mod error;
 #[allow(dead_code)]

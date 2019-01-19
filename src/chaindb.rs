@@ -34,7 +34,11 @@ use bitcoin::{
     util::hash::Sha256dHash,
 };
 
+use std::sync::{Arc, RwLock};
+
 use hammersbald::PRef;
+
+pub type SharedChainDB = Arc<RwLock<ChainDB>>;
 
 pub struct ChainDB {
     light: LightChainDB,

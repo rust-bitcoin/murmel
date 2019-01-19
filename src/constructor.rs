@@ -19,21 +19,24 @@
 //! Assembles modules of this library to a complete SPV service
 //!
 
-use configdb::ConfigDB;
+use configdb::{ConfigDB, SharedConfigDB};
 use error::SPVError;
-use node::Node;
+use dispatcher::Dispatcher;
 use blockdownloader::BlockDownloader;
 use p2p::P2P;
-use chaindb::ChainDB;
+use chaindb::{ChainDB, SharedChainDB};
 use dns::dns_seed;
-use p2p::{PeerMap, PeerSource};
+use p2p::{SharedPeers, PeerSource, PeerMap, PeerMessageSender};
 
-use bitcoin::network::constants::Network;
+use bitcoin::network::{
+    message::NetworkMessage,
+    constants::Network
+};
 
 use std::{
     net::SocketAddr,
     path::Path,
-    sync::{Arc, Mutex, RwLock},
+    sync::{Arc, Mutex, RwLock, mpsc},
     collections::HashSet,
     thread
 };
@@ -51,9 +54,9 @@ const MAX_PROTOCOL_VERSION :u32 = 70001;
 pub struct Constructor {
     network: Network,
     user_agent: String,
-    configdb: Arc<Mutex<ConfigDB>>,
-    chaindb: Arc<RwLock<ChainDB>>,
-    peers: Arc<RwLock<PeerMap>>,
+    configdb: SharedConfigDB,
+    chaindb: SharedChainDB,
+    peers: SharedPeers,
     listen: Vec<SocketAddr>
 }
 
@@ -87,6 +90,17 @@ impl Constructor {
         Ok(Constructor { network, user_agent, peers, configdb, chaindb, listen })
     }
 
+    /// Start the thread that downloads blocks
+    pub fn start_downloader (&mut self) -> PeerMessageSender {
+        let (sender, receiver) = mpsc::channel();
+
+        let mut blockdownloader = Box::new(
+            BlockDownloader::new(self.configdb.clone(), self.chaindb.clone(), self.peers.clone(), receiver));
+
+        thread::spawn(move || {blockdownloader.run()});
+        Arc::new(Mutex::new(sender))
+    }
+
 	/// Run the SPV stack. This should be called AFTER registering listener of the ChainWatchInterface,
 	/// so they are called as the SPV stack catches up with the blockchain
 	/// * peers - connect to these peers at startup (might be empty)
@@ -94,16 +108,17 @@ impl Constructor {
 	/// from those discovered in earlier runs
     pub fn run(&mut self, peers: Vec<SocketAddr>, min_connections: usize, nodns: bool) -> Result<(), SPVError>{
 
-        let node = Arc::new(Node::new(self.network, self.configdb.clone(), self.chaindb.clone(), self.peers.clone()));
+        let block_sender = self.start_downloader();
+
+        let node = Arc::new(
+            Dispatcher::new(self.network, self.configdb.clone(), self.chaindb.clone(),
+                            self.peers.clone(), block_sender));
 
         node.init().unwrap();
 
-        let mut blockdownloader = Box::new(BlockDownloader::new(self.configdb.clone(), self.chaindb.clone()));
-
-        thread::spawn(move || {blockdownloader.start()});
-
-
-        let p2p = Arc::new(P2P::new(self.user_agent.clone(), self.network, 0, self.peers.clone(),  MAX_PROTOCOL_VERSION));
+        let p2p = Arc::new(
+            P2P::new(self.user_agent.clone(), self.network, 0,
+                     self.peers.clone(),  MAX_PROTOCOL_VERSION));
 
         for addr in &self.listen {
             p2p.add_listener(addr)?;

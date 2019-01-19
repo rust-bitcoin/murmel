@@ -14,18 +14,15 @@
 // limitations under the License.
 //
 //!
-//! # Bitcoin SPV node
-//!
-//! Implements a node that reacts to network messages and serves higher application
-//! layer with a fresh view of the Bitcoin blockchain.
+//! # Messsage dispatcher
 //!
 
 
 use connector::LightningConnector;
-use configdb::ConfigDB;
-use chaindb::ChainDB;
+use configdb::SharedConfigDB;
+use chaindb::SharedChainDB;
 use error::SPVError;
-use p2p::{PeerId, PeerMap};
+use p2p::{PeerId, SharedPeers, PeerMessageSender};
 
 use lightning::chain::chaininterface::BroadcasterInterface;
 
@@ -45,7 +42,7 @@ use bitcoin::{
 };
 
 use std::{
-    sync::{Mutex, RwLock, Arc},
+    sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
     collections::VecDeque,
 };
@@ -67,7 +64,7 @@ pub enum ProcessResult {
 /// a helper class to implement LightningConnector
 pub struct Broadcaster {
     // the peer map shared with node and P2P
-    peers: Arc<RwLock<PeerMap>>
+    peers: SharedPeers
 }
 
 impl BroadcasterInterface for Broadcaster {
@@ -82,26 +79,29 @@ impl BroadcasterInterface for Broadcaster {
 }
 
 /// The local node processing incoming messages
-pub struct Node {
+pub struct Dispatcher {
     // peer map shared with P2P and the LightningConnector's broadcaster
-    peers: Arc<RwLock<PeerMap>>,
+    peers: SharedPeers,
     // the configuration db
-    configdb: Arc<Mutex<ConfigDB>>,
+    configdb: SharedConfigDB,
     // the blockchain db
-    chaindb: Arc<RwLock<ChainDB>>,
+    chaindb: SharedChainDB,
     // connector serving Layer 2 network
     connector: Arc<LightningConnector>,
+    // block downloader sender
+    block_downloader: PeerMessageSender
 }
 
-impl Node {
+impl Dispatcher {
     /// Create a new local node
-    pub fn new(network: Network, configdb: Arc<Mutex<ConfigDB>>, chaindb: Arc<RwLock<ChainDB>>, peers: Arc<RwLock<PeerMap>>) -> Node {
+    pub fn new(network: Network, configdb: SharedConfigDB, chaindb: SharedChainDB, peers: SharedPeers, block_downloader: PeerMessageSender) -> Dispatcher {
         let connector = LightningConnector::new(network, Arc::new(Broadcaster { peers: peers.clone() }));
-        Node {
+        Dispatcher {
             peers,
             configdb,
             chaindb,
             connector: Arc::new(connector),
+            block_downloader
         }
     }
 

@@ -34,7 +34,7 @@ use futures::task::Waker;
 use mio::*;
 use mio::net::{TcpListener, TcpStream};
 use mio::unix::UnixReady;
-use node::{Node, ProcessResult};
+use dispatcher::{Dispatcher, ProcessResult};
 use rand::{RngCore, thread_rng};
 use std::cmp::{max, min};
 use std::collections::{HashMap, VecDeque};
@@ -68,6 +68,12 @@ impl fmt::Display for PeerId {
     }
 }
 
+pub struct PeerMessage {
+    pub peer_id: PeerId,
+    pub message: NetworkMessage
+}
+
+
 #[derive(Clone)]
 pub enum PeerSource {
     Outgoing(SocketAddr),
@@ -80,6 +86,9 @@ pub enum PeerSource {
 /// Peers are mutex protected as sends
 /// to them may be coming from different peers
 pub type PeerMap = HashMap<PeerId, Mutex<Peer>>;
+pub type SharedPeers = Arc<RwLock<PeerMap>>;
+pub type PeerMessageSender = Arc<Mutex<mpsc::Sender<PeerMessage>>>;
+pub type PeerMessageReceiver = mpsc::Receiver<PeerMessage>;
 
 /// The P2P network layer
 pub struct P2P {
@@ -286,7 +295,7 @@ impl P2P {
         }
     }
 
-    fn event_processor (&self, node: Arc<Node>, event: Event, pid: PeerId, iobuf: &mut [u8]) -> Result<(), SPVError> {
+    fn event_processor (&self, node: Arc<Dispatcher>, event: Event, pid: PeerId, iobuf: &mut [u8]) -> Result<(), SPVError> {
         let readiness = UnixReady::from(event.readiness());
         // check for error first
         if readiness.is_hup() || readiness.is_error() {
@@ -493,7 +502,7 @@ impl P2P {
     /// run the message dispatcher loop
     /// this method does not return unless there is an error obtaining network events
     /// run in its own thread, which will process all network events
-    pub fn run(&self, node: Arc<Node>, ctx: &mut Context) -> Result<(), io::Error>{
+    pub fn run(&self, node: Arc<Dispatcher>, ctx: &mut Context) -> Result<(), io::Error>{
         trace!("start mio event loop");
         loop {
             // events buffer

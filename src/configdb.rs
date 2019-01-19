@@ -36,6 +36,10 @@ use std::{
 use rand;
 use rand::RngCore;
 
+use std::sync::{Arc, Mutex};
+
+pub type SharedConfigDB = Arc<Mutex<ConfigDB>>;
+
 pub struct ConfigDB {
     conn: Connection
 }

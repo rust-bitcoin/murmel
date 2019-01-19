@@ -17,23 +17,28 @@
 //! # Download Blocks
 //!
 
-use configdb::ConfigDB;
-use chaindb::ChainDB;
+use configdb::SharedConfigDB;
+use chaindb::SharedChainDB;
+use p2p::{SharedPeers, PeerMessageReceiver};
 
-use std::sync::{Arc,Mutex,RwLock};
+use bitcoin::{
+    blockdata::block::Block
+};
 
 #[allow(unused)]
 pub struct BlockDownloader {
-    configdb: Arc<Mutex<ConfigDB>>,
-    chaindb: Arc<RwLock<ChainDB>>
+    configdb: SharedConfigDB,
+    chaindb: SharedChainDB,
+    peers: SharedPeers,
+    messages: PeerMessageReceiver
 }
 
 impl BlockDownloader {
-    pub fn new (configdb: Arc<Mutex<ConfigDB>>, chaindb: Arc<RwLock<ChainDB>>) -> BlockDownloader {
-        BlockDownloader{ configdb, chaindb}
+    pub fn new (configdb: SharedConfigDB, chaindb: SharedChainDB, peers: SharedPeers, messages: PeerMessageReceiver) -> BlockDownloader {
+        BlockDownloader{ configdb, chaindb, peers, messages }
     }
 
-    pub fn start (&mut self) {
+    pub fn run(&mut self) {
 
     }
 }
