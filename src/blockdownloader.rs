@@ -19,26 +19,86 @@
 
 use configdb::SharedConfigDB;
 use chaindb::SharedChainDB;
-use p2p::{PeerMessageReceiver, P2PControlSender};
+use p2p::{PeerMessageReceiver, P2PControlSender, PeerId, PeerMessage, PeerMessageSender};
 
 use bitcoin::{
-    blockdata::block::Block
+    BitcoinHash,
+    blockdata::block::Block,
+    network::message::NetworkMessage,
+    util::hash::Sha256dHash
 };
 
-#[allow(unused)]
+use rand::{RngCore, thread_rng};
+
+use std::{
+    thread,
+    time::Duration,
+    collections::HashMap,
+    sync::{Arc, mpsc},
+};
+
 pub struct BlockDownloader {
-    configdb: SharedConfigDB,
     chaindb: SharedChainDB,
     p2p: P2PControlSender,
-    messages: PeerMessageReceiver
+    tasks: HashMap<Arc<Sha256dHash>, PeerId>,
+    peers: HashMap<PeerId, Option<Vec<Arc<Sha256dHash>>>>
 }
 
 impl BlockDownloader {
-    pub fn new (configdb: SharedConfigDB, chaindb: SharedChainDB, p2p: P2PControlSender, messages: PeerMessageReceiver) -> BlockDownloader {
-        BlockDownloader{ configdb, chaindb, p2p, messages }
+    pub fn new(chaindb: SharedChainDB, p2p: P2PControlSender) -> PeerMessageSender {
+        let (sender, receiver) = mpsc::channel();
+
+        let mut blockdownloader = BlockDownloader { chaindb, p2p, tasks: HashMap::new(), peers: HashMap::new() };
+
+        thread::spawn(move || { blockdownloader.run(receiver) });
+
+        PeerMessageSender::new(sender)
     }
 
-    pub fn run(&mut self) {
+    fn run(&mut self, receiver: PeerMessageReceiver) {
+        loop {
+            while let Ok(msg) = receiver.recv_timeout(Duration::from_millis(1000)) {
+                match msg {
+                    PeerMessage::Connected(pid) => { self.peers.insert(pid, None); },
+                    PeerMessage::Disconnected(pid) => { self.peers.remove(&pid); },
+                    PeerMessage::Message(pid, msg) => {
+                        match msg {
+                            NetworkMessage::Block(block) => {
+                                self.block(&block);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            if self.peers.len() > 0 {
+                let mut rng = thread_rng();
 
+                let chaindb = self.chaindb.read().unwrap();
+                if let Some(tip) = chaindb.tip() {
+                    let mut h = tip.bitcoin_hash();
+                    while let Some(header) = chaindb.get_header(&h) {
+                        if self.tasks.get(&h).is_none() && !chaindb.has_block(&h).expect(format!("can not read block {}", h).as_str()) {
+                            let peer = self.peers.keys().collect::<Vec<_>>()[rng.next_u32() as usize % self.peers.len()].clone();
+                            if let Some(assignments) = self.peers.entry(peer).or_insert(Some(Vec::new())) {
+                                assignments.push(Arc::new(h));
+                            }
+                        }
+                        h = header.header.prev_blockhash;
+                        if h == Sha256dHash::default() {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn block(&mut self, block: &Block) {
+        let mut chaindb = self.chaindb.write().unwrap();
+        debug!("storing block {}", block.bitcoin_hash());
+        if let Err(e) = chaindb.store_block(block) {
+            error!("can not store block {}: {}", block.bitcoin_hash(), e);
+        }
     }
 }

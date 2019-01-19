@@ -80,7 +80,7 @@ impl Dispatcher {
     pub fn new(network: Network, configdb: SharedConfigDB, chaindb: SharedChainDB, p2p: P2PControlSender, incoming: PeerMessageReceiver) -> Arc<Dispatcher> {
         let connector = LightningConnector::new(network, Arc::new(Broadcaster { p2p: p2p.clone() }));
 
-        let block_downloader = Self::start_block_downloader(configdb.clone(), chaindb.clone(), p2p.clone());
+        let block_downloader = BlockDownloader::new(chaindb.clone(), p2p.clone());
 
         let dispatcher = Arc::new(Dispatcher {
             p2p,
@@ -123,17 +123,6 @@ impl Dispatcher {
     pub fn init(&self) -> Result<(), SPVError> {
         self.chaindb.write().unwrap().init()?;
         Ok(())
-    }
-
-    /// Start the thread that downloads blocks
-    pub fn start_block_downloader(configdb: SharedConfigDB, chaindb: SharedChainDB, p2p: P2PControlSender) -> PeerMessageSender {
-        let (sender, receiver) = mpsc::channel();
-
-        let mut blockdownloader = Box::new(
-            BlockDownloader::new(configdb, chaindb, p2p, receiver));
-
-        thread::spawn(move || {blockdownloader.run()});
-        PeerMessageSender::new(sender)
     }
 
     /// called from dispatcher whenever a new peer is connected (after handshake is successful)
@@ -205,9 +194,7 @@ impl Dispatcher {
 
                                 if let Some(unwinds) = unwinds {
                                     for h in &unwinds {
-                                        if chaindb.unwind_tip(h)? {
-                                            debug!("unwind header {}", h);
-                                        }
+                                        // TODO unwind utxo
                                     }
                                     disconnected_headers.extend(unwinds.iter()
                                         .map(|h| chaindb.get_header(h).unwrap().header));

@@ -14,7 +14,7 @@
 // limitations under the License.
 //
 //!
-//! # Dispatcher from network to node and back
+//! # P2P network communication
 //!
 //! This module establishes network connections and routes messages between the P2P network and this node
 //!

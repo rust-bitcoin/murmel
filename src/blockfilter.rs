@@ -21,8 +21,8 @@
 //! that minimizes filter size by using Golomb-Rice coding for compression.
 //!
 
-use utxostore::UTXOAccessor;
 use error::SPVError;
+use heavychaindb::UTXOAccessor;
 
 use bitcoin;
 use bitcoin::blockdata::block::Block;

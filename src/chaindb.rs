@@ -18,11 +18,10 @@
 //!
 
 use lightchaindb::LightChainDB;
-use heavychaindb::HeavyChainDB;
+use heavychaindb::{HeavyChainDB, DBUTXOAccessor};
 use error::SPVError;
 use blockfilter::BlockFilter;
 use headerstore::StoredHeader;
-use utxostore::DBUTXOAccessor;
 
 use bitcoin::{
     BitcoinHash,
@@ -76,15 +75,6 @@ impl ChainDB {
 
     pub fn init (&mut self) -> Result<(), SPVError> {
         self.light.init()?;
-        if self.heavy.is_some() {
-            let genesis = genesis_block(self.network);
-            if let Some(tip) = self.light.header_tip() {
-                if genesis.header.bitcoin_hash() == tip.bitcoin_hash() {
-                    self.extend_blocks_utxo_filters(&genesis)?;
-                    info!("Initialized with genesis block.");
-                }
-            }
-        }
         Ok(())
     }
 
@@ -112,83 +102,35 @@ impl ChainDB {
         self.light.get_header(id)
     }
 
-    // store block if extending trunk
-    pub fn extend_blocks (&mut self, block: &Block) -> Result<Option<PRef>, SPVError> {
+    pub fn has_block(&self, id: &Sha256dHash) -> Result<bool, SPVError> {
+        if let Some(header) = self.get_header(id) {
+            if let Some(ref heavy) = self.heavy {
+                return Ok(heavy.fetch_block(id)?.is_some())
+            }
+        }
+        Ok(false)
+    }
+
+    pub fn store_block(&mut self, block: &Block) -> Result<(), SPVError> {
         if let Some(ref mut heavy) = self.heavy {
-            let ref block_id = block.bitcoin_hash();
-
-            // do not store if not on trunk
-            if !self.light.is_on_trunk(block_id) {
-                return Ok(None);
-            }
-            // do not store if already stored
-            if let Some((sref, _)) = heavy.blocks().fetch(&block.bitcoin_hash())? {
-                return Ok(Some(sref));
-            }
-
-            if let Some(blocks_tip) = heavy.blocks().fetch_tip()? {
-                // header must be known in advance
-                if let Some(header) = self.light.get_header(block_id) {
-                    // store
-                    let sref = heavy.blocks().store(block)?;
-                    // move tip if next on trunk
-                    if header.header.prev_blockhash == blocks_tip {
-                        heavy.blocks().store_tip(block_id)?;
-                    }
-                    return Ok(Some(sref));
-                }
-            }
-            else {
-                // init empty db with genesis block
-                let sref = heavy.blocks().store(block)?;
-                heavy.blocks().store_tip(block_id)?;
-                return Ok(Some(sref));
-            }
+            heavy.store_block(block)?;
         }
-        else {
-            panic!("configuration error: no heavy chain db");
-        }
-        Ok(None)
+        Ok(())
     }
 
     // extend UTXO store
     fn extend_utxo (&mut self, block_ref: PRef) -> Result<(), SPVError> {
         if let Some(ref mut heavy) = self.heavy {
-            let mut utxos = heavy.utxos();
-            utxos.apply_block(block_ref)?;
+            let mut utxos = heavy.apply_block(block_ref)?;
         }
         Ok(())
     }
 
     fn compute_filter(&mut self, block: &Block) -> Result<Option<BlockFilter>, SPVError> {
         if let Some(ref mut heavy) = self.heavy {
-            let utxos = heavy.utxos();
-            let accessor = DBUTXOAccessor::new(&utxos, block)?;
+            let accessor = DBUTXOAccessor::new(&heavy, block)?;
             return Ok(Some(BlockFilter::compute_wallet_filter(block, accessor)?));
         }
         Ok(None)
-    }
-
-    pub fn extend_blocks_utxo_filters (&mut self, block: &Block) -> Result<(), SPVError> {
-        if self.heavy.is_some() {
-            if let Some(block_ref) = self.extend_blocks(block)? {
-                if let Some(filter) = self.compute_filter(block)? {
-                    self.light.add_filter(&block.bitcoin_hash(), &block.header.prev_blockhash, filter.content)?;
-                }
-                self.extend_utxo(block_ref)?;
-            }
-        }
-        else {
-            panic!("configuration error: no heavy chain db");
-        }
-        Ok(())
-    }
-
-    pub fn unwind_tip (&mut self, tip: &Sha256dHash) -> Result<bool, SPVError> {
-        // light chain unwind is implicit through add_header
-        if let Some(ref mut heavy) = self.heavy {
-            return Ok(heavy.unwind_tip(tip)?);
-        }
-        Ok(false)
     }
 }
