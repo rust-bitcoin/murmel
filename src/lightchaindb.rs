@@ -20,10 +20,10 @@
 //!
 
 
-use headerstore::{HeaderStore, StoredHeader};
 use filterstore::{FilterStore, StoredFilter};
 use headercache::HeaderCache;
 use filtercache::FilterCache;
+use error::SPVError;
 
 use bitcoin::{
     BitcoinHash,
@@ -31,12 +31,16 @@ use bitcoin::{
         block::BlockHeader,
         constants::genesis_block
     },
+    consensus::{
+        encode,
+        encode::{Decodable, Encodable, Encoder, Decoder},
+    },
     util::hash::Sha256dHash,
     network::constants::Network,
 };
-use error::SPVError;
-
+use byteorder::{BigEndian, ByteOrder};
 use hammersbald::{
+    PRef,
     persistent,
     transient,
     BitcoinAdaptor,
@@ -49,8 +53,54 @@ use std::{
     collections::VecDeque
 };
 
+/// A header enriched with information about its position on the blockchain
+#[derive(Clone)]
+pub struct StoredHeader {
+    /// header
+    pub header: BlockHeader,
+    /// chain height
+    pub height: u32,
+    /// log2 of total work
+    pub log2work: f32,
+}
+
+// need to implement if put_hash_keyed and get_hash_keyed should be used
+impl BitcoinHash for StoredHeader {
+    fn bitcoin_hash(&self) -> Sha256dHash {
+        self.header.bitcoin_hash()
+    }
+}
+
+// implement encoder. tedious just repeat the consensus_encode lines
+impl<S: Encoder> Encodable<S> for StoredHeader {
+    fn consensus_encode(&self, s: &mut S) -> Result<(), encode::Error> {
+        self.header.consensus_encode(s)?;
+        self.height.consensus_encode(s)?;
+        let mut buf = [0u8; 4];
+        BigEndian::write_f32(&mut buf, self.log2work);
+        buf.consensus_encode(s)?;
+        Ok(())
+    }
+}
+
+// implement decoder. tedious just repeat the consensus_encode lines
+impl<D: Decoder> Decodable<D> for StoredHeader {
+    fn consensus_decode(d: &mut D) -> Result<StoredHeader, encode::Error> {
+        Ok(StoredHeader {
+            header: Decodable::consensus_decode(d)?,
+            height: Decodable::consensus_decode(d)?,
+            log2work: {
+                let buf: [u8; 4] = Decodable::consensus_decode(d)?;
+                BigEndian::read_f32(&buf)
+            },
+        })
+    }
+}
+
+const HEADER_TIP_KEY: &[u8] = &[0u8; 1];
+
 pub struct LightChainDB {
-    headers_and_filters: BitcoinAdaptor,
+    hammersbald: BitcoinAdaptor,
     headercache: HeaderCache,
     filtercache: FilterCache,
     network: Network
@@ -63,7 +113,7 @@ impl LightChainDB {
         let headers_and_filters = BitcoinAdaptor::new(transient(2)?);
         let headercache = HeaderCache::new(network);
         let filtercache = FilterCache::new();
-        Ok(LightChainDB { headers_and_filters, headercache: headercache, filtercache, network})
+        Ok(LightChainDB { hammersbald: headers_and_filters, headercache: headercache, filtercache, network })
     }
 
     /// Create or open a persistent database instance identified by the path
@@ -72,27 +122,23 @@ impl LightChainDB {
         let headers_and_filters = BitcoinAdaptor::new(persistent((basename.clone() + ".h").as_str(), 100, 2)?);
         let headercache = HeaderCache::new(network);
         let filtercache = FilterCache::new();
-        let db = LightChainDB { headers_and_filters, headercache: headercache, filtercache, network };
+        let db = LightChainDB { hammersbald: headers_and_filters, headercache: headercache, filtercache, network };
         info!("lightchain database {:?} opened", path);
         Ok(db)
     }
 
-    fn headers (&mut self) -> HeaderStore {
-        HeaderStore::new(&mut self.headers_and_filters)
-    }
-
     fn filters (&mut self) -> FilterStore {
-        FilterStore::new(&mut self.headers_and_filters)
+        FilterStore::new(&mut self.hammersbald)
     }
 
     // Batch writes to hammersbald
     pub fn batch (&mut self) -> Result<(), SPVError> {
-        Ok(self.headers_and_filters.batch()?)
+        Ok(self.hammersbald.batch()?)
     }
 
     #[allow(unused)]
     pub fn shutdown (&mut self) {
-        self.headers_and_filters.shutdown();
+        self.hammersbald.shutdown();
     }
 
     // read in header and filter chain to cache
@@ -104,11 +150,10 @@ impl LightChainDB {
     fn init_headers (&mut self) -> Result<(), SPVError> {
         let mut sl = VecDeque::new();
         {
-            let headers = self.headers();
-            if let Some(tip) = headers.fetch_tip()? {
+            if let Some(tip) = self.fetch_header_tip()? {
                 info!("reading stored header chain from tip {}", tip);
                 let mut h = tip;
-                while let Some(stored) = headers.fetch(&h)? {
+                while let Some(stored) = self.fetch_header(&h)? {
                     sl.push_front(stored.clone());
                     if stored.header.prev_blockhash != Sha256dHash::default() {
                         h = stored.header.prev_blockhash;
@@ -124,8 +169,8 @@ impl LightChainDB {
             info!("Initialized with genesis header.");
             let genesis = genesis_block(self.network).header;
             if let Some((stored, _, _)) = self.headercache.add_header (&genesis)? {
-                self.headers().store(&stored)?;
-                self.headers().store_tip(&stored.bitcoin_hash())?;
+                self.store_header(&stored)?;
+                self.store_header_tip(&stored.bitcoin_hash())?;
             }
         }
         else {
@@ -139,11 +184,10 @@ impl LightChainDB {
 
     pub fn add_header(&mut self, header: &BlockHeader) -> Result<Option<(StoredHeader, Option<Vec<Sha256dHash>>, Option<Vec<Sha256dHash>>)>, SPVError> {
         if let Some((stored, unwinds, forward)) = self.headercache.add_header(header)? {
-            let mut headers = self.headers();
-            headers.store(&stored)?;
+            self.store_header(&stored)?;
             if let Some(forward) = forward.clone() {
                 if forward.len () > 0 {
-                    headers.store_tip(forward.last().unwrap())?;
+                    self.store_header_tip(forward.last().unwrap())?;
                 }
             }
             return Ok(Some((stored, unwinds, forward)));
@@ -240,5 +284,28 @@ impl LightChainDB {
             }
         }
         Ok(false)
+    }
+
+    pub fn store_header(&mut self, stored: &StoredHeader) -> Result<PRef, SPVError> {
+        Ok(self.hammersbald.put_hash_keyed(stored)?)
+    }
+
+    pub fn store_header_tip(&mut self, tip: &Sha256dHash) -> Result<(), SPVError> {
+        self.hammersbald.put_keyed_encodable(HEADER_TIP_KEY, tip)?;
+        Ok(())
+    }
+
+    pub fn fetch_header_tip(&self) -> Result<Option<Sha256dHash>, SPVError> {
+        if let Some((_, h)) = self.hammersbald.get_keyed_decodable(HEADER_TIP_KEY)? {
+            return Ok(Some(h))
+        }
+        Ok(None)
+    }
+
+    pub fn fetch_header(&self, id: &Sha256dHash) -> Result<Option<StoredHeader>, SPVError> {
+        if let Some((_, stored)) = self.hammersbald.get_hash_keyed::<StoredHeader>(id)? {
+            return Ok(Some(stored));
+        }
+        Ok(None)
     }
 }

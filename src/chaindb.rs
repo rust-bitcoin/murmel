@@ -17,11 +17,10 @@
 //! # Blockchain DB for a node
 //!
 
-use lightchaindb::LightChainDB;
+use lightchaindb::{LightChainDB, StoredHeader};
 use heavychaindb::{HeavyChainDB, DBUTXOAccessor};
 use error::SPVError;
 use blockfilter::BlockFilter;
-use headerstore::StoredHeader;
 
 use bitcoin::{
     BitcoinHash,

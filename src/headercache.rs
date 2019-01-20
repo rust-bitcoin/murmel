@@ -27,7 +27,7 @@ use bitcoin::{
     },
 };
 use error::SPVError;
-use headerstore::StoredHeader;
+use lightchaindb::StoredHeader;
 use std::{
     collections::HashMap,
     sync::Arc,
