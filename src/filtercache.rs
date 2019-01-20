@@ -24,7 +24,7 @@ use bitcoin::{
     },
 };
 
-use filterstore::StoredFilter;
+use lightchaindb::StoredFilter;
 use std::{
     collections::HashMap,
     sync::Arc

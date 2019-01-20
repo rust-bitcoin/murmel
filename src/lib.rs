@@ -39,7 +39,6 @@ extern crate siphasher;
 extern crate futures;
 extern crate futures_timer;
 
-mod filterstore;
 mod headercache;
 mod filtercache;
 mod lightchaindb;

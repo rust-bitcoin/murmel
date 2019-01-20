@@ -20,7 +20,6 @@
 //!
 
 
-use filterstore::{FilterStore, StoredFilter};
 use headercache::HeaderCache;
 use filtercache::FilterCache;
 use error::SPVError;
@@ -99,6 +98,63 @@ impl<D: Decoder> Decodable<D> for StoredHeader {
 
 const HEADER_TIP_KEY: &[u8] = &[0u8; 1];
 
+/// Filter stored
+#[derive(Clone)]
+pub struct StoredFilter {
+    /// block
+    pub block_id: Sha256dHash,
+    /// hash of the filter content
+    pub filter_hash: Sha256dHash,
+    /// previous filter id
+    pub previous: Sha256dHash,
+    /// filter content
+    pub filter: Option<Vec<u8>>,
+}
+
+// need to implement if put_hash_keyed and get_hash_keyed should be used
+impl BitcoinHash for StoredFilter {
+    fn bitcoin_hash(&self) -> Sha256dHash {
+        let mut id_data = [0u8; 64];
+        id_data[0..32].copy_from_slice(&self.filter_hash.as_bytes()[..]);
+        id_data[0..32].copy_from_slice(&self.previous.as_bytes()[..]);
+        Sha256dHash::from_data(&id_data)
+    }
+}
+
+// implement encoder. tedious just repeat the consensus_encode lines
+impl<S: Encoder> Encodable<S> for StoredFilter {
+    fn consensus_encode(&self, s: &mut S) -> Result<(), encode::Error> {
+        self.block_id.consensus_encode(s)?;
+        self.filter_hash.consensus_encode(s)?;
+        self.previous.consensus_encode(s)?;
+        if let Some(ref filter) = self.filter {
+            filter.consensus_encode(s)?;
+        } else {
+            [0u8; 0].consensus_encode(s)?;
+        }
+        Ok(())
+    }
+}
+
+// implement decoder. tedious just repeat the consensus_encode lines
+impl<D: Decoder> Decodable<D> for StoredFilter {
+    fn consensus_decode(d: &mut D) -> Result<StoredFilter, encode::Error> {
+        Ok(StoredFilter {
+            block_id: Decodable::consensus_decode(d)?,
+            filter_hash: Decodable::consensus_decode(d)?,
+            previous: Decodable::consensus_decode(d)?,
+            filter: {
+                let f: Vec<u8> = Decodable::consensus_decode(d)?;
+                if f.len() == 0 {
+                    None
+                } else {
+                    Some(f)
+                }
+            },
+        })
+    }
+}
+
 pub struct LightChainDB {
     hammersbald: BitcoinAdaptor,
     headercache: HeaderCache,
@@ -125,10 +181,6 @@ impl LightChainDB {
         let db = LightChainDB { hammersbald: headers_and_filters, headercache: headercache, filtercache, network };
         info!("lightchain database {:?} opened", path);
         Ok(db)
-    }
-
-    fn filters (&mut self) -> FilterStore {
-        FilterStore::new(&mut self.hammersbald)
     }
 
     // Batch writes to hammersbald
@@ -234,7 +286,7 @@ impl LightChainDB {
                     filters.push(filter);
                 }
                 for filter in filters {
-                    self.filters().store(&filter)?;
+                    self.store_filter(&filter)?;
                     self.filtercache.add_filter(filter);
                 }
                 return Ok(Some((p_block, previous)))
@@ -255,7 +307,7 @@ impl LightChainDB {
             if filter_id == filter_header.bitcoin_hash() {
                 let stored = StoredFilter{block_id: *block_id, previous: filter_header.previous,
                     filter_hash, filter: Some(filter)};
-                self.filters().store(&stored)?;
+                self.store_filter(&stored)?;
                 self.filtercache.add_filter(stored);
                 return Ok(true);
             }
@@ -278,7 +330,7 @@ impl LightChainDB {
                     filter_hash,
                     filter: Some(filter)
                 };
-                self.filters().store(&stored)?;
+                self.store_filter(&stored)?;
                 self.filtercache.add_filter(stored);
                 return Ok(true);
             }
@@ -307,5 +359,9 @@ impl LightChainDB {
             return Ok(Some(stored));
         }
         Ok(None)
+    }
+
+    pub fn store_filter(&mut self, filter: &StoredFilter) -> Result<PRef, SPVError> {
+        Ok(self.hammersbald.put_hash_keyed(filter)?)
     }
 }
