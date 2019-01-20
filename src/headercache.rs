@@ -26,10 +26,13 @@ use bitcoin::{
         uint::Uint256,
     },
 };
+
+use hammersbald::PRef;
+
 use error::SPVError;
 use lightchaindb::StoredHeader;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, hash_map::Entry},
     sync::Arc,
 };
 
@@ -60,6 +63,14 @@ impl HeaderCache {
         self.trunk.push(id);
     }
 
+    pub fn update_header_with_block(&mut self, id: &Sha256dHash, block_ref: PRef) -> Option<StoredHeader> {
+        let id = Arc::new(*id);
+        if let Entry::Occupied(ref mut header) = self.headers.entry(id) {
+            let updated = header.get_mut();
+            updated.block = Some(block_ref);
+        }
+        None
+    }
 
     /// add a Bitcoin header
     pub fn add_header(&mut self, header: &BlockHeader) -> Result<Option<(StoredHeader, Option<Vec<Sha256dHash>>, Option<Vec<Sha256dHash>>)>, SPVError> {
@@ -85,6 +96,8 @@ impl HeaderCache {
                 header: header.clone(),
                 height: 0,
                 log2work: Self::log2(header.work()),
+                block: None,
+                filter: None
             };
             self.trunk.push(new_tip.clone());
             self.headers.insert(new_tip.clone(), stored.clone());
@@ -186,6 +199,8 @@ impl HeaderCache {
             header: next.clone(),
             height: prev.height + 1,
             log2work: Self::log2(next.work() + Self::exp2(prev.log2work)),
+            block: None,
+            filter: None
         };
         let next_hash = Arc::new(next.bitcoin_hash());
 
@@ -289,12 +304,17 @@ impl HeaderCache {
     }
 
     /// iterate from id to genesis
-    #[allow(unused)]
     pub fn iter_to_genesis<'a> (&'a self, id: &Sha256dHash) -> HeaderIterator<'a> {
         return HeaderIterator::new(self, id)
     }
 
-    #[allow(unused)]
+    pub fn iter_trunk_to_genesis<'a>(&'a self) -> HeaderIterator<'a> {
+        if let Some(tip) = self.trunk.last() {
+            return HeaderIterator::new(self, tip)
+        }
+        return HeaderIterator::new(self, &Sha256dHash::default())
+    }
+
     pub fn iter_to_tip<'a> (&'a self, id: &Sha256dHash) -> TrunkIterator<'a> {
         return TrunkIterator::new(self, id)
     }
@@ -364,16 +384,15 @@ impl<'a> HeaderIterator<'a> {
 }
 
 impl<'a> Iterator for HeaderIterator<'a> {
-    type Item = Sha256dHash;
+    type Item = StoredHeader;
 
     fn next(&mut self) -> Option<<Self as Iterator>::Item> {
         if self.current == Sha256dHash::default() {
             return None;
         }
-        if let Some (filter) = self.cache.headers.get(&self.current) {
-            let ret = self.current.clone();
-            self.current = filter.header.prev_blockhash;
-            return Some(ret)
+        if let Some(header) = self.cache.headers.get(&self.current) {
+            self.current = header.header.prev_blockhash;
+            return Some(header.clone())
         }
         return None;
     }

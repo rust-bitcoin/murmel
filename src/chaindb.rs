@@ -18,6 +18,7 @@
 //!
 
 use lightchaindb::{LightChainDB, StoredHeader};
+use headercache::{HeaderIterator, TrunkIterator};
 use heavychaindb::{HeavyChainDB, DBUTXOAccessor};
 use error::SPVError;
 use blockfilter::BlockFilter;
@@ -101,6 +102,18 @@ impl ChainDB {
         self.light.get_header(id)
     }
 
+    pub fn iter_to_genesis<'a>(&'a self, id: &Sha256dHash) -> HeaderIterator<'a> {
+        return self.light.iter_to_genesis(id)
+    }
+
+    pub fn iter_trunk_to_genesis<'a>(&'a self) -> HeaderIterator<'a> {
+        return self.light.iter_trunk_to_genesis()
+    }
+
+    pub fn iter_to_tip<'a>(&'a self, id: &Sha256dHash) -> TrunkIterator<'a> {
+        return self.light.iter_to_tip(id)
+    }
+
     pub fn has_block(&self, id: &Sha256dHash) -> Result<bool, SPVError> {
         if let Some(header) = self.get_header(id) {
             if let Some(ref heavy) = self.heavy {
@@ -112,7 +125,8 @@ impl ChainDB {
 
     pub fn store_block(&mut self, block: &Block) -> Result<(), SPVError> {
         if let Some(ref mut heavy) = self.heavy {
-            heavy.store_block(block)?;
+            let block_ref = heavy.store_block(block)?;
+            self.light.update_header_with_block(&block.bitcoin_hash(), block_ref)?;
         }
         Ok(())
     }

@@ -19,14 +19,18 @@
 
 use configdb::SharedConfigDB;
 use chaindb::SharedChainDB;
-use p2p::{PeerMessageReceiver, P2PControlSender, PeerId, PeerMessage, PeerMessageSender};
+use p2p::{PeerMessageReceiver, P2PControlSender, P2PControl, PeerId, PeerMessage, PeerMessageSender};
 
 use bitcoin::{
     BitcoinHash,
-    blockdata::block::Block,
+    blockdata::{
+        constants::genesis_block,
+        block::Block,
+    },
     network::{
+        constants::Network,
         message::NetworkMessage,
-        message_blockdata::Inventory,
+        message_blockdata::{InvType, Inventory},
     },
     util::hash::Sha256dHash
 };
@@ -41,6 +45,7 @@ use std::{
 };
 
 pub struct BlockDownloader {
+    network: Network,
     chaindb: SharedChainDB,
     p2p: P2PControlSender,
     tasks: HashMap<Arc<Sha256dHash>, PeerId>,
@@ -49,10 +54,10 @@ pub struct BlockDownloader {
 }
 
 impl BlockDownloader {
-    pub fn new(chaindb: SharedChainDB, p2p: P2PControlSender) -> PeerMessageSender {
+    pub fn new(network: Network, chaindb: SharedChainDB, p2p: P2PControlSender) -> PeerMessageSender {
         let (sender, receiver) = mpsc::channel();
 
-        let mut blockdownloader = BlockDownloader { chaindb, p2p, tasks: HashMap::new(), peers: HashMap::new(), todo: None };
+        let mut blockdownloader = BlockDownloader { network, chaindb, p2p, tasks: HashMap::new(), peers: HashMap::new(), todo: None };
 
         thread::spawn(move || { blockdownloader.run(receiver) });
 
@@ -60,6 +65,7 @@ impl BlockDownloader {
     }
 
     fn run(&mut self, receiver: PeerMessageReceiver) {
+        let genesis_hash = genesis_block(self.network).header.bitcoin_hash();
         loop {
             while let Ok(msg) = receiver.recv_timeout(Duration::from_millis(1000)) {
                 match msg {
@@ -80,7 +86,27 @@ impl BlockDownloader {
             }
             if self.peers.len() > 0 {
                 if self.todo.is_none() {
-
+                    self.todo = Some(HashSet::new());
+                    let chaindb = self.chaindb.read().unwrap();
+                    for header in chaindb.iter_trunk_to_genesis() {
+                        if header.block.is_none() {
+                            if let Some(ref mut todo) = self.todo {
+                                todo.insert(Arc::new(header.bitcoin_hash()));
+                            }
+                        }
+                    }
+                }
+                if let Some(ref mut todo) = self.todo {
+                    if todo.contains(&genesis_hash) {
+                        let mut chaindb = self.chaindb.write().unwrap();
+                        chaindb.store_block(&genesis_block(self.network)).expect("can not store genesis block");
+                        todo.remove(&genesis_hash);
+                    }
+                    let peer_id = self.peers.keys().last().unwrap();
+                    for need in todo.iter() {
+                        self.p2p.send(P2PControl::Send(*peer_id,
+                                                       NetworkMessage::GetData(vec!(Inventory { inv_type: InvType::WitnessBlock, hash: **need }))))
+                    }
                 }
             }
         }
@@ -94,5 +120,13 @@ impl BlockDownloader {
         }
     }
 
-    fn inv(&mut self, inventory: Vec<Inventory>) {}
+    fn inv(&mut self, inventory: Vec<Inventory>) {
+        for i in inventory {
+            if i.inv_type == InvType::Block {
+                if let Some(ref mut todo) = self.todo {
+                    todo.insert(Arc::new(i.hash));
+                }
+            }
+        }
+    }
 }

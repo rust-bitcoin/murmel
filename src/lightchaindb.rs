@@ -20,7 +20,7 @@
 //!
 
 
-use headercache::HeaderCache;
+use headercache::{HeaderIterator, TrunkIterator, HeaderCache};
 use filtercache::FilterCache;
 use error::SPVError;
 
@@ -61,6 +61,10 @@ pub struct StoredHeader {
     pub height: u32,
     /// log2 of total work
     pub log2work: f32,
+    /// pointer to block if known
+    pub block: Option<PRef>,
+    /// pointer to filter if known
+    pub filter: Option<PRef>
 }
 
 // need to implement if put_hash_keyed and get_hash_keyed should be used
@@ -78,6 +82,16 @@ impl<S: Encoder> Encodable<S> for StoredHeader {
         let mut buf = [0u8; 4];
         BigEndian::write_f32(&mut buf, self.log2work);
         buf.consensus_encode(s)?;
+        if let Some(pref) = self.block {
+            pref.consensus_encode(s)?;
+        } else {
+            PRef::invalid().consensus_encode(s)?;
+        }
+        if let Some(pref) = self.filter {
+            pref.consensus_encode(s)?;
+        } else {
+            PRef::invalid().consensus_encode(s)?;
+        }
         Ok(())
     }
 }
@@ -92,6 +106,22 @@ impl<D: Decoder> Decodable<D> for StoredHeader {
                 let buf: [u8; 4] = Decodable::consensus_decode(d)?;
                 BigEndian::read_f32(&buf)
             },
+            block: {
+                let pref: PRef = Decodable::consensus_decode(d)?;
+                if pref.is_valid() {
+                    Some(pref)
+                } else {
+                    None
+                }
+            },
+            filter: {
+                let pref: PRef = Decodable::consensus_decode(d)?;
+                if pref.is_valid() {
+                    Some(pref)
+                } else {
+                    None
+                }
+            }
         })
     }
 }
@@ -245,6 +275,25 @@ impl LightChainDB {
             return Ok(Some((stored, unwinds, forward)));
         }
         Ok(None)
+    }
+
+    pub fn update_header_with_block(&mut self, id: &Sha256dHash, block_ref: PRef) -> Result<Option<PRef>, SPVError> {
+        if let Some(stored) = self.headercache.update_header_with_block(id, block_ref) {
+            return Ok(Some(self.store_header(&stored)?));
+        }
+        Ok(None)
+    }
+
+    pub fn iter_to_genesis<'a>(&'a self, id: &Sha256dHash) -> HeaderIterator<'a> {
+        return self.headercache.iter_to_genesis(id)
+    }
+
+    pub fn iter_trunk_to_genesis<'a>(&'a self) -> HeaderIterator<'a> {
+        return self.headercache.iter_trunk_to_genesis()
+    }
+
+    pub fn iter_to_tip<'a>(&'a self, id: &Sha256dHash) -> TrunkIterator<'a> {
+        return self.headercache.iter_to_tip(id)
     }
 
     /// is the given hash part of the trunk (chain from genesis to tip)

@@ -80,7 +80,7 @@ impl Dispatcher {
     pub fn new(network: Network, configdb: SharedConfigDB, chaindb: SharedChainDB, p2p: P2PControlSender, incoming: PeerMessageReceiver) -> Arc<Dispatcher> {
         let connector = LightningConnector::new(network, Arc::new(Broadcaster { p2p: p2p.clone() }));
 
-        let block_downloader = BlockDownloader::new(chaindb.clone(), p2p.clone());
+        let block_downloader = BlockDownloader::new(network, chaindb.clone(), p2p.clone());
 
         let dispatcher = Arc::new(Dispatcher {
             p2p,
@@ -129,12 +129,13 @@ impl Dispatcher {
     pub fn connected(&self, pid: PeerId) -> Result<(), SPVError> {
         info!("connected peer={}", pid);
         self.get_headers(pid)?;
-
+        self.block_downloader.send(PeerMessage::Connected(pid));
         Ok(())
     }
 
     /// called from dispatcher whenever a peer is disconnected
-    pub fn disconnected(&self, _pid: PeerId) -> Result<(), SPVError> {
+    pub fn disconnected(&self, pid: PeerId) -> Result<(), SPVError> {
+        self.block_downloader.send(PeerMessage::Disconnected(pid));
         Ok(())
     }
 
@@ -143,8 +144,8 @@ impl Dispatcher {
         Ok(match msg {
             NetworkMessage::Ping(nonce) => { self.ping(nonce, peer); Ok(()) },
             NetworkMessage::Headers(ref v) => self.headers(v, peer),
-            NetworkMessage::Block(ref b) => self.block(b, peer),
-            NetworkMessage::Inv(ref v) => self.inv(v, peer),
+            NetworkMessage::Block(b) => self.block(b, peer),
+            NetworkMessage::Inv(v) => self.inv(v, peer),
             NetworkMessage::Addr(ref v) => self.addr(v, peer),
             _ => { self.ban(peer,1); Ok(()) }
         }?)
@@ -239,14 +240,15 @@ impl Dispatcher {
     }
 
     // process an incoming block
-    fn block(&self, _block: &Block, _peer: PeerId) -> Result<(), SPVError> {
+    fn block(&self, block: Block, peer: PeerId) -> Result<(), SPVError> {
+        self.block_downloader.send(PeerMessage::Message(peer, NetworkMessage::Block(block)));
         Ok(())
     }
 
     // process an incoming inventory announcement
-    fn inv(&self, v: &Vec<Inventory>, peer: PeerId) -> Result<(), SPVError> {
+    fn inv(&self, v: Vec<Inventory>, peer: PeerId) -> Result<(), SPVError> {
         let mut ask_for_headers = false;
-        for inventory in v {
+        for inventory in &v {
             // only care for blocks
             if inventory.inv_type == InvType::Block {
                 let chaindb = self.chaindb.read().unwrap();
@@ -264,8 +266,8 @@ impl Dispatcher {
         }
         if ask_for_headers {
             self.get_headers(peer)?;
-        } else {
         }
+        self.block_downloader.send(PeerMessage::Message(peer, NetworkMessage::Inv(v)));
         Ok(())
     }
 
