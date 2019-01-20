@@ -78,14 +78,12 @@ impl HeavyChainDB {
             txdata.push(self.hammersbald.put_encodable(tx)?);
         }
         let stored = StoredBlock { txdata };
-        Ok(self.hammersbald.put_keyed_encodable(block.bitcoin_hash().as_bytes(), &stored)?)
+        Ok(self.hammersbald.put_encodable(&stored)?)
     }
 
-    pub fn fetch_block(&self, id: &Sha256dHash) -> Result<Option<(PRef, StoredBlock)>, SPVError> {
-        if let Some((pref, stored)) = self.hammersbald.get_keyed_decodable::<StoredBlock>(id.as_bytes())? {
-            return Ok(Some((pref, stored)))
-        }
-        Ok(None)
+    pub fn fetch_block(&self, block_ref: PRef) -> Result<StoredBlock, SPVError> {
+        let (_, stored) = self.hammersbald.get_decodable::<StoredBlock>(block_ref)?;
+        Ok(stored)
     }
 
     pub fn apply_block(&mut self, block_ref: PRef) -> Result<(), SPVError> {

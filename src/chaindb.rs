@@ -114,15 +114,6 @@ impl ChainDB {
         return self.light.iter_to_tip(id)
     }
 
-    pub fn has_block(&self, id: &Sha256dHash) -> Result<bool, SPVError> {
-        if let Some(header) = self.get_header(id) {
-            if let Some(ref heavy) = self.heavy {
-                return Ok(heavy.fetch_block(id)?.is_some())
-            }
-        }
-        Ok(false)
-    }
-
     pub fn store_block(&mut self, block: &Block) -> Result<(), SPVError> {
         if let Some(ref mut heavy) = self.heavy {
             let block_ref = heavy.store_block(block)?;
