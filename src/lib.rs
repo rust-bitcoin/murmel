@@ -41,6 +41,7 @@ extern crate futures_timer;
 
 mod headercache;
 mod filtercache;
+mod filtercalculator;
 mod lightchaindb;
 mod heavychaindb;
 mod chaindb;

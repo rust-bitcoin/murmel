@@ -25,8 +25,6 @@ use error::SPVError;
 use p2p::{PeerId, PeerMessageSender, PeerMessageReceiver, P2PControlSender, P2PControl, PeerMessage};
 use blockdownloader::BlockDownloader;
 
-use lightning::chain::chaininterface::BroadcasterInterface;
-
 use bitcoin::{
     BitcoinHash,
     blockdata::{
@@ -50,18 +48,6 @@ use std::{
 };
 
 
-/// a helper class to implement LightningConnector
-pub struct Broadcaster {
-    p2p: P2PControlSender
-}
-
-impl BroadcasterInterface for Broadcaster {
-    /// send a transaction to all connected peers
-    fn broadcast_transaction(&self, tx: &Transaction) {
-        self.p2p.send(P2PControl::Broadcast(NetworkMessage::Tx(tx.clone())))
-    }
-}
-
 /// The local node processing incoming messages
 pub struct Dispatcher {
     p2p: P2PControlSender,
@@ -69,16 +55,16 @@ pub struct Dispatcher {
     configdb: SharedConfigDB,
     // the blockchain db
     chaindb: SharedChainDB,
-    // connector serving Layer 2 network
-    connector: Arc<LightningConnector>,
     // block downloader sender
-    block_downloader: PeerMessageSender
+    block_downloader: PeerMessageSender,
+    // lightning connector
+    connector: Arc<LightningConnector>
 }
 
 impl Dispatcher {
     /// Create a new local node
-    pub fn new(network: Network, configdb: SharedConfigDB, chaindb: SharedChainDB, p2p: P2PControlSender, incoming: PeerMessageReceiver) -> Arc<Dispatcher> {
-        let connector = LightningConnector::new(network, Arc::new(Broadcaster { p2p: p2p.clone() }));
+    pub fn new(network: Network, configdb: SharedConfigDB, chaindb: SharedChainDB, connector: Arc<LightningConnector>, p2p: P2PControlSender, incoming: PeerMessageReceiver) -> Arc<Dispatcher> {
+
 
         let block_downloader = BlockDownloader::new(network, chaindb.clone(), p2p.clone());
 
@@ -86,8 +72,8 @@ impl Dispatcher {
             p2p,
             configdb,
             chaindb,
-            connector: Arc::new(connector),
-            block_downloader
+            block_downloader,
+            connector
         });
 
         let d2 = dispatcher.clone();
@@ -103,14 +89,14 @@ impl Dispatcher {
                     if let Err(e) = self.process(msg, pid) {
                         debug!("error processing a message {} peer={}", e, pid);
                     }
-                }
+                },
                 PeerMessage::Connected(pid) => {
-                    if let Err(e) = self.connected(pid) {
+                    if let Err(e) = self.connected(pm) {
                         debug!("error at connect {} peer={}", e, pid);
                     }
-                }
+                },
                 PeerMessage::Disconnected(pid) => {
-                    if let Err(e) = self.disconnected(pid) {
+                    if let Err(e) = self.disconnected(pm) {
                         debug!("error at disconnect {} peer={}", e, pid);
                     }
                 }
@@ -126,16 +112,15 @@ impl Dispatcher {
     }
 
     /// called from dispatcher whenever a new peer is connected (after handshake is successful)
-    pub fn connected(&self, pid: PeerId) -> Result<(), SPVError> {
-        info!("connected peer={}", pid);
-        self.get_headers(pid)?;
-        self.block_downloader.send(PeerMessage::Connected(pid));
+    pub fn connected(&self, pm: PeerMessage) -> Result<(), SPVError> {
+        self.get_headers(pm.peer_id())?;
+        self.block_downloader.send(pm);
         Ok(())
     }
 
     /// called from dispatcher whenever a peer is disconnected
-    pub fn disconnected(&self, pid: PeerId) -> Result<(), SPVError> {
-        self.block_downloader.send(PeerMessage::Disconnected(pid));
+    pub fn disconnected(&self, pm: PeerMessage) -> Result<(), SPVError> {
+        self.block_downloader.send(pm);
         Ok(())
     }
 
@@ -231,7 +216,7 @@ impl Dispatcher {
 
             if let Some(new_tip) = moved_tip {
                 info!("received {} headers new tip={} from peer={}", headers.len(), new_tip, peer);
-                self.height(height);
+                self.p2p.send(P2PControl::Height(height));
             } else {
                 debug!("received {} known or orphan headers from peer={}", headers.len(), peer);
             }
@@ -241,7 +226,7 @@ impl Dispatcher {
 
     // process an incoming block
     fn block(&self, block: Block, peer: PeerId) -> Result<(), SPVError> {
-        self.block_downloader.send(PeerMessage::Message(peer, NetworkMessage::Block(block)));
+        self.block_downloader.send_network(peer, NetworkMessage::Block(block));
         Ok(())
     }
 
@@ -267,7 +252,7 @@ impl Dispatcher {
         if ask_for_headers {
             self.get_headers(peer)?;
         }
-        self.block_downloader.send(PeerMessage::Message(peer, NetworkMessage::Inv(v)));
+        self.block_downloader.send_network(peer, NetworkMessage::Inv(v));
         Ok(())
     }
 
@@ -301,13 +286,9 @@ impl Dispatcher {
             } else {
                 Sha256dHash::default()
             };
-            self.send(peer, NetworkMessage::GetHeaders(GetHeadersMessage::new(locator, first)));
+            self.send(peer,NetworkMessage::GetHeaders(GetHeadersMessage::new(locator, first)));
         }
         Ok(())
-    }
-
-    fn height (&self, height: u32) {
-        self.p2p.send(P2PControl::Height(height))
     }
 
     fn ban (&self, peer: PeerId, score: u32) {
@@ -317,22 +298,5 @@ impl Dispatcher {
     /// send to peer
     fn send(&self, peer: PeerId, msg: NetworkMessage) {
         self.p2p.send(P2PControl::Send(peer, msg))
-    }
-
-    /// send the same message to all connected peers
-    #[allow(dead_code)]
-    fn broadcast(&self, msg: NetworkMessage) {
-        self.p2p.send(P2PControl::Broadcast(msg))
-    }
-    /// send a transaction to all connected peers
-    #[allow(dead_code)]
-    pub fn broadcast_transaction(&self, tx: &Transaction) {
-        self.broadcast(NetworkMessage::Tx(tx.clone()))
-    }
-
-    /// retrieve the interface a higher application layer e.g. lightning may use to send transactions to the network
-    #[allow(dead_code)]
-    pub fn get_broadcaster(&self) -> Arc<Broadcaster> {
-        self.connector.get_broadcaster()
     }
 }

@@ -19,6 +19,8 @@
 //! This implements an interface to higher level applications
 //!
 
+use constructor::Broadcaster;
+
 use bitcoin::network::constants::Network;
 use bitcoin::blockdata::block::{Block, BlockHeader};
 use bitcoin::blockdata::script::Script;
@@ -26,7 +28,6 @@ use bitcoin::util::hash::Sha256dHash;
 use lightning::chain::chaininterface::{ChainListener,ChainWatchInterface, ChainWatchInterfaceUtil};
 use lightning::chain::chaininterface::ChainError;
 use lightning::util::logger::{Logger, Record, Level};
-use dispatcher::Broadcaster;
 use std::sync::{Weak,Arc};
 
 struct LightningLogger{

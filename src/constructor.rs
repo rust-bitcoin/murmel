@@ -22,12 +22,20 @@
 use configdb::{ConfigDB, SharedConfigDB};
 use error::SPVError;
 use dispatcher::Dispatcher;
-use p2p::{P2P,PeerMessageSender, P2PControl};
+use p2p::{P2P,PeerMessageSender, P2PControl, P2PControlSender, PeerSource};
 use chaindb::{ChainDB, SharedChainDB};
 use dns::dns_seed;
-use p2p::PeerSource;
 
-use bitcoin::network::constants::Network;
+use bitcoin::{
+    network::{
+        message::NetworkMessage,
+        constants::Network
+    },
+    blockdata::transaction::Transaction
+};
+
+use connector::LightningConnector;
+use lightning::chain::chaininterface::BroadcasterInterface;
 
 use std::{
     net::SocketAddr,
@@ -45,13 +53,28 @@ use rand::{thread_rng, RngCore};
 
 const MAX_PROTOCOL_VERSION :u32 = 70001;
 
+
+/// a helper class to implement LightningConnector
+pub struct Broadcaster {
+    p2p: P2PControlSender
+}
+
+impl BroadcasterInterface for Broadcaster {
+    /// send a transaction to all connected peers
+    fn broadcast_transaction(&self, tx: &Transaction) {
+        self.p2p.send(P2PControl::Broadcast(NetworkMessage::Tx(tx.clone())))
+    }
+}
+
 /// The complete stack
 pub struct Constructor {
     network: Network,
     user_agent: String,
     configdb: SharedConfigDB,
     chaindb: SharedChainDB,
-    listen: Vec<SocketAddr>
+    listen: Vec<SocketAddr>,
+    /// The Lightning Network connector
+    pub connector: Option<Arc<LightningConnector>>
 }
 
 impl Constructor {
@@ -66,7 +89,7 @@ impl Constructor {
         let configdb = Arc::new(Mutex::new(ConfigDB::new(path)?));
         let chaindb = Arc::new(RwLock::new(ChainDB::new(path, network,server)?));
         create_tables(configdb.clone())?;
-        Ok(Constructor { network, user_agent, configdb, chaindb, listen })
+        Ok(Constructor { network, user_agent, configdb, chaindb, listen, connector: None })
     }
 
     /// Initialize the stack and return a ChainWatchInterface
@@ -79,9 +102,8 @@ impl Constructor {
         let configdb = Arc::new(Mutex::new(ConfigDB::mem()?));
         let chaindb = Arc::new(RwLock::new(ChainDB::mem( network,server)?));
         create_tables(configdb.clone())?;
-        Ok(Constructor { network, user_agent, configdb, chaindb, listen })
+        Ok(Constructor { network, user_agent, configdb, chaindb, listen, connector: None })
     }
-
 
 	/// Run the SPV stack. This should be called AFTER registering listener of the ChainWatchInterface,
 	/// so they are called as the SPV stack catches up with the blockchain
@@ -89,13 +111,17 @@ impl Constructor {
 	/// * min_connections - keep connections with at least this number of peers. Peers will be randomly chosen
 	/// from those discovered in earlier runs
     pub fn run(&mut self, peers: Vec<SocketAddr>, min_connections: usize, nodns: bool) -> Result<(), SPVError>{
+
         let (to_dispatcher, from_p2p) = mpsc::channel();
 
         let (p2p, p2p_control) =
             P2P::new(self.user_agent.clone(), self.network, 0, MAX_PROTOCOL_VERSION, PeerMessageSender::new(to_dispatcher));
 
+        let lightning = Arc::new(LightningConnector::new(self.network, Arc::new(Broadcaster { p2p: p2p_control.clone() })));
+        self.connector = Some(lightning.clone());
+
         let dispatcher =
-            Dispatcher::new(self.network, self.configdb.clone(), self.chaindb.clone(), p2p_control.clone(), from_p2p);
+            Dispatcher::new(self.network, self.configdb.clone(), self.chaindb.clone(), lightning, p2p_control.clone(), from_p2p);
 
         dispatcher.init().unwrap();
 

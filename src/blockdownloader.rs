@@ -1,5 +1,5 @@
 //
-// Copyright 2018 Tamas Blummer
+// Copyright 2018-19 Tamas Blummer
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -76,7 +76,7 @@ impl BlockDownloader {
             // wait some time for incoming block messages, process them if available
             while let Ok(msg) = receiver.recv_timeout(Duration::from_millis(POLL)) {
                 match msg {
-                    PeerMessage::Connected(pid) => { self.peers.insert(pid, None); }
+                    PeerMessage::Connected(pid) => { self.peers.insert(pid, None); },
                     PeerMessage::Disconnected(pid) => {
                         self.peers.remove(&pid);
                         let remove = self.tasks.iter()
@@ -86,7 +86,7 @@ impl BlockDownloader {
                         for h in remove {
                             self.tasks.remove(&*h);
                         }
-                    }
+                    },
                     PeerMessage::Message(pid, msg) => {
                         match msg {
                             NetworkMessage::Block(block) => {

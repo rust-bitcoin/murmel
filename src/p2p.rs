@@ -85,6 +85,16 @@ pub enum PeerMessage {
     Disconnected(PeerId)
 }
 
+impl PeerMessage {
+    pub fn peer_id (&self) -> PeerId {
+        match self {
+            PeerMessage::Message(pid, _) |
+            PeerMessage::Connected(pid) |
+            PeerMessage::Disconnected(pid) => pid.clone()
+        }
+    }
+}
+
 pub enum P2PControl {
     Send(PeerId, NetworkMessage),
     Broadcast(NetworkMessage),
@@ -131,6 +141,10 @@ impl PeerMessageSender {
 
     pub fn send (&self, msg: PeerMessage) {
         self.sender.lock().unwrap().send(msg).expect("P2P message send failed");
+    }
+
+    pub fn send_network(&self, peer: PeerId, msg: NetworkMessage) {
+        self.sender.lock().unwrap().send(PeerMessage::Message(peer, msg)).expect("P2P message send failed");
     }
 }
 
