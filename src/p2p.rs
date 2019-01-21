@@ -65,11 +65,10 @@ const CONNECT_TIMEOUT_SECONDS: u64 = 10;
 const BAN :u32 = 100;
 
 /// A peer's Id
-/// used in log messages and as key to PeerMap
 #[derive(Hash, Eq, PartialEq, Copy, Clone)]
 pub struct PeerId {
-    /// mio token used in networking
-    pub token: Token
+    // mio token used in networking
+    token: Token
 }
 
 impl fmt::Display for PeerId {
@@ -78,6 +77,7 @@ impl fmt::Display for PeerId {
         Ok(())
     }
 }
+type PeerMap = HashMap<PeerId, Mutex<Peer>>;
 
 pub enum PeerMessage {
     Message(PeerId, NetworkMessage),
@@ -117,7 +117,6 @@ pub enum PeerSource {
 }
 
 /// a map of peer id to peers
-pub type PeerMap = HashMap<PeerId, Mutex<Peer>>;
 pub type PeerMessageReceiver = mpsc::Receiver<PeerMessage>;
 
 #[derive(Clone)]
@@ -629,7 +628,7 @@ impl P2P {
 }
 
 /// a peer
-pub struct Peer {
+struct Peer {
     /// the peer's id for log messages
     pub pid: PeerId,
     // the event poller, shared with P2P, needed here to register for events
