@@ -17,47 +17,52 @@
 //! # Download Blocks
 //!
 
-use configdb::SharedConfigDB;
-use chaindb::SharedChainDB;
-use p2p::{PeerMessageReceiver, P2PControlSender, P2PControl, PeerId, PeerMessage, PeerMessageSender};
-
 use bitcoin::{
     BitcoinHash,
     blockdata::{
-        constants::genesis_block,
         block::Block,
+        constants::genesis_block,
     },
     network::{
         constants::Network,
         message::NetworkMessage,
-        message_blockdata::{InvType, Inventory},
+        message_blockdata::{Inventory, InvType},
     },
-    util::hash::Sha256dHash
+    util::hash::Sha256dHash,
 };
-
+use chaindb::SharedChainDB;
+use configdb::SharedConfigDB;
+use p2p::{P2PControl, P2PControlSender, PeerId, PeerMessage, PeerMessageReceiver, PeerMessageSender};
 use rand::{RngCore, thread_rng};
-
 use std::{
-    thread,
-    time::Duration,
-    collections::{HashSet, HashMap},
+    collections::{hash_map::Entry, HashMap, HashSet},
     sync::{Arc, mpsc},
+    thread,
+    time::{Duration, SystemTime},
 };
 
 pub struct BlockDownloader {
     network: Network,
     chaindb: SharedChainDB,
     p2p: P2PControlSender,
-    tasks: HashMap<Arc<Sha256dHash>, PeerId>,
-    peers: HashMap<PeerId, Option<Vec<Arc<Sha256dHash>>>>,
-    todo: Option<HashSet<Arc<Sha256dHash>>>
+    tasks: HashMap<Arc<Sha256dHash>, (PeerId, u64)>,
+    peers: HashMap<PeerId, Option<HashSet<Arc<Sha256dHash>>>>,
+    last_seen: HashMap<PeerId, u64>,
 }
+
+
+// pollfrequency in millisecs
+const POLL: u64 = 1000;
+// a block should arrive within this timeout in seconds
+const BLOCK_TIMEOUT: u64 = 60;
+// download in chunks of n blocks
+const CHUNK: usize = 1000;
 
 impl BlockDownloader {
     pub fn new(network: Network, chaindb: SharedChainDB, p2p: P2PControlSender) -> PeerMessageSender {
         let (sender, receiver) = mpsc::channel();
 
-        let mut blockdownloader = BlockDownloader { network, chaindb, p2p, tasks: HashMap::new(), peers: HashMap::new(), todo: None };
+        let mut blockdownloader = BlockDownloader { network, chaindb, p2p, tasks: HashMap::new(), peers: HashMap::new(), last_seen: HashMap::new() };
 
         thread::spawn(move || { blockdownloader.run(receiver) });
 
@@ -66,67 +71,131 @@ impl BlockDownloader {
 
     fn run(&mut self, receiver: PeerMessageReceiver) {
         let genesis_hash = genesis_block(self.network).header.bitcoin_hash();
+        let mut rng = thread_rng();
         loop {
-            while let Ok(msg) = receiver.recv_timeout(Duration::from_millis(1000)) {
+            // wait some time for incoming block messages, process them if available
+            while let Ok(msg) = receiver.recv_timeout(Duration::from_millis(POLL)) {
                 match msg {
-                    PeerMessage::Connected(pid) => { self.peers.insert(pid, None); },
-                    PeerMessage::Disconnected(pid) => { self.peers.remove(&pid); },
+                    PeerMessage::Connected(pid) => { self.peers.insert(pid, None); }
+                    PeerMessage::Disconnected(pid) => {
+                        self.peers.remove(&pid);
+                        let remove = self.tasks.iter()
+                            .filter_map(|(h, (peer, _))| {
+                                if *peer == pid { Some(h.clone()) } else { None } }
+                            ).collect::<Vec<_>>();
+                        for h in remove {
+                            self.tasks.remove(&*h);
+                        }
+                    }
                     PeerMessage::Message(pid, msg) => {
                         match msg {
                             NetworkMessage::Block(block) => {
-                                self.block(&block);
-                            },
-                            NetworkMessage::Inv(inventory) => {
-                                self.inv(inventory);
+                                self.block(pid, &block);
                             }
                             _ => {}
                         }
                     }
                 }
             }
+
+            // check for new work
+            // what is missing might change through new header or even reorg
+
+            // can not work if no peers are connected
             if self.peers.len() > 0 {
-                if self.todo.is_none() {
-                    self.todo = Some(HashSet::new());
+                // compute the list of missing blocks
+                let mut missing = Vec::new();
+                // missing if not yet asked for and not yet stored
+                if self.tasks.is_empty() {
                     let chaindb = self.chaindb.read().unwrap();
                     for header in chaindb.iter_trunk_to_genesis() {
                         if header.block.is_none() {
-                            if let Some(ref mut todo) = self.todo {
-                                todo.insert(Arc::new(header.bitcoin_hash()));
-                            }
+                            missing.push(header.bitcoin_hash());
                         }
                     }
                 }
-                if let Some(ref mut todo) = self.todo {
-                    if todo.contains(&genesis_hash) {
+
+                if !missing.is_empty() {
+                    // insert genesis if missing
+                    if *missing.last().unwrap() == Sha256dHash::default() {
                         let mut chaindb = self.chaindb.write().unwrap();
                         chaindb.store_block(&genesis_block(self.network)).expect("can not store genesis block");
-                        todo.remove(&genesis_hash);
+                        chaindb.batch().expect("can not store genesis block");
+                        let len = missing.len();
+                        missing.truncate(len - 1);
                     }
-                    let peer_id = self.peers.keys().last().unwrap();
-                    for need in todo.iter() {
-                        self.p2p.send(P2PControl::Send(*peer_id,
-                                                       NetworkMessage::GetData(vec!(Inventory { inv_type: InvType::WitnessBlock, hash: **need }))))
+
+                    debug!("missing {} blocks", missing.len());
+                    // download in ascending block order
+                    missing.reverse();
+
+                    // pick a random peer
+                    let pl = self.peers.len();
+                    let peer_id = self.peers.keys().collect::<Vec<_>>()[rng.next_u32() as usize % pl].clone();
+
+                    let todo = missing.iter().filter_map(|s| {
+                        // download if
+                        if let Some((peer, started)) = self.tasks.get(s).clone() {
+                            // already asked for and ...
+                            if *peer != peer_id {
+                                // this is not the same peer we asked before
+                                if started + BLOCK_TIMEOUT < Self::now() {
+                                    // asked for longer than timeout
+                                    if let Some(last) = self.last_seen.get(peer) {
+                                        // and the peer did not deliver any other blocks in the meanwhile
+                                        if last + BLOCK_TIMEOUT < Self::now() {
+                                            // ban the peer
+                                            self.p2p.send(P2PControl::Ban(*peer, 100));
+                                            debug!("too slow delivering blocks, ban peer={}", peer);
+                                            // download
+                                            return Some(s.clone());
+                                        }
+                                    }
+                                }
+                            }
+                            // do not download
+                            None
+                        } else {
+                            // download
+                            Some(s.clone())
+                        }
+                    }).collect::<Vec<_>>();
+
+                    let mut some = todo.as_slice().chunks(CHUNK);
+                    // take a chunk of the work
+                    if let Some(need) = some.next() {
+                        // and send it to peer
+                        if let Some(ref mut pe) = self.peers.entry(peer_id).or_insert(Some(HashSet::new())) {
+                            for id in need {
+                                let id = Arc::new(id.clone());
+                                pe.insert(id.clone());
+                                self.tasks.insert(id, (peer_id, Self::now()));
+                            }
+                        }
+                        let invs = need.iter().map(|s| { Inventory { inv_type: InvType::WitnessBlock, hash: s.clone() } }).collect::<Vec<_>>();
+                        debug!("asking {} blocks peer={}", invs.len(), peer_id);
+                        self.p2p.send(P2PControl::Send(peer_id, NetworkMessage::GetData(invs)));
                     }
                 }
             }
         }
     }
 
-    fn block(&mut self, block: &Block) {
+    fn block(&mut self, pid: PeerId, block: &Block) {
         let mut chaindb = self.chaindb.write().unwrap();
         debug!("storing block {}", block.bitcoin_hash());
-        if let Err(e) = chaindb.store_block(block) {
-            error!("can not store block {}: {}", block.bitcoin_hash(), e);
+        chaindb.store_block(block).expect(format!("could not store block {}", block.bitcoin_hash()).as_str());
+        if let Some((peer_id, _)) = self.tasks.remove(&block.bitcoin_hash()) {
+            if let Entry::Occupied(ref mut peer_tasks) = self.peers.entry(peer_id) {
+                if let Some(ref mut set) = peer_tasks.get_mut() {
+                    set.remove(&block.bitcoin_hash());
+                }
+            }
+            self.last_seen.insert(pid, Self::now());
         }
     }
 
-    fn inv(&mut self, inventory: Vec<Inventory>) {
-        for i in inventory {
-            if i.inv_type == InvType::Block {
-                if let Some(ref mut todo) = self.todo {
-                    todo.insert(Arc::new(i.hash));
-                }
-            }
-        }
+    fn now() -> u64 {
+        SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs()
     }
 }

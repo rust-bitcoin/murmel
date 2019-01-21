@@ -116,8 +116,10 @@ impl ChainDB {
 
     pub fn store_block(&mut self, block: &Block) -> Result<(), SPVError> {
         if let Some(ref mut heavy) = self.heavy {
-            let block_ref = heavy.store_block(block)?;
-            self.light.update_header_with_block(&block.bitcoin_hash(), block_ref)?;
+            if let Some(header) = self.light.get_header(&block.bitcoin_hash()) {
+                let block_ref = heavy.store_block(block)?;
+                self.light.update_header_with_block(&block.bitcoin_hash(), block_ref)?;
+            }
         }
         Ok(())
     }

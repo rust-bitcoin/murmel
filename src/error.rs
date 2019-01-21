@@ -41,6 +41,8 @@ pub enum SPVError {
     NoPeers,
     /// unknown UTXO referred
     UnknownUTXO,
+    /// Merkle root of block does not match the header
+    BadMerkleRoot,
     /// downstream error
     Downstream(String),
     /// Network IO error
@@ -63,6 +65,7 @@ impl Error for SPVError {
             SPVError::NoTip => "no chain tip found",
             SPVError::UnknownUTXO => "unknown utxo",
             SPVError::NoPeers => "no peers",
+            SPVError::BadMerkleRoot => "merkle root of header does not match transaction list",
             SPVError::Downstream(ref s) => s,
             SPVError::IO(ref err) => err.description(),
             SPVError::DB(ref err) => err.description(),
@@ -80,6 +83,7 @@ impl Error for SPVError {
             SPVError::NoPeers => None,
             SPVError::UnknownUTXO => None,
             SPVError::Downstream(_) => None,
+            SPVError::BadMerkleRoot => None,
             SPVError::IO(ref err) => Some(err),
             SPVError::DB(ref err) => Some(err),
             SPVError::Util(ref err) => Some(err),
@@ -97,7 +101,7 @@ impl fmt::Display for SPVError {
             SPVError::SpvBadProofOfWork |
             SPVError::UnconnectedHeader |
             SPVError::NoTip |
-            SPVError::NoPeers |
+            SPVError::NoPeers | SPVError::BadMerkleRoot |
             SPVError::UnknownUTXO => write!(f, "{}", self.description()),
             SPVError::Downstream(ref s) => write!(f, "{}", s),
             SPVError::IO(ref err) => write!(f, "IO error: {}", err),

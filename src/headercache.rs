@@ -68,8 +68,11 @@ impl HeaderCache {
         if let Entry::Occupied(ref mut header) = self.headers.entry(id) {
             let updated = header.get_mut();
             updated.block = Some(block_ref);
+            Some(updated.clone())
         }
-        None
+        else {
+            None
+        }
     }
 
     /// add a Bitcoin header
@@ -136,13 +139,13 @@ impl HeaderCache {
             if (prev.height + 1) % DIFFCHANGE_INTERVAL == 0 {
                 let timespan = {
                     // Scan back DIFFCHANGE_INTERVAL blocks
-                    let mut scan = prev;
+                    let mut scan = prev.clone();
                     if self.tip_hash() == Some(scan.header.prev_blockhash) {
-                        scan = self.headers.get(&self.trunk[self.trunk.len() - DIFFCHANGE_INTERVAL as usize - 2]).unwrap();
+                        scan = self.headers.get(&self.trunk[self.trunk.len() - DIFFCHANGE_INTERVAL as usize - 2]).unwrap().clone();
                     } else {
                         for _ in 0..(DIFFCHANGE_INTERVAL - 1) {
                             if let Some(header) = self.headers.get(&scan.header.prev_blockhash) {
-                                scan = header;
+                                scan = header.clone();
                             } else {
                                 return Err(SPVError::UnconnectedHeader);
                             }
@@ -174,12 +177,12 @@ impl HeaderCache {
                 // previous rule did not apply, to find the "real" difficulty.
             } else if self.network == Network::Testnet {
                 // Scan back DIFFCHANGE_INTERVAL blocks
-                let mut scan = prev;
+                let mut scan = prev.clone();
                 let mut height = prev.height + 1;
                 let max_target = Self::max_target();
                 while height % DIFFCHANGE_INTERVAL != 0 && scan.header.target() == max_target {
                     if let Some(header) = self.headers.get(&scan.header.prev_blockhash) {
-                        scan = header;
+                        scan = header.clone();
                         height = header.height;
                     } else {
                         return Err(SPVError::UnconnectedHeader);
