@@ -117,17 +117,9 @@ impl ChainDB {
     pub fn store_block(&mut self, block: &Block) -> Result<(), SPVError> {
         if let Some(ref mut heavy) = self.heavy {
             if let Some(header) = self.light.get_header(&block.bitcoin_hash()) {
-                let block_ref = heavy.store_block(block)?;
+                let block_ref = heavy.store_block(header.height, block)?;
                 self.light.update_header_with_block(&block.bitcoin_hash(), block_ref)?;
             }
-        }
-        Ok(())
-    }
-
-    // extend UTXO store
-    fn extend_utxo (&mut self, block_ref: PRef) -> Result<(), SPVError> {
-        if let Some(ref mut heavy) = self.heavy {
-            let mut utxos = heavy.apply_block(block_ref)?;
         }
         Ok(())
     }
