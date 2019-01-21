@@ -114,14 +114,15 @@ impl ChainDB {
         return self.light.iter_to_tip(id)
     }
 
-    pub fn store_block(&mut self, block: &Block) -> Result<(), SPVError> {
+    pub fn store_block(&mut self, block: &Block) -> Result<Option<u32>, SPVError> {
         if let Some(ref mut heavy) = self.heavy {
             if let Some(header) = self.light.get_header(&block.bitcoin_hash()) {
                 let block_ref = heavy.store_block(header.height, block)?;
                 self.light.update_header_with_block(&block.bitcoin_hash(), block_ref)?;
+                return Ok(Some(header.height));
             }
         }
-        Ok(())
+        Ok(None)
     }
 
     fn compute_filter(&mut self, block: &Block) -> Result<Option<BlockFilter>, SPVError> {

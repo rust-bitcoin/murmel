@@ -46,7 +46,7 @@ pub struct BlockDownloader {
     chaindb: SharedChainDB,
     p2p: P2PControlSender,
     tasks: HashMap<Arc<Sha256dHash>, (PeerId, u64)>,
-    peers: HashMap<PeerId, Option<HashSet<Arc<Sha256dHash>>>>,
+    peers: HashMap<PeerId, HashSet<Arc<Sha256dHash>>>,
     last_seen: HashMap<PeerId, u64>,
 }
 
@@ -76,7 +76,7 @@ impl BlockDownloader {
             // wait some time for incoming block messages, process them if available
             while let Ok(msg) = receiver.recv_timeout(Duration::from_millis(POLL)) {
                 match msg {
-                    PeerMessage::Connected(pid) => { self.peers.insert(pid, None); },
+                    PeerMessage::Connected(pid) => { self.peers.insert(pid, HashSet::new()); },
                     PeerMessage::Disconnected(pid) => {
                         self.peers.remove(&pid);
                         let remove = self.tasks.iter()
@@ -165,13 +165,12 @@ impl BlockDownloader {
                     // take a chunk of the work
                     if let Some(need) = some.next() {
                         // and send it to peer
-                        if let Some(ref mut pe) = self.peers.entry(peer_id).or_insert(Some(HashSet::new())) {
-                            for id in need {
-                                let id = Arc::new(id.clone());
-                                pe.insert(id.clone());
-                                self.tasks.insert(id, (peer_id, Self::now()));
-                            }
+                        for id in need {
+                            let id = Arc::new(id.clone());
+                            self.peers.entry(peer_id).or_insert(HashSet::new()).insert(id.clone());
+                            self.tasks.insert(id, (peer_id, Self::now()));
                         }
+
                         let invs = need.iter().map(|s| { Inventory { inv_type: InvType::WitnessBlock, hash: s.clone() } }).collect::<Vec<_>>();
                         debug!("asking {} blocks peer={}", invs.len(), peer_id);
                         self.p2p.send(P2PControl::Send(peer_id, NetworkMessage::GetData(invs)));
@@ -183,13 +182,13 @@ impl BlockDownloader {
 
     fn block(&mut self, pid: PeerId, block: &Block) {
         let mut chaindb = self.chaindb.write().unwrap();
-        debug!("storing block {}", block.bitcoin_hash());
-        chaindb.store_block(block).expect(format!("could not store block {}", block.bitcoin_hash()).as_str());
+
+        if let Some(height) = chaindb.store_block(block).expect(format!("could not store block {}", block.bitcoin_hash()).as_str()) {
+            debug!("stored block {} {}", height, block.bitcoin_hash());
+        }
         if let Some((peer_id, _)) = self.tasks.remove(&block.bitcoin_hash()) {
             if let Entry::Occupied(ref mut peer_tasks) = self.peers.entry(peer_id) {
-                if let Some(ref mut set) = peer_tasks.get_mut() {
-                    set.remove(&block.bitcoin_hash());
-                }
+                peer_tasks.get_mut().remove(&block.bitcoin_hash());
             }
             self.last_seen.insert(pid, Self::now());
         }
