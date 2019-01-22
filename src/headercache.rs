@@ -30,7 +30,7 @@ use bitcoin::{
 use hammersbald::PRef;
 
 use error::SPVError;
-use lightchaindb::StoredHeader;
+use chaindb::StoredHeader;
 use std::{
     collections::{HashMap, hash_map::Entry},
     sync::Arc,

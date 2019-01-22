@@ -41,18 +41,13 @@ extern crate futures_timer;
 
 mod headercache;
 mod filtercache;
-mod filtercalculator;
-mod lightchaindb;
-mod heavychaindb;
 mod chaindb;
+mod filtercalculator;
 mod configdb;
 mod dispatcher;
-mod blockdownloader;
 mod error;
-#[allow(dead_code)]
 mod connector;
-pub mod constructor;
-#[allow(dead_code)]
 mod blockfilter;
 mod p2p;
 mod dns;
+pub mod constructor;

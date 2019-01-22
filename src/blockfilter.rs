@@ -22,7 +22,7 @@
 //!
 
 use error::SPVError;
-use heavychaindb::UTXOAccessor;
+use chaindb::UTXOAccessor;
 
 use bitcoin;
 use bitcoin::blockdata::block::Block;

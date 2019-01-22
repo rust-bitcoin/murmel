@@ -23,7 +23,7 @@ use configdb::SharedConfigDB;
 use chaindb::SharedChainDB;
 use error::SPVError;
 use p2p::{PeerId, PeerMessageSender, PeerMessageReceiver, P2PControlSender, P2PControl, PeerMessage};
-use blockdownloader::BlockDownloader;
+use filtercalculator::FilterCalculator;
 
 use bitcoin::{
     BitcoinHash,
@@ -66,7 +66,7 @@ impl Dispatcher {
     pub fn new(network: Network, configdb: SharedConfigDB, chaindb: SharedChainDB, connector: Arc<LightningConnector>, p2p: P2PControlSender, incoming: PeerMessageReceiver) -> Arc<Dispatcher> {
 
 
-        let block_downloader = BlockDownloader::new(network, chaindb.clone(), p2p.clone());
+        let block_downloader = FilterCalculator::new(network, chaindb.clone(), p2p.clone());
 
         let dispatcher = Arc::new(Dispatcher {
             p2p,
@@ -113,6 +113,7 @@ impl Dispatcher {
 
     /// called from dispatcher whenever a new peer is connected (after handshake is successful)
     pub fn connected(&self, pm: PeerMessage) -> Result<(), SPVError> {
+        debug!("connected peer={}", pm.peer_id());
         self.get_headers(pm.peer_id())?;
         self.block_downloader.send(pm);
         Ok(())
@@ -153,7 +154,7 @@ impl Dispatcher {
             {
                 let chaindb = self.chaindb.read().unwrap();
 
-                if let Some(tip) = chaindb.tip() {
+                if let Some(tip) = chaindb.header_tip() {
                     height = tip.height;
                 } else {
                     return Err(SPVError::NoTip);
