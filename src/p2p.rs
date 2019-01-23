@@ -382,14 +382,20 @@ impl P2P {
     }
 
     fn disconnect (&self, pid: PeerId) {
-        if let Entry::Occupied(waker_entry) = self.waker.lock().unwrap().entry(pid) {
-            trace!("waking for disconnect");
-            waker_entry.get().wake ();
-            waker_entry.remove();
+        {
+            let mut wakers = self.waker.lock().unwrap();
+            if let Some(waker) = wakers.get(&pid) {
+                trace!("waking for disconnect");
+                waker.wake();
+            }
+            wakers.remove(&pid);
         }
-        if let Entry::Occupied(peer_entry) = self.peers.write().unwrap().entry(pid) {
-            peer_entry.get().lock().unwrap().stream.shutdown(Shutdown::Both).unwrap_or(());
-            peer_entry.remove();
+        {
+            let mut peers = self.peers.write().unwrap();
+            if let Some(peer) = peers.get(&pid) {
+                peer.lock().unwrap().stream.shutdown(Shutdown::Both).unwrap_or(());
+            }
+            peers.remove(&pid);
         }
         self.dispatcher.send(PeerMessage::Disconnected(pid));
     }
