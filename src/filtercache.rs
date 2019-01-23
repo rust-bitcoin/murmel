@@ -46,8 +46,8 @@ impl FilterCache {
             by_block: HashMap::with_capacity(EXPECTED_CHAIN_LENGTH) }
     }
 
-    pub fn add_filter (&mut self, filter: StoredFilter) {
-        let filter = Arc::new(filter);
+    pub fn add_filter (&mut self, filter: &StoredFilter) {
+        let filter = Arc::new(filter.clone());
         self.by_block.insert (filter.block_id, filter.clone());
         self.filters.insert(filter.bitcoin_hash(), filter);
     }

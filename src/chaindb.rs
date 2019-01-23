@@ -153,6 +153,14 @@ impl ChainDB {
         Ok(None)
     }
 
+
+    pub fn update_header_with_filter(&mut self, id: &Sha256dHash, filter_ref: PRef) -> Result<Option<PRef>, SPVError> {
+        if let Some(stored) = self.headercache.update_header_with_filter(id, filter_ref) {
+            return Ok(Some(self.store_header(&stored)?));
+        }
+        Ok(None)
+    }
+
     pub fn iter_to_genesis<'a>(&'a self, id: &Sha256dHash) -> HeaderIterator<'a> {
         return self.headercache.iter_to_genesis(id);
     }
@@ -185,6 +193,10 @@ impl ChainDB {
         self.headercache.locator_hashes()
     }
 
+    pub fn get_block_filter (&self, block_id: &Sha256dHash) -> Option<StoredFilter> {
+        self.filtercache.get_block_filter(block_id)
+    }
+
     pub fn add_filter_chain(&mut self, prev_block_id: &Sha256dHash, prev_filter_id: &Sha256dHash, filter_hashes: impl Iterator<Item=Sha256dHash>) ->
     Result<Option<(Sha256dHash, Sha256dHash)>, SPVError> {
         if let Some(prev_filter) = self.filtercache.get_block_filter(prev_filter_id) {
@@ -204,7 +216,7 @@ impl ChainDB {
                 }
                 for filter in filters {
                     self.store_filter(&filter)?;
-                    self.filtercache.add_filter(filter);
+                    self.filtercache.add_filter(&filter);
                 }
                 return Ok(Some((p_block, previous)));
             }
@@ -228,30 +240,7 @@ impl ChainDB {
                     filter: Some(filter),
                 };
                 self.store_filter(&stored)?;
-                self.filtercache.add_filter(stored);
-                return Ok(true);
-            }
-        }
-        Ok(false)
-    }
-
-    // extend filters, only previous filter header must exist
-    pub fn add_filter(&mut self, block_id: &Sha256dHash, prev_block_id: &Sha256dHash, filter: Vec<u8>) -> Result<bool, SPVError> {
-        if let Some(filter_header) = self.filtercache.get_block_filter(prev_block_id) {
-            let filter_hash = Sha256dHash::from_data(filter.as_slice());
-            let mut buf = [0u8; 64];
-            buf[0..32].copy_from_slice(&filter_hash.to_bytes()[..]);
-            buf[32..].copy_from_slice(&filter_header.previous.to_bytes()[..]);
-            let filter_id = Sha256dHash::from_data(&buf);
-            if filter_id == filter_header.bitcoin_hash() {
-                let stored = StoredFilter {
-                    block_id: *block_id,
-                    previous: filter_header.bitcoin_hash(),
-                    filter_hash,
-                    filter: Some(filter),
-                };
-                self.store_filter(&stored)?;
-                self.filtercache.add_filter(stored);
+                self.filtercache.add_filter(&stored);
                 return Ok(true);
             }
         }
@@ -285,16 +274,30 @@ impl ChainDB {
         Ok(self.light.put_hash_keyed(filter)?)
     }
 
+    pub fn store_known_filter (&mut self, block_id: &Sha256dHash, previous_filter: &Sha256dHash, content: Vec<u8>) -> Result<Sha256dHash, SPVError> {
+        let stored = StoredFilter{block_id: block_id.clone(), previous: previous_filter.clone(),
+            filter_hash: Sha256dHash::from_data(content.as_slice()), filter: Some(content) };
+        let pref = self.store_filter(&stored)?;
+        self.filtercache.add_filter(&stored);
+        self.update_header_with_filter(block_id, pref)?;
+        Ok(stored.bitcoin_hash())
+    }
+
     pub fn store_block(&mut self, block: &Block) -> Result<PRef, SPVError> {
-        if let Some(ref mut heavy) = self.heavy {
-            if let Some(header) = self.headercache.get_header(&block.bitcoin_hash()) {
+        if let Some(header) = self.headercache.get_header(&block.bitcoin_hash()) {
+            let pref;
+            if let Some(ref mut heavy) = self.heavy {
                 let height = header.height;
                 let mut key = [0u8; 4];
                 BigEndian::write_u32(&mut key, height);
-                return Ok(heavy.put_keyed_encodable(&key, &StoredBlock { id: block.bitcoin_hash(), height, txdata: block.txdata.clone() })?);
+                pref = heavy.put_keyed_encodable(&key, &StoredBlock { id: block.bitcoin_hash(), height, txdata: block.txdata.clone() })?;
+            } else {
+                panic!("Configuration error. No db to store block.");
             }
+            self.update_header_with_block(&block.bitcoin_hash(), pref)?;
+            return Ok(pref);
         }
-        Ok(PRef::invalid())
+        panic!("should not call store block before header is known {}", block.bitcoin_hash());
     }
 
     pub fn fetch_block(&self, height: u32) -> Result<Option<StoredBlock>, SPVError> {
@@ -304,30 +307,42 @@ impl ChainDB {
             if let Some((_, stored)) = heavy.get_keyed_decodable::<StoredBlock>(&key)? {
                 return Ok(Some(stored));
             }
-        }
-        Ok(None)
-    }
-
-    pub fn utxo_tip(&self) -> Result<Option<Sha256dHash>, SPVError> {
-        if let Some(ref heavy) = self.heavy {
-            if let Some((_, tip)) = heavy.get_keyed_decodable::<Sha256dHash>(UTXO_TIP)? {
-                return Ok(Some(tip.clone()));
+            else {
+                return Ok(None);
             }
         }
-        Ok(None)
+        panic!("Configuration error. No db to fetch block.");
     }
 
-    pub fn store_utxo_tip(&mut self, tip: &Sha256dHash) -> Result<PRef, SPVError> {
-        if let Some(ref mut heavy) = self.heavy {
-            return Ok(heavy.put_keyed_encodable(UTXO_TIP, tip)?);
+    pub fn utxo_tip (&self) -> Result<Option<Sha256dHash>, SPVError> {
+        if let Some(ref heavy) = self.heavy {
+            if let Some((_, tip)) = heavy.get_keyed_decodable::<Sha256dHash>(UTXO_TIP)? {
+                return Ok(Some(tip));
+            }
+            return Ok(None);
         }
-        Ok(PRef::invalid())
+        panic!("Configuration error. No db to fetch utxo tip.");
     }
 
     pub fn utxo_block(&mut self, block_ref: PRef) -> Result<(), SPVError> {
         if let Some(ref mut heavy) = self.heavy {
-            let (block_id, block) = heavy.get_decodable::<StoredBlock>(block_ref)?;
-            let block_id = Sha256dHash::from(block_id.as_slice());
+            let (_, block) = heavy.get_decodable::<StoredBlock>(block_ref)?;
+            if let Some((_, tip)) = heavy.get_keyed_decodable::<Sha256dHash>(UTXO_TIP)? {
+                if tip == block.id {
+                    warn!("utxo calculation for same block");
+                    return Ok(());
+                }
+                if let Some(header) = self.headercache.get_header(&block.id) {
+                    if tip != header.header.prev_blockhash {
+                        error!("attempt to apply the wrong block {} to utxo {}", block.id, tip);
+                        return Err(SPVError::UnknownUTXO);
+                    }
+                }
+                else {
+                    error!("header unknown for utxo block");
+                    return Err(SPVError::UnknownUTXO);
+                }
+            }
             let mut new_utxos = HashMap::new();
             let mut unwinds = Vec::new();
             for (i, tx) in block.txdata.iter().enumerate() {
@@ -357,17 +372,19 @@ impl ChainDB {
             for (coin, utxo) in &new_utxos {
                 heavy.put_keyed_encodable(utxo_key(coin).as_bytes(), utxo)?;
             }
-            heavy.put_keyed_encodable(&unwind_key(block_id).as_bytes()[..], &UTXOUnwind { unwinds })?;
+            heavy.put_keyed_encodable(&unwind_key(&block.id).as_bytes()[..], &UTXOUnwind { unwinds })?;
+            heavy.put_keyed_encodable(UTXO_TIP, &block.id)?;
+            return Ok(());
         }
-        Ok(())
+        panic!("Configuration error. No db to store utxo.");
     }
 
-    pub fn unwind_utxo(&mut self, id: &Sha256dHash) -> Result<(), SPVError> {
+    pub fn unwind_utxo(&mut self, id: &Sha256dHash) -> Result<Sha256dHash, SPVError> {
         if let Some(header) = self.headercache.get_header(id) {
             let height = header.height;
             if let Some(stored_block) = self.fetch_block(height)? {
                 if let Some(ref mut heavy) = self.heavy {
-                    if let Some((_, utxo_unwind)) = heavy.get_keyed_decodable::<UTXOUnwind>(&unwind_key(stored_block.id).as_bytes()[..])? {
+                    if let Some((_, utxo_unwind)) = heavy.get_keyed_decodable::<UTXOUnwind>(&unwind_key(&stored_block.id).as_bytes()[..])? {
                         let mut unwinds = utxo_unwind.unwinds.iter();
                         let mut same_block_out = HashSet::new();
                         for tx in &stored_block.txdata {
@@ -386,11 +403,16 @@ impl ChainDB {
                                 }
                             }
                         }
+                        return Ok(header.header.prev_blockhash);
                     }
+                }
+                else {
+                    panic!("Configuration error. No db to unwind utxo.");
                 }
             }
         }
-        Ok(())
+        error!("attempt to unwind the wrong block");
+        Err(SPVError::UnknownUTXO)
     }
 
     pub fn get_utxo(&self, coin: &OutPoint) -> Result<Option<(Script, u64)>, SPVError> {
@@ -408,9 +430,14 @@ impl ChainDB {
                     }
                 }
             }
-            debug!("no utxo for {}", coin);
+            error!("unknown utxo: {}", coin);
+            return Err(SPVError::UnknownUTXO);
         }
-        Ok(None)
+        panic!("Configuration error. No db to get utxo.");
+    }
+
+    pub fn get_utxo_accessor<'a>(&'a self, block: &Block) -> DBUTXOAccessor<'a> {
+        DBUTXOAccessor::new(self, block)
     }
 }
 
@@ -585,15 +612,15 @@ pub struct StoredUTXO {
 
 impl StoredUTXO {
     pub fn new(height: u32, tx_nr: u32, vout: u32) -> StoredUTXO {
-        StoredUTXO { utxo_id: (height as u64) << 39 | (tx_nr as u64) << 15 | (vout as u64) }
+        StoredUTXO { utxo_id: (height as u64) << 40 | (tx_nr as u64) << 16 | (vout as u64) }
     }
 
     pub fn height(&self) -> u32 {
-        (self.utxo_id >> 39) as u32
+        (self.utxo_id >> 40) as u32
     }
 
     pub fn tx_nr(&self) -> u32 {
-        ((self.utxo_id >> 15) & 0xffffff) as u32
+        ((self.utxo_id >> 16) & 0xffffff) as u32
     }
 
     pub fn vout(&self) -> u32 {
@@ -645,7 +672,7 @@ impl<D: Decoder> Decodable<D> for UTXOUnwind {
     }
 }
 
-fn unwind_key(block_id: Sha256dHash) -> Sha256dHash {
+fn unwind_key(block_id: &Sha256dHash) -> Sha256dHash {
     // hash again for unwind key of a block
     Sha256dHash::from_data(block_id.as_bytes())
 }
@@ -656,7 +683,7 @@ pub struct DBUTXOAccessor<'a> {
 }
 
 impl<'a> DBUTXOAccessor<'a> {
-    pub fn new(utxostore: &'a ChainDB, block: &Block) -> Result<DBUTXOAccessor<'a>, SPVError> {
+    pub fn new(utxostore: &'a ChainDB, block: &Block) -> DBUTXOAccessor<'a> {
         let mut acc = DBUTXOAccessor { utxostore: utxostore, same_block_utxo: HashMap::new() };
         for t in &block.txdata {
             let id = t.txid();
@@ -664,7 +691,7 @@ impl<'a> DBUTXOAccessor<'a> {
                 acc.same_block_utxo.insert((id, ix as u32), (o.script_pubkey.clone(), o.value));
             }
         }
-        Ok(acc)
+        acc
     }
 }
 

@@ -26,13 +26,11 @@ use bitcoin::{
         uint::Uint256,
     },
 };
-
-use hammersbald::PRef;
-
-use error::SPVError;
 use chaindb::StoredHeader;
+use error::SPVError;
+use hammersbald::PRef;
 use std::{
-    collections::{HashMap, hash_map::Entry},
+    collections::{hash_map::Entry, HashMap},
     sync::Arc,
 };
 
@@ -57,9 +55,9 @@ impl HeaderCache {
         self.trunk.truncate(0);
     }
 
-    pub fn add_header_unchecked (&mut self, stored: &StoredHeader) {
+    pub fn add_header_unchecked(&mut self, stored: &StoredHeader) {
         let id = Arc::new(stored.bitcoin_hash());
-        self.headers.insert (id.clone(), stored.clone());
+        self.headers.insert(id.clone(), stored.clone());
         self.trunk.push(id);
     }
 
@@ -69,8 +67,18 @@ impl HeaderCache {
             let updated = header.get_mut();
             updated.block = Some(block_ref);
             Some(updated.clone())
+        } else {
+            None
         }
-        else {
+    }
+
+    pub fn update_header_with_filter(&mut self, id: &Sha256dHash, filter_ref: PRef) -> Option<StoredHeader> {
+        let id = Arc::new(*id);
+        if let Entry::Occupied(ref mut header) = self.headers.entry(id) {
+            let updated = header.get_mut();
+            updated.filter = Some(filter_ref);
+            Some(updated.clone())
+        } else {
             None
         }
     }
@@ -100,7 +108,7 @@ impl HeaderCache {
                 height: 0,
                 log2work: Self::log2(header.work()),
                 block: None,
-                filter: None
+                filter: None,
             };
             self.trunk.push(new_tip.clone());
             self.headers.insert(new_tip.clone(), stored.clone());
@@ -203,7 +211,7 @@ impl HeaderCache {
             height: prev.height + 1,
             log2work: Self::log2(next.work() + Self::exp2(prev.log2work)),
             block: None,
-            filter: None
+            filter: None,
         };
         let next_hash = Arc::new(next.bitcoin_hash());
 
@@ -242,16 +250,14 @@ impl HeaderCache {
                     } else {
                         return Err(SPVError::UnconnectedHeader);
                     }
-                    self.trunk.extend(path_to_new_tip.iter().map(|h| {Arc::new(*h)}));
+                    self.trunk.extend(path_to_new_tip.iter().map(|h| { Arc::new(*h) }));
 
                     return Ok((stored, Some(unwinds), Some(path_to_new_tip)));
-                }
-                else {
-                    self.trunk.extend(path_to_new_tip.iter().map(|h| {Arc::new(*h)}));
+                } else {
+                    self.trunk.extend(path_to_new_tip.iter().map(|h| { Arc::new(*h) }));
 
                     return Ok((stored, None, Some(path_to_new_tip)));
                 }
-
             } else {
                 return Ok((stored, None, None));
             }
@@ -307,19 +313,19 @@ impl HeaderCache {
     }
 
     /// iterate from id to genesis
-    pub fn iter_to_genesis<'a> (&'a self, id: &Sha256dHash) -> HeaderIterator<'a> {
-        return HeaderIterator::new(self, id)
+    pub fn iter_to_genesis<'a>(&'a self, id: &Sha256dHash) -> HeaderIterator<'a> {
+        return HeaderIterator::new(self, id);
     }
 
     pub fn iter_trunk_to_genesis<'a>(&'a self) -> HeaderIterator<'a> {
         if let Some(tip) = self.trunk.last() {
-            return HeaderIterator::new(self, tip)
+            return HeaderIterator::new(self, tip);
         }
-        return HeaderIterator::new(self, &Sha256dHash::default())
+        return HeaderIterator::new(self, &Sha256dHash::default());
     }
 
-    pub fn iter_to_tip<'a> (&'a self, id: &Sha256dHash) -> TrunkIterator<'a> {
-        return TrunkIterator::new(self, id)
+    pub fn iter_to_tip<'a>(&'a self, id: &Sha256dHash) -> TrunkIterator<'a> {
+        return TrunkIterator::new(self, id);
     }
 
     // locator for getheaders message
@@ -348,12 +354,12 @@ impl HeaderCache {
 
 pub struct TrunkIterator<'a> {
     current: Option<usize>,
-    cache: &'a HeaderCache
+    cache: &'a HeaderCache,
 }
 
 impl<'a> TrunkIterator<'a> {
-    pub fn new (cache: &'a HeaderCache, current: &Sha256dHash) -> TrunkIterator<'a> {
-        TrunkIterator { current: cache.trunk.iter().rposition(|s|{ **s == *current }), cache }
+    pub fn new(cache: &'a HeaderCache, current: &Sha256dHash) -> TrunkIterator<'a> {
+        TrunkIterator { current: cache.trunk.iter().rposition(|s| { **s == *current }), cache }
     }
 }
 
@@ -362,12 +368,11 @@ impl<'a> Iterator for TrunkIterator<'a> {
 
     fn next(&mut self) -> Option<<Self as Iterator>::Item> {
         if let Some(pos) = self.current {
-            if pos < self.cache.trunk.len () - 1 {
-                let s = *self.cache.trunk[pos+1];
-                self.current = Some(pos+1);
+            if pos < self.cache.trunk.len() - 1 {
+                let s = *self.cache.trunk[pos + 1];
+                self.current = Some(pos + 1);
                 return Some(s);
-            }
-            else {
+            } else {
                 self.current = None;
             }
         }
@@ -377,11 +382,11 @@ impl<'a> Iterator for TrunkIterator<'a> {
 
 pub struct HeaderIterator<'a> {
     current: Sha256dHash,
-    cache: &'a HeaderCache
+    cache: &'a HeaderCache,
 }
 
 impl<'a> HeaderIterator<'a> {
-    pub fn new (cache: &'a HeaderCache, tip: &Sha256dHash) -> HeaderIterator<'a> {
+    pub fn new(cache: &'a HeaderCache, tip: &Sha256dHash) -> HeaderIterator<'a> {
         HeaderIterator { current: tip.clone(), cache }
     }
 }
@@ -395,7 +400,7 @@ impl<'a> Iterator for HeaderIterator<'a> {
         }
         if let Some(header) = self.cache.headers.get(&self.current) {
             self.current = header.header.prev_blockhash;
-            return Some(header.clone())
+            return Some(header.clone());
         }
         return None;
     }

@@ -32,6 +32,7 @@ use bitcoin::{
 };
 use chaindb::SharedChainDB;
 use configdb::SharedConfigDB;
+use blockfilter::BlockFilter;
 use p2p::{P2PControl, P2PControlSender, PeerId, PeerMessage, PeerMessageReceiver, PeerMessageSender};
 
 use std::{
@@ -74,6 +75,7 @@ impl FilterCalculator {
     }
 
     fn run(&mut self, receiver: PeerMessageReceiver) {
+        let genesis = genesis_block(self.network);
         loop {
             if self.peer.is_some() && !self.tasks.is_empty() && self.last_seen  + BLOCK_TIMEOUT < Self::now () {
                 let peer = self.peer.unwrap();
@@ -120,10 +122,11 @@ impl FilterCalculator {
             // unwind utxo if no longer on trunk
             {
                 let mut chaindb = self.chaindb.write().unwrap();
-                if let Some(utxo_tip) = chaindb.utxo_tip().expect("can not read utxo tip") {
+                if let Some(mut utxo_tip) = chaindb.utxo_tip().expect("can not read utxo tip") {
                     while chaindb.is_on_trunk(&utxo_tip) == false {
-                        chaindb.unwind_utxo(&utxo_tip).expect("can not unwind utxo");
+                        utxo_tip = chaindb.unwind_utxo(&utxo_tip).expect("can not unwind utxo");
                     }
+                    chaindb.batch().expect("can not batch UTXO store");
                 }
             }
 
@@ -145,12 +148,17 @@ impl FilterCalculator {
                         }
                     }
                 }
-                if missing.last().is_some() && *missing.last().unwrap () == genesis_block(self.network).header.bitcoin_hash() {
+                if missing.last().is_some() && *missing.last().unwrap () == genesis.bitcoin_hash() {
                     let mut chaindb = self.chaindb.write().unwrap();
-                    chaindb.store_block(&genesis_block(self.network)).expect("can not store genesis block");
-                    chaindb.batch().expect("can not store genesis block");
-                    let len = missing.len();
-                    missing.truncate(len - 1);
+                    if chaindb.utxo_tip().expect("can not read utxo tip").is_none() {
+                        let block_ref = chaindb.store_block(&genesis).expect("can not store genesis block");
+                        let filter = BlockFilter::compute_wallet_filter(&genesis, chaindb.get_utxo_accessor(&genesis)).expect("can not compute filter");
+                        chaindb.store_known_filter(&genesis.bitcoin_hash(), &Sha256dHash::default(), filter.content).expect("failed to store filter");
+                        chaindb.utxo_block(block_ref).expect("failed to apply block to UTXO");
+                        chaindb.batch().expect("can not store genesis block");
+                        let len = missing.len();
+                        missing.truncate(len - 1);
+                    }
                 }
 
                 missing.reverse();
@@ -168,9 +176,23 @@ impl FilterCalculator {
     fn block(&mut self, pid: PeerId, block: &Block) {
         if self.tasks.remove(&block.bitcoin_hash()) {
             self.last_seen = Self::now();
+            let block_id = block.bitcoin_hash();
             let mut chaindb = self.chaindb.write().unwrap();
-            chaindb.store_block(block).expect(format!("could not store block {}", block.bitcoin_hash()).as_str());
-            debug!("stored block {}", block.bitcoin_hash());
+            debug!("store block  {}", block_id);
+            let block_ref = chaindb.store_block(block).expect(format!("could not store block {}", block_id).as_str());
+            if let Some(utxo_tip) = chaindb.utxo_tip().expect("can not read utxo tip") {
+                if block.header.prev_blockhash == utxo_tip {
+                    if let Some(header) = chaindb.get_header(&block_id) {
+                        if let Some(prev_filter) = chaindb.get_block_filter(&block.header.prev_blockhash) {
+                            let filter = BlockFilter::compute_wallet_filter(&block, chaindb.get_utxo_accessor(block)).expect("can not compute filter");
+                            debug!("store filter {}", block_id);
+                            chaindb.store_known_filter(&block_id, &prev_filter.bitcoin_hash(), filter.content).expect("failed to store filter");
+                        }
+                    }
+                    debug!("store utxo   {}", block_id);
+                    chaindb.utxo_block(block_ref).expect("failed to apply block to UTXO");
+                }
+            }
         }
     }
 
