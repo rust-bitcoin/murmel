@@ -139,6 +139,7 @@ impl FilterCalculator {
                             if let Some(block_ref) = header.block {
                                 if let Some(block) = chaindb.fetch_block(header.height).expect("can not read blocks") {
                                     let block = Block{header: header.header, txdata: block.txdata};
+                                    debug!("fast forward utxo {}", utxo_tip);
                                     Self::forward_utxo(&mut chaindb, block_ref, &block, &header);
                                 }
                                 else {
@@ -160,40 +161,44 @@ impl FilterCalculator {
 
             // can not work if no peer is connected
             if let Some(peer) = self.peer {
-                // compute the list of missing blocks
-                // missing that is on trunk, we do not yet have and also not yet asked for
-                let mut missing = Vec::new();
+                if self.tasks.is_empty () {
+                    // compute the list of missing blocks
+                    // missing that is on trunk, we do not yet have and also not yet asked for
+                    let mut missing = Vec::new();
 
-                {
-                    let chaindb = self.chaindb.read().unwrap();
-                    for header in chaindb.iter_trunk_to_genesis() {
-                        let id = header.bitcoin_hash();
-                        if header.block.is_none() && !self.tasks.contains(&id) {
-                            missing.push(id);
+                    {
+                        debug!("calculate missing blocks...");
+                        let chaindb = self.chaindb.read().unwrap();
+                        for header in chaindb.iter_trunk_to_genesis() {
+                            let id = header.bitcoin_hash();
+                            if header.block.is_none() && !self.tasks.contains(&id) {
+                                missing.push(id);
+                            }
+                        }
+                        debug!("missing {} blocks", missing.len());
+                    }
+                    if missing.last().is_some() && *missing.last().unwrap() == genesis.bitcoin_hash() {
+                        let mut chaindb = self.chaindb.write().unwrap();
+                        if chaindb.utxo_tip().expect("can not read utxo tip").is_none() {
+                            let block_ref = chaindb.store_block(&genesis).expect("can not store genesis block");
+                            let filter = BlockFilter::compute_wallet_filter(&genesis, chaindb.get_utxo_accessor(&genesis)).expect("can not compute filter");
+                            chaindb.store_known_filter(&genesis.bitcoin_hash(), &Sha256dHash::default(), filter.content).expect("failed to store filter");
+                            chaindb.utxo_block(block_ref).expect("failed to apply block to UTXO");
+                            chaindb.batch().expect("can not store genesis block");
+                            let len = missing.len();
+                            missing.truncate(len - 1);
                         }
                     }
-                }
-                if missing.last().is_some() && *missing.last().unwrap () == genesis.bitcoin_hash() {
-                    let mut chaindb = self.chaindb.write().unwrap();
-                    if chaindb.utxo_tip().expect("can not read utxo tip").is_none() {
-                        let block_ref = chaindb.store_block(&genesis).expect("can not store genesis block");
-                        let filter = BlockFilter::compute_wallet_filter(&genesis, chaindb.get_utxo_accessor(&genesis)).expect("can not compute filter");
-                        chaindb.store_known_filter(&genesis.bitcoin_hash(), &Sha256dHash::default(), filter.content).expect("failed to store filter");
-                        chaindb.utxo_block(block_ref).expect("failed to apply block to UTXO");
-                        chaindb.batch().expect("can not store genesis block");
-                        let len = missing.len();
-                        missing.truncate(len - 1);
+
+                    missing.reverse();
+
+                    if let Some(chunk) = missing.as_slice().chunks(CHUNK).next() {
+                        let invs = chunk.iter().map(|s| { Inventory { inv_type: InvType::WitnessBlock, hash: s.clone() } }).collect::<Vec<_>>();
+                        debug!("asking {} blocks from peer={}", invs.len(), peer);
+                        self.p2p.send(P2PControl::Send(peer, NetworkMessage::GetData(invs)));
+                        chunk.iter().for_each(|id| { self.tasks.insert(id.clone()); });
                     }
                 }
-
-                missing.reverse();
-
-                for chunk in missing.as_slice().chunks(CHUNK) {
-                    let invs = chunk.iter().map(|s| { Inventory { inv_type: InvType::WitnessBlock, hash: s.clone() } }).collect::<Vec<_>>();
-                    debug!("asking {} blocks from peer={}", invs.len(), peer);
-                    self.p2p.send(P2PControl::Send(peer, NetworkMessage::GetData(invs)));
-                }
-                missing.iter().for_each(|id| { self.tasks.insert(id.clone());});
             }
         }
     }
@@ -214,6 +219,9 @@ impl FilterCalculator {
                 chaindb.batch().expect("can not batch chain db");
                 self.stored = 0;
             }
+        }
+        else {
+            debug!("received unwanted block {}", block.bitcoin_hash());
         }
     }
 
