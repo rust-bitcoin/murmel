@@ -30,7 +30,7 @@ use std::path::Path;
 /// simple test drive that connects to a local bitcoind
 pub fn main() {
     if find_opt("help") {
-        println!("BIP158 Filter Server");
+        println!("BIP157 Filter Server");
         println!("{} [--help] [--log trace|debug|info|warn|error] [--connections n] [--peer ip_address:port] [--db database_file] [--network main|test]", args().next().unwrap());
         println!("--log level: level is one of trace|debug|info|warn|error");
         println!("--connections n: maintain at least n connections");

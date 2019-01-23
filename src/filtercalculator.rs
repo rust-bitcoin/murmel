@@ -95,7 +95,9 @@ impl FilterCalculator {
                     PeerMessage::Connected(pid) => {
                         if self.peer.is_none() {
                             debug!("block download from peer={}", pid);
+                            self.tasks.clear();
                             self.peer = Some(pid);
+                            re_check = true;
                         }
                         self.peers.insert(pid);
                     },
@@ -118,6 +120,7 @@ impl FilterCalculator {
                     PeerMessage::Message(pid, msg) => {
                         match msg {
                             NetworkMessage::Block(block) => {
+                                re_check = true;
                                 self.block(pid, &block);
                             },
                             NetworkMessage::Ping(_) => {
@@ -220,10 +223,8 @@ impl FilterCalculator {
                 Self::forward_utxo(&mut chaindb, block_ref, block, &header);
             }
             // batch sometimes
-            self.stored += 1;
-            if self.stored == 2000 {
-                chaindb.batch().expect("can not batch chain db");
-                self.stored = 0;
+            if self.tasks.is_empty () {
+                chaindb.batch().expect("can not batch on chain db");
             }
         }
         else {
