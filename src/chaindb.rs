@@ -88,6 +88,7 @@ impl ChainDB {
 
     pub fn init(&mut self) -> Result<(), SPVError> {
         self.init_headers()?;
+        // TODO read filters
         Ok(())
     }
 
@@ -128,6 +129,11 @@ impl ChainDB {
             self.headercache.clear();
             while let Some(stored) = sl.pop_front() {
                 self.headercache.add_header_unchecked(&stored);
+                if let Some(filter_ref) = stored.filter {
+                    let filter = self.fetch_filter(filter_ref)?;
+                    self.filtercache.add_filter(&filter);
+                }
+
             }
         }
         Ok(())
@@ -272,6 +278,12 @@ impl ChainDB {
 
     pub fn store_filter(&mut self, filter: &StoredFilter) -> Result<PRef, SPVError> {
         Ok(self.light.put_hash_keyed(filter)?)
+    }
+
+
+    pub fn fetch_filter(&self, pref: PRef) -> Result<StoredFilter, SPVError> {
+        let (key, stored) = self.light.get_decodable::<StoredFilter>(pref)?;
+        return Ok(stored);
     }
 
     pub fn store_known_filter (&mut self, block_id: &Sha256dHash, previous_filter: &Sha256dHash, content: Vec<u8>) -> Result<Sha256dHash, SPVError> {

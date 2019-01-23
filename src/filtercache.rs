@@ -47,7 +47,9 @@ impl FilterCache {
     }
 
     pub fn add_filter (&mut self, filter: &StoredFilter) {
-        let filter = Arc::new(filter.clone());
+        let mut store = filter.clone();
+        store.filter = None; // do not keep filter in memory
+        let filter = Arc::new(store);
         self.by_block.insert (filter.block_id, filter.clone());
         self.filters.insert(filter.bitcoin_hash(), filter);
     }

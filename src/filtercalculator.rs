@@ -54,7 +54,8 @@ pub struct FilterCalculator {
     peer: Option<PeerId>,
     peers: HashSet<PeerId>,
     tasks: HashSet<Sha256dHash>,
-    last_seen: u64
+    last_seen: u64,
+    stored: u32
 }
 
 
@@ -69,7 +70,7 @@ impl FilterCalculator {
     pub fn new(network: Network, chaindb: SharedChainDB, p2p: P2PControlSender) -> PeerMessageSender {
         let (sender, receiver) = mpsc::channel();
 
-        let mut filtercalculator = FilterCalculator { network, chaindb, p2p, peer: None, tasks: HashSet::new(), peers: HashSet::new(), last_seen: Self::now() };
+        let mut filtercalculator = FilterCalculator { network, chaindb, p2p, peer: None, tasks: HashSet::new(), peers: HashSet::new(), last_seen: Self::now(), stored: 0 };
 
         thread::spawn(move || { filtercalculator.run(receiver) });
 
@@ -204,6 +205,12 @@ impl FilterCalculator {
                 debug!("store block  {} {}", header.height, block_id);
                 let block_ref = chaindb.store_block(block).expect(format!("could not store block {}", block_id).as_str());
                 Self::forward_utxo(&mut chaindb, block_ref, block, &header);
+            }
+            // batch sometimes
+            self.stored += 1;
+            if self.stored == 2000 {
+                chaindb.batch().expect("can not batch chain db");
+                self.stored = 0;
             }
         }
     }

@@ -62,22 +62,18 @@ impl HeaderCache {
     }
 
     pub fn update_header_with_block(&mut self, id: &Sha256dHash, block_ref: PRef) -> Option<StoredHeader> {
-        let id = Arc::new(*id);
-        if let Entry::Occupied(ref mut header) = self.headers.entry(id) {
-            let updated = header.get_mut();
-            updated.block = Some(block_ref);
-            Some(updated.clone())
+        if let Some(ref mut header) = self.headers.get_mut(id) {
+            header.block = Some(block_ref);
+            Some(header.clone())
         } else {
             None
         }
     }
 
     pub fn update_header_with_filter(&mut self, id: &Sha256dHash, filter_ref: PRef) -> Option<StoredHeader> {
-        let id = Arc::new(*id);
-        if let Entry::Occupied(ref mut header) = self.headers.entry(id) {
-            let updated = header.get_mut();
-            updated.filter = Some(filter_ref);
-            Some(updated.clone())
+        if let Some(ref mut header) = self.headers.get_mut(id) {
+            header.filter = Some(filter_ref);
+            Some(header.clone())
         } else {
             None
         }
