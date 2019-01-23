@@ -133,9 +133,8 @@ impl ChainDB {
                     let filter = self.fetch_filter(filter_ref)?;
                     self.filtercache.add_filter(&filter);
                 }
-
             }
-            info!("Read {} bytes of block filters", self.filtercache.len());
+            info!("read {} filter header", self.filtercache.len());
         }
         Ok(())
     }

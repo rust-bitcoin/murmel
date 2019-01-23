@@ -47,11 +47,13 @@ impl FilterCache {
     }
 
     pub fn len (&self) -> usize {
-        self.filters.values().map(|f| if let Some(ref filter) = f.filter { filter.len() } else { 0 }).sum()
+        self.filters.len()
     }
 
     pub fn add_filter (&mut self, filter: &StoredFilter) {
-        let filter = Arc::new(filter.clone());
+        let mut stored = filter.clone();
+        stored.filter = None;
+        let filter = Arc::new(stored.clone());
         self.by_block.insert (filter.block_id, filter.clone());
         self.filters.insert(filter.bitcoin_hash(), filter);
     }

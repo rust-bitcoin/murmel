@@ -81,6 +81,7 @@ impl FilterCalculator {
 
     fn run(&mut self, receiver: PeerMessageReceiver) {
         let genesis = genesis_block(self.network);
+        let mut re_check = true;
         loop {
             if self.peer.is_some() && !self.tasks.is_empty() && self.last_seen  + BLOCK_TIMEOUT < Self::now () {
                 let peer = self.peer.unwrap();
@@ -105,6 +106,7 @@ impl FilterCalculator {
                                 self.tasks.clear();
                                 if let Some(new_peer) = self.peers.iter().next() {
                                     self.peer = Some(*new_peer);
+                                    re_check = true;
                                     debug!("block download from peer={}", *new_peer);
                                 }
                                 else {
@@ -117,6 +119,9 @@ impl FilterCalculator {
                         match msg {
                             NetworkMessage::Block(block) => {
                                 self.block(pid, &block);
+                            },
+                            NetworkMessage::Ping(_) => {
+                                re_check = true;
                             }
                             _ => {}
                         }
@@ -161,7 +166,8 @@ impl FilterCalculator {
 
             // can not work if no peer is connected
             if let Some(peer) = self.peer {
-                if self.tasks.is_empty () {
+                if self.tasks.is_empty () && re_check {
+                    re_check = false;
                     // compute the list of missing blocks
                     // missing that is on trunk, we do not yet have and also not yet asked for
                     let mut missing = Vec::new();

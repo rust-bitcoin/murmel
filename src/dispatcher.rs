@@ -56,7 +56,7 @@ pub struct Dispatcher {
     // the blockchain db
     chaindb: SharedChainDB,
     // block downloader sender
-    block_downloader: PeerMessageSender,
+    filter_calculator: PeerMessageSender,
     // lightning connector
     connector: Arc<LightningConnector>
 }
@@ -72,7 +72,7 @@ impl Dispatcher {
             p2p,
             configdb,
             chaindb,
-            block_downloader,
+            filter_calculator: block_downloader,
             connector
         });
 
@@ -115,13 +115,13 @@ impl Dispatcher {
     pub fn connected(&self, pm: PeerMessage) -> Result<(), SPVError> {
         debug!("connected peer={}", pm.peer_id());
         self.get_headers(pm.peer_id())?;
-        self.block_downloader.send(pm);
+        self.filter_calculator.send(pm);
         Ok(())
     }
 
     /// called from dispatcher whenever a peer is disconnected
     pub fn disconnected(&self, pm: PeerMessage) -> Result<(), SPVError> {
-        self.block_downloader.send(pm);
+        self.filter_calculator.send(pm);
         Ok(())
     }
 
@@ -221,13 +221,15 @@ impl Dispatcher {
             } else {
                 debug!("received {} known or orphan headers from peer={}", headers.len(), peer);
             }
+            // ping calculator, so it re-checks work
+            self.filter_calculator.send_network(peer, NetworkMessage::Ping(0));
         }
         Ok(())
     }
 
     // process an incoming block
     fn block(&self, block: Block, peer: PeerId) -> Result<(), SPVError> {
-        self.block_downloader.send_network(peer, NetworkMessage::Block(block));
+        self.filter_calculator.send_network(peer, NetworkMessage::Block(block));
         Ok(())
     }
 
@@ -253,7 +255,7 @@ impl Dispatcher {
         if ask_for_headers {
             self.get_headers(peer)?;
         }
-        self.block_downloader.send_network(peer, NetworkMessage::Inv(v));
+        self.filter_calculator.send_network(peer, NetworkMessage::Inv(v));
         Ok(())
     }
 
