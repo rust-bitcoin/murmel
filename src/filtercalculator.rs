@@ -65,10 +65,12 @@ const POLL: u64 = 1000;
 const BLOCK_TIMEOUT: u64 = 60;
 // download in chunks of n blocks
 const CHUNK: usize = 1000;
+// channel size
+const BACK_PRESSURE: usize = 10;
 
 impl FilterCalculator {
     pub fn new(network: Network, chaindb: SharedChainDB, p2p: P2PControlSender) -> PeerMessageSender {
-        let (sender, receiver) = mpsc::channel();
+        let (sender, receiver) = mpsc::sync_channel(BACK_PRESSURE);
 
         let mut filtercalculator = FilterCalculator { network, chaindb, p2p, peer: None, tasks: HashSet::new(), peers: HashSet::new(), last_seen: Self::now(), stored: 0 };
 

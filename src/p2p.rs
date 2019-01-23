@@ -131,11 +131,11 @@ pub type PeerMessageReceiver = mpsc::Receiver<PeerMessage>;
 
 #[derive(Clone)]
 pub struct PeerMessageSender {
-    sender: Arc<Mutex<mpsc::Sender<PeerMessage>>>
+    sender: Arc<Mutex<mpsc::SyncSender<PeerMessage>>>
 }
 
 impl PeerMessageSender {
-    pub fn new (sender: mpsc::Sender<PeerMessage>) -> PeerMessageSender {
+    pub fn new (sender: mpsc::SyncSender<PeerMessage>) -> PeerMessageSender {
         PeerMessageSender { sender: Arc::new(Mutex::new(sender)) }
     }
 
