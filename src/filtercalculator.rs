@@ -221,7 +221,7 @@ impl FilterCalculator {
             if block.header.prev_blockhash == utxo_tip {
                 if let Some(prev_filter) = chaindb.get_block_filter(&block.header.prev_blockhash) {
                     let filter = BlockFilter::compute_wallet_filter(&block, chaindb.get_utxo_accessor(block)).expect("can not compute filter");
-                    debug!("store filter {} {}", header.height, block_id);
+                    debug!("store filter {} {} size: {}", header.height, block_id, filter.content.len());
                     chaindb.store_known_filter(&block_id, &prev_filter.bitcoin_hash(), filter.content).expect("failed to store filter");
                 }
                 debug!("store utxo   {} {}", header.height, block_id);
