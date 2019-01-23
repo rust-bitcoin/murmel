@@ -39,6 +39,7 @@ extern crate siphasher;
 extern crate futures;
 extern crate futures_timer;
 
+mod headerdownload;
 mod headercache;
 mod filtercache;
 mod chaindb;

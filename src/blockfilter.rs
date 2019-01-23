@@ -24,17 +24,22 @@
 use error::SPVError;
 use chaindb::UTXOAccessor;
 
-use bitcoin;
-use bitcoin::blockdata::block::Block;
-use bitcoin::consensus::{Decodable, Encodable};
-use bitcoin::consensus::encode::VarInt;
-use bitcoin::util::hash::{BitcoinHash, Sha256dHash};
+use bitcoin::{
+    blockdata::block::Block
+};
+use bitcoin::{
+    consensus::{encode::VarInt, Decodable, Encodable},
+    util::hash::{BitcoinHash, Sha256dHash}
+};
+
 use siphasher::sip::SipHasher;
-use std::cmp;
-use std::collections::HashSet;
-use std::hash::Hasher;
-use std::io::Cursor;
-use std::io;
+use std::{
+    cmp,
+    collections::HashSet,
+    hash::Hasher,
+    io::{self, Cursor}
+
+};
 
 const P: u8 = 19;
 const M: u64 = 784931;
@@ -114,20 +119,6 @@ impl <'a> BlockFilterWriter<'a> {
     }
 }
 
-fn serialize<T: ?Sized>(data: &T) -> Result<Vec<u8>, bitcoin::util::Error>
-    where T: Encodable<io::Cursor<Vec<u8>>>,
-{
-    let mut encoder = io::Cursor::new(vec![]);
-    data.consensus_encode(&mut encoder)?;
-    Ok(encoder.into_inner())
-}
-
-fn encode<T: ? Sized>(data: &T) -> Result<Vec<u8>, io::Error>
-    where T: Encodable<Vec<u8>> {
-    let mut result = vec!();
-    data.consensus_encode(&mut result).map_err(|_| { io::Error::new(io::ErrorKind::InvalidData, "serialization error") })?;
-    Ok(result)
-}
 
 /// Reads and interpret a block filter
 pub struct BlockFilterReader {

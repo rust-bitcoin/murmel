@@ -46,7 +46,7 @@ use rand::{RngCore, thread_rng};
 
 use std::{
     cmp::{max, min},
-    collections::{HashMap, VecDeque, hash_map::Entry},
+    collections::{HashMap, VecDeque},
     fmt,
     io,
     io::{Read, Write},

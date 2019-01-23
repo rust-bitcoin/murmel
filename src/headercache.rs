@@ -30,7 +30,7 @@ use chaindb::StoredHeader;
 use error::SPVError;
 use hammersbald::PRef;
 use std::{
-    collections::{hash_map::Entry, HashMap},
+    collections::HashMap,
     sync::Arc,
 };
 

@@ -29,7 +29,7 @@ use bitcoin::{
     network::constants::Network,
     util::hash::Sha256dHash,
 };
-use blockfilter::BlockFilter;
+
 use byteorder::{BigEndian, ByteOrder};
 use error::SPVError;
 use filtercache::FilterCache;
@@ -282,7 +282,7 @@ impl ChainDB {
 
 
     pub fn fetch_filter(&self, pref: PRef) -> Result<StoredFilter, SPVError> {
-        let (key, stored) = self.light.get_decodable::<StoredFilter>(pref)?;
+        let (_, stored) = self.light.get_decodable::<StoredFilter>(pref)?;
         return Ok(stored);
     }
 

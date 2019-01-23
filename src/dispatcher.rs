@@ -28,8 +28,7 @@ use filtercalculator::FilterCalculator;
 use bitcoin::{
     BitcoinHash,
     blockdata::{
-        block::{Block, LoneBlockHeader},
-        transaction::Transaction,
+        block::{Block, LoneBlockHeader}
     },
     util::hash::Sha256dHash,
     network::{
@@ -42,7 +41,7 @@ use bitcoin::{
 
 use std::{
     thread,
-    sync::{Arc, mpsc},
+    sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
     collections::VecDeque,
 };
@@ -58,9 +57,7 @@ pub struct Dispatcher {
     // block downloader sender
     filter_calculator: PeerMessageSender,
     // lightning connector
-    connector: Arc<LightningConnector>,
-    // is this a filter server ?
-    server: bool
+    connector: Arc<LightningConnector>
 }
 
 impl Dispatcher {
@@ -80,7 +77,6 @@ impl Dispatcher {
             configdb,
             chaindb,
             filter_calculator: block_downloader,
-            server,
             connector
         });
 
@@ -188,9 +184,6 @@ impl Dispatcher {
                                 height = stored.height;
 
                                 if let Some(unwinds) = unwinds {
-                                    for h in &unwinds {
-                                        // TODO unwind utxo
-                                    }
                                     disconnected_headers.extend(unwinds.iter()
                                         .map(|h| chaindb.get_header(h).unwrap().header));
                                     break;

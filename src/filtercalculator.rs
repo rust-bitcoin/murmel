@@ -31,19 +31,16 @@ use bitcoin::{
     util::hash::Sha256dHash,
 };
 use chaindb::{SharedChainDB, ChainDB, StoredHeader};
-use configdb::SharedConfigDB;
 use blockfilter::BlockFilter;
 use p2p::{P2PControl, P2PControlSender, PeerId, PeerMessage, PeerMessageReceiver, PeerMessageSender};
 
 use hammersbald::PRef;
 
 use std::{
-    hash::{Hasher, Hash},
-    collections::{hash_map::Entry, HashMap, HashSet},
-    sync::{Arc, mpsc, RwLockWriteGuard},
+    collections::HashSet,
+    sync::{mpsc, RwLockWriteGuard},
     thread,
-    time::{Duration, SystemTime},
-    cmp::Ordering
+    time::{Duration, SystemTime}
 };
 
 
@@ -54,8 +51,7 @@ pub struct FilterCalculator {
     peer: Option<PeerId>,
     peers: HashSet<PeerId>,
     tasks: HashSet<Sha256dHash>,
-    last_seen: u64,
-    stored: u32
+    last_seen: u64
 }
 
 
@@ -72,7 +68,7 @@ impl FilterCalculator {
     pub fn new(network: Network, chaindb: SharedChainDB, p2p: P2PControlSender) -> PeerMessageSender {
         let (sender, receiver) = mpsc::sync_channel(BACK_PRESSURE);
 
-        let mut filtercalculator = FilterCalculator { network, chaindb, p2p, peer: None, tasks: HashSet::new(), peers: HashSet::new(), last_seen: Self::now(), stored: 0 };
+        let mut filtercalculator = FilterCalculator { network, chaindb, p2p, peer: None, tasks: HashSet::new(), peers: HashSet::new(), last_seen: Self::now() };
 
         thread::spawn(move || { filtercalculator.run(receiver) });
 
@@ -212,7 +208,7 @@ impl FilterCalculator {
         }
     }
 
-    fn block(&mut self, pid: PeerId, block: &Block) {
+    fn block(&mut self, _: PeerId, block: &Block) {
         if self.tasks.remove(&block.bitcoin_hash()) {
             self.last_seen = Self::now();
             let block_id = block.bitcoin_hash();
