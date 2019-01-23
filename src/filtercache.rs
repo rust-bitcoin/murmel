@@ -46,10 +46,12 @@ impl FilterCache {
             by_block: HashMap::with_capacity(EXPECTED_CHAIN_LENGTH) }
     }
 
+    pub fn len (&self) -> usize {
+        self.filters.values().map(|f| if let Some(ref filter) = f.filter { filter.len() } else { 0 }).sum()
+    }
+
     pub fn add_filter (&mut self, filter: &StoredFilter) {
-        let mut store = filter.clone();
-        store.filter = None; // do not keep filter in memory
-        let filter = Arc::new(store);
+        let filter = Arc::new(filter.clone());
         self.by_block.insert (filter.block_id, filter.clone());
         self.filters.insert(filter.bitcoin_hash(), filter);
     }

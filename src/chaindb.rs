@@ -135,6 +135,7 @@ impl ChainDB {
                 }
 
             }
+            info!("Read {} bytes of block filters", self.filtercache.len());
         }
         Ok(())
     }
