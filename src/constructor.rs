@@ -74,6 +74,7 @@ pub struct Constructor {
     configdb: SharedConfigDB,
     chaindb: SharedChainDB,
     listen: Vec<SocketAddr>,
+    server: bool,
     /// The Lightning Network connector
     pub connector: Option<Arc<LightningConnector>>
 }
@@ -90,7 +91,7 @@ impl Constructor {
         let configdb = Arc::new(Mutex::new(ConfigDB::new(path)?));
         let chaindb = Arc::new(RwLock::new(ChainDB::new(path, network,server)?));
         create_tables(configdb.clone())?;
-        Ok(Constructor { network, user_agent, configdb, chaindb, listen, connector: None })
+        Ok(Constructor { network, user_agent, configdb, chaindb, listen, server, connector: None })
     }
 
     /// Initialize the stack and return a ChainWatchInterface
@@ -103,7 +104,7 @@ impl Constructor {
         let configdb = Arc::new(Mutex::new(ConfigDB::mem()?));
         let chaindb = Arc::new(RwLock::new(ChainDB::mem( network,server)?));
         create_tables(configdb.clone())?;
-        Ok(Constructor { network, user_agent, configdb, chaindb, listen, connector: None })
+        Ok(Constructor { network, user_agent, configdb, chaindb, listen, server, connector: None })
     }
 
 	/// Run the SPV stack. This should be called AFTER registering listener of the ChainWatchInterface,
@@ -122,7 +123,7 @@ impl Constructor {
         self.connector = Some(lightning.clone());
 
         let dispatcher =
-            Dispatcher::new(self.network, self.configdb.clone(), self.chaindb.clone(), lightning, p2p_control.clone(), from_p2p);
+            Dispatcher::new(self.network, self.configdb.clone(), self.chaindb.clone(), self.server, lightning, p2p_control.clone(), from_p2p);
 
         dispatcher.init().unwrap();
 

@@ -131,20 +131,28 @@ pub type PeerMessageReceiver = mpsc::Receiver<PeerMessage>;
 
 #[derive(Clone)]
 pub struct PeerMessageSender {
-    sender: Arc<Mutex<mpsc::SyncSender<PeerMessage>>>
+    sender: Option<Arc<Mutex<mpsc::SyncSender<PeerMessage>>>>
 }
 
 impl PeerMessageSender {
     pub fn new (sender: mpsc::SyncSender<PeerMessage>) -> PeerMessageSender {
-        PeerMessageSender { sender: Arc::new(Mutex::new(sender)) }
+        PeerMessageSender { sender: Some(Arc::new(Mutex::new(sender))) }
+    }
+
+    pub fn dummy () -> PeerMessageSender {
+        PeerMessageSender{ sender: None }
     }
 
     pub fn send (&self, msg: PeerMessage) {
-        self.sender.lock().unwrap().send(msg).expect("P2P message send failed");
+        if let Some(ref sender) = self.sender {
+            sender.lock().unwrap().send(msg).expect("P2P message send failed");
+        }
     }
 
     pub fn send_network(&self, peer: PeerId, msg: NetworkMessage) {
-        self.sender.lock().unwrap().send(PeerMessage::Message(peer, msg)).expect("P2P message send failed");
+        if let Some(ref sender) = self.sender {
+            sender.lock().unwrap().send(PeerMessage::Message(peer, msg)).expect("P2P message send failed");
+        }
     }
 }
 

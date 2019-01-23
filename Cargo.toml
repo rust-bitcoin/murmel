@@ -15,8 +15,8 @@ name = "bitcoin_spv"
 path = "src/lib.rs"
 
 [[bin]]
-name = "bitcoin_spv"
-path = "src/bin/main.rs"
+name = "filter_server"
+path = "src/bin/filter_server.rs"
 
 [dependencies]
 bitcoin = { version = "0.15", features = ["bitcoinconsensus"] }

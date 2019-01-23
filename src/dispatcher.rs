@@ -58,21 +58,29 @@ pub struct Dispatcher {
     // block downloader sender
     filter_calculator: PeerMessageSender,
     // lightning connector
-    connector: Arc<LightningConnector>
+    connector: Arc<LightningConnector>,
+    // is this a filter server ?
+    server: bool
 }
 
 impl Dispatcher {
     /// Create a new local node
-    pub fn new(network: Network, configdb: SharedConfigDB, chaindb: SharedChainDB, connector: Arc<LightningConnector>, p2p: P2PControlSender, incoming: PeerMessageReceiver) -> Arc<Dispatcher> {
+    pub fn new(network: Network, configdb: SharedConfigDB, chaindb: SharedChainDB, server: bool, connector: Arc<LightningConnector>, p2p: P2PControlSender, incoming: PeerMessageReceiver) -> Arc<Dispatcher> {
 
 
-        let block_downloader = FilterCalculator::new(network, chaindb.clone(), p2p.clone());
+        let block_downloader = if server {
+            FilterCalculator::new(network, chaindb.clone(), p2p.clone())
+        }
+        else {
+            PeerMessageSender::dummy()
+        };
 
         let dispatcher = Arc::new(Dispatcher {
             p2p,
             configdb,
             chaindb,
             filter_calculator: block_downloader,
+            server,
             connector
         });
 
