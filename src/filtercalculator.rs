@@ -33,6 +33,8 @@ use bitcoin::{
 use chaindb::{SharedChainDB, ChainDB, StoredHeader};
 use blockfilter::BlockFilter;
 use p2p::{P2PControl, P2PControlSender, PeerId, PeerMessage, PeerMessageReceiver, PeerMessageSender};
+use error::SPVError;
+use blockfilter::{COIN_FILTER, SCRIPT_FILTER};
 
 use hammersbald::PRef;
 
@@ -76,7 +78,6 @@ impl FilterCalculator {
     }
 
     fn run(&mut self, receiver: PeerMessageReceiver) {
-        let genesis = genesis_block(self.network);
         let mut re_check = true;
         loop {
             if self.peer.is_some() && !self.tasks.is_empty() && self.last_seen  + BLOCK_TIMEOUT < Self::now () {
@@ -117,7 +118,7 @@ impl FilterCalculator {
                         match msg {
                             NetworkMessage::Block(block) => {
                                 re_check = true;
-                                self.block(pid, &block);
+                                self.block(pid, &block).expect("block store failed");
                             },
                             NetworkMessage::Ping(_) => {
                                 re_check = true;
@@ -130,82 +131,86 @@ impl FilterCalculator {
 
             // check for new work
             // what is missing might change through new header or even reorg
-
-            // can not work if no peer is connected
-            if let Some(peer) = self.peer {
-                if self.tasks.is_empty () && re_check {
-                    re_check = false;
-                    // compute the list of missing blocks
-                    // missing that is on trunk, we do not yet have and also not yet asked for
-                    let mut missing = Vec::new();
-
-                    {
-                        debug!("calculate missing blocks...");
-                        let chaindb = self.chaindb.read().unwrap();
-                        for header in chaindb.iter_trunk_to_genesis() {
-                            let id = header.bitcoin_hash();
-                            if header.block.is_none() && !self.tasks.contains(&id) {
-                                missing.push(id);
-                            }
-                        }
-                        debug!("missing {} blocks", missing.len());
-                    }
-                    if missing.last().is_some() && *missing.last().unwrap() == genesis.bitcoin_hash() {
-                        let mut chaindb = self.chaindb.write().unwrap();
-                        let block_ref = chaindb.store_block(&genesis).expect("can not store genesis block");
-                        let script_filter = BlockFilter::compute_script_filter(&genesis, chaindb.get_script_accessor(&genesis)).expect("can not compute script filter");
-                        let coin_filter = BlockFilter::compute_coin_filter(&genesis).expect("can not compute coin filter");
-                        chaindb.store_known_filter(&genesis.bitcoin_hash(), &Sha256dHash::default(), &Sha256dHash::default(), script_filter.content, coin_filter.content).expect("failed to store filter");
-                        chaindb.cache_scripts(&genesis);
-                        chaindb.batch().expect("can not store genesis block");
-                        let len = missing.len();
-                        missing.truncate(len - 1);
-                    }
-
-                    missing.reverse();
-
-                    if let Some(chunk) = missing.as_slice().chunks(CHUNK).next() {
-                        let invs = chunk.iter().map(|s| { Inventory { inv_type: InvType::WitnessBlock, hash: s.clone() } }).collect::<Vec<_>>();
-                        debug!("asking {} blocks from peer={}", invs.len(), peer);
-                        self.p2p.send(P2PControl::Send(peer, NetworkMessage::GetData(invs)));
-                        chunk.iter().for_each(|id| { self.tasks.insert(id.clone()); });
-                    }
-                }
+            if re_check {
+                self.download().expect("download failed");
+                re_check = false;
             }
+
         }
     }
 
-    fn block(&mut self, _: PeerId, block: &Block) {
+    fn download (&mut self) -> Result<(), SPVError> {
+        let genesis = genesis_block(self.network);
+        // can not work if no peer is connected
+        if let Some(peer) = self.peer {
+            if self.tasks.is_empty () {
+                // compute the list of missing blocks
+                // missing that is on trunk, we do not yet have and also not yet asked for
+                let mut missing = Vec::new();
+
+                {
+                    debug!("calculate missing blocks...");
+                    let chaindb = self.chaindb.read().unwrap();
+                    for header in chaindb.iter_trunk_to_genesis() {
+                        let id = header.bitcoin_hash();
+                        if header.block.is_none() && !self.tasks.contains(&id) {
+                            missing.push(id);
+                        }
+                    }
+                    debug!("missing {} blocks", missing.len());
+                }
+                if missing.last().is_some() && *missing.last().unwrap() == genesis.bitcoin_hash() {
+                    let mut chaindb = self.chaindb.write().unwrap();
+                    let block_ref = chaindb.store_block(&genesis)?;
+                    let script_filter = BlockFilter::compute_script_filter(&genesis, chaindb.get_script_accessor(&genesis))?;
+                    let coin_filter = BlockFilter::compute_coin_filter(&genesis)?;
+                    chaindb.store_known_filter(&Sha256dHash::default(), &Sha256dHash::default(), &script_filter, &coin_filter)?;
+                    chaindb.cache_scripts(&genesis);
+                    chaindb.batch()?;
+                    let len = missing.len();
+                    missing.truncate(len - 1);
+                }
+
+                missing.reverse();
+
+                if let Some(chunk) = missing.as_slice().chunks(CHUNK).next() {
+                    let invs = chunk.iter().map(|s| { Inventory { inv_type: InvType::WitnessBlock, hash: s.clone() } }).collect::<Vec<_>>();
+                    debug!("asking {} blocks from peer={}", invs.len(), peer);
+                    self.p2p.send(P2PControl::Send(peer, NetworkMessage::GetData(invs)));
+                    chunk.iter().for_each(|id| { self.tasks.insert(id.clone()); });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn block(&mut self, _: PeerId, block: &Block) -> Result<(), SPVError> {
         if self.tasks.remove(&block.bitcoin_hash()) {
             self.last_seen = Self::now();
             let block_id = block.bitcoin_hash();
             let mut chaindb = self.chaindb.write().unwrap();
             if let Some(header) = chaindb.get_header(&block_id) {
                 debug!("store block  {} {}", header.height, block_id);
-                let block_ref = chaindb.store_block(block).expect(format!("could not store block {}", block_id).as_str());
-                Self::forward_utxo(&mut chaindb, block_ref, block, &header);
+                chaindb.store_block(block)?;
+                if let Some(prev_script) = chaindb.get_block_filter(&block.header.prev_blockhash, SCRIPT_FILTER) {
+                    if let Some(prev_coin) = chaindb.get_block_filter(&block.header.prev_blockhash, COIN_FILTER) {
+                        let script_filter = BlockFilter::compute_script_filter(&block, chaindb.get_script_accessor(block))?;
+                        let coin_filter = BlockFilter::compute_coin_filter(&block)?;
+                        debug!("store filter {} {} size: {} {}", header.height, block_id, script_filter.content.len(), coin_filter.content.len());
+                        chaindb.store_known_filter(&prev_script.bitcoin_hash(), &prev_coin.bitcoin_hash(), &script_filter, &coin_filter)?;
+                    }
+                }
+                chaindb.cache_scripts(block);
             }
             // batch sometimes
             if self.tasks.is_empty () {
-                chaindb.batch().expect("can not batch on chain db");
+                chaindb.batch()?;
             }
         }
         else {
             debug!("received unwanted block {}", block.bitcoin_hash());
         }
-    }
-
-    fn forward_utxo (chaindb: &mut RwLockWriteGuard<ChainDB>, block_ref: PRef, block :&Block, header: &StoredHeader) {
-        let block_id = block.bitcoin_hash();
-        if let Some(prev_script) = chaindb.get_block_filter(&block.header.prev_blockhash, 0) {
-            if let Some(prev_coin) = chaindb.get_block_filter(&block.header.prev_blockhash, 1) {
-                let script_filter = BlockFilter::compute_script_filter(&block, chaindb.get_script_accessor(block)).expect("can not compute script filter");
-                let coin_filter = BlockFilter::compute_coin_filter(&block).expect("can not compute coin filter");
-                debug!("store filter {} {} size: {} {}", header.height, block_id, script_filter.content.len(), coin_filter.content.len());
-                chaindb.store_known_filter(&block_id, &prev_script.bitcoin_hash(), &prev_coin.bitcoin_hash(), script_filter.content, coin_filter.content).expect("failed to store filter");
-            }
-        }
-        chaindb.cache_scripts(block);
+        Ok(())
     }
 
     fn now() -> u64 {

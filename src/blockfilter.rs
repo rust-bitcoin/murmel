@@ -44,6 +44,9 @@ use std::{
 
 };
 
+pub const SCRIPT_FILTER:u8 = 0;
+pub const COIN_FILTER:u8 = 1;
+
 const P: u8 = 19;
 const M: u64 = 784931;
 
@@ -64,7 +67,7 @@ impl BlockFilter {
             writer.script_filter(utxo)?;
             writer.finish()?;
         }
-        Ok(BlockFilter{block: block.bitcoin_hash(), filter_type: 1, content: out.into_inner().to_vec()})
+        Ok(BlockFilter{block: block.bitcoin_hash(), filter_type: SCRIPT_FILTER, content: out.into_inner().to_vec()})
     }
 
     pub fn compute_coin_filter(block: &Block) -> Result<BlockFilter, SPVError> {
@@ -75,7 +78,7 @@ impl BlockFilter {
             writer.coin_filter()?;
             writer.finish()?;
         }
-        Ok(BlockFilter{block: block.bitcoin_hash(), filter_type: 2, content: out.into_inner().to_vec()})
+        Ok(BlockFilter{block: block.bitcoin_hash(), filter_type: COIN_FILTER, content: out.into_inner().to_vec()})
     }
 }
 

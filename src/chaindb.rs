@@ -33,8 +33,8 @@ use bitcoin::{
 use byteorder::{BigEndian, ByteOrder};
 use error::SPVError;
 use filtercache::FilterCache;
-use blockfilter::BlockFilterReader;
 use headercache::{HeaderCache, HeaderIterator, TrunkIterator};
+use blockfilter::{BlockFilter, BlockFilterReader};
 
 use hammersbald::{
     BitcoinAdaptor, HammersbaldAPI, persistent, PRef,
@@ -301,18 +301,18 @@ impl ChainDB {
         return Ok(stored);
     }
 
-    pub fn store_known_filter (&mut self, block_id: &Sha256dHash, previous_script: &Sha256dHash, previous_coin: &Sha256dHash, script_filter: Vec<u8>, coin_filter: Vec<u8>) -> Result<(Sha256dHash, Sha256dHash), SPVError> {
-        let stored_script_filter = StoredFilter{block_id: block_id.clone(), previous: previous_script.clone(),
-            filter_hash: Sha256dHash::from_data(script_filter.as_slice()), filter: Some(script_filter), filter_type: 0 };
+    pub fn store_known_filter (&mut self, previous_script: &Sha256dHash, previous_coin: &Sha256dHash, script_filter: &BlockFilter, coin_filter: &BlockFilter) -> Result<(Sha256dHash, Sha256dHash), SPVError> {
+        let stored_script_filter = StoredFilter{block_id: script_filter.block, previous: previous_script.clone(),
+            filter_hash: Sha256dHash::from_data(script_filter.content.as_slice()), filter: Some(script_filter.content.clone()), filter_type: script_filter.filter_type };
         let pref_script = self.store_filter(&stored_script_filter)?;
         self.filtercache.add_filter(&stored_script_filter);
 
-        let stored_coin_filter = StoredFilter{block_id: block_id.clone(), previous: previous_coin.clone(),
-            filter_hash: Sha256dHash::from_data(coin_filter.as_slice()), filter: Some(coin_filter), filter_type: 1 };
+        let stored_coin_filter = StoredFilter{block_id: coin_filter.block, previous: previous_coin.clone(),
+            filter_hash: Sha256dHash::from_data(coin_filter.content.as_slice()), filter: Some(coin_filter.content.clone()), filter_type: coin_filter.filter_type };
         let pref_coin = self.store_filter(&stored_coin_filter)?;
         self.filtercache.add_filter(&stored_coin_filter);
 
-        self.update_header_with_filter(block_id, pref_script, pref_coin)?;
+        self.update_header_with_filter(&script_filter.block, pref_script, pref_coin)?;
         Ok((stored_script_filter.bitcoin_hash(), stored_coin_filter.bitcoin_hash()))
     }
 
