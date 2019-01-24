@@ -15,11 +15,11 @@ name = "bitcoin_spv"
 path = "src/lib.rs"
 
 [[bin]]
-name = "filter_server"
-path = "src/bin/filter_server.rs"
+name = "server"
+path = "src/bin/server.rs"
 
 [dependencies]
-bitcoin = { version = "0.15", features = ["bitcoinconsensus"] }
+bitcoin = { version = "0.15.1", features = ["bitcoinconsensus"] }
 hammersbald = { version="1.4.1", features=["bitcoin_support"]}
 lightning = "0.0.7"
 mio = "0.6"
@@ -37,3 +37,6 @@ futures-timer= { git= "https://github.com/tamasblummer/futures-timer.git", branc
 rustc-serialize = "0.3"
 hex = "0.3"
 tempfile = "3.0.2"
+
+[patch.crates-io]
+bitcoin = { git= "https://github.com/tamasblummer/rust-bitcoin.git", branch = "open_prs" }

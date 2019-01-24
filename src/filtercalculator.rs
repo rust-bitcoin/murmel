@@ -191,16 +191,21 @@ impl FilterCalculator {
             let mut chaindb = self.chaindb.write().unwrap();
             if let Some(header) = chaindb.get_header(&block_id) {
                 debug!("store block  {} {}", header.height, block_id);
-                chaindb.store_block(block)?;
-                if let Some(prev_script) = chaindb.get_block_filter(&block.header.prev_blockhash, SCRIPT_FILTER) {
-                    if let Some(prev_coin) = chaindb.get_block_filter(&block.header.prev_blockhash, COIN_FILTER) {
-                        let script_filter = BlockFilter::compute_script_filter(&block, chaindb.get_script_accessor(block))?;
-                        let coin_filter = BlockFilter::compute_coin_filter(&block)?;
-                        debug!("store filter {} {} size: {} {}", header.height, block_id, script_filter.content.len(), coin_filter.content.len());
-                        chaindb.store_known_filter(&prev_script.bitcoin_hash(), &prev_coin.bitcoin_hash(), &script_filter, &coin_filter)?;
+                if block.check_merkle_root() && block.check_witness_commitment() {
+                    chaindb.store_block(block)?;
+                    if let Some(prev_script) = chaindb.get_block_filter(&block.header.prev_blockhash, SCRIPT_FILTER) {
+                        if let Some(prev_coin) = chaindb.get_block_filter(&block.header.prev_blockhash, COIN_FILTER) {
+                            let script_filter = BlockFilter::compute_script_filter(&block, chaindb.get_script_accessor(block))?;
+                            let coin_filter = BlockFilter::compute_coin_filter(&block)?;
+                            debug!("store filter {} {} size: {} {}", header.height, block_id, script_filter.content.len(), coin_filter.content.len());
+                            chaindb.store_known_filter(&prev_script.bitcoin_hash(), &prev_coin.bitcoin_hash(), &script_filter, &coin_filter)?;
+                        }
                     }
+                    chaindb.cache_scripts(block);
                 }
-                chaindb.cache_scripts(block);
+                else {
+                    return Err(SPVError::BadMerkleRoot)
+                }
             }
             // batch sometimes
             if self.tasks.is_empty () {
