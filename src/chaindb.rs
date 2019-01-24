@@ -442,7 +442,7 @@ impl ChainDB {
             if let Some((_, utxo)) = heavy.get_keyed_decodable::<StoredUTXO>(utxo_key(coin).as_bytes())? {
                 {
                     let mut utxocache = self.utxocache.lock().unwrap();
-                    if let Some(script) = utxocache.get_mut(&utxo.utxo_id) {
+                    if let Some(script) = utxocache.remove(&utxo.utxo_id) {
                         return Ok(Some(script.clone()));
                     }
                 }
