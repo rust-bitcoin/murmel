@@ -184,7 +184,7 @@ impl FilterCalculator {
         Ok(())
     }
 
-    fn block(&mut self, _: PeerId, block: &Block) -> Result<(), SPVError> {
+    fn block(&mut self, peer: PeerId, block: &Block) -> Result<(), SPVError> {
         if self.tasks.remove(&block.bitcoin_hash()) {
             self.last_seen = Self::now();
             let block_id = block.bitcoin_hash();
@@ -204,7 +204,8 @@ impl FilterCalculator {
                     chaindb.cache_scripts(block);
                 }
                 else {
-                    return Err(SPVError::BadMerkleRoot)
+                    debug!("received tampered block, banning peer={}", peer);
+                    self.p2p.send(P2PControl::Ban(peer, 100));
                 }
             }
             // batch sometimes
