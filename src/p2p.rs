@@ -79,6 +79,7 @@ impl fmt::Display for PeerId {
 }
 type PeerMap = HashMap<PeerId, Mutex<Peer>>;
 
+#[derive(Clone)]
 pub enum PeerMessage {
     Message(PeerId, NetworkMessage),
     Connected(PeerId),

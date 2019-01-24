@@ -58,7 +58,7 @@ pub struct FilterCalculator {
 
 
 // pollfrequency in millisecs
-const POLL: u64 = 1000;
+const POLL: u64 = 100;
 // a block should arrive within this timeout in seconds
 const BLOCK_TIMEOUT: u64 = 300;
 // download in chunks of n blocks

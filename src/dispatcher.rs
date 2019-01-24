@@ -24,6 +24,7 @@ use chaindb::SharedChainDB;
 use error::SPVError;
 use p2p::{PeerId, PeerMessageSender, PeerMessageReceiver, P2PControlSender, P2PControl, PeerMessage};
 use filtercalculator::FilterCalculator;
+use headerdownload::HeaderDownload;
 
 use bitcoin::{
     BitcoinHash,
@@ -54,6 +55,7 @@ pub struct Dispatcher {
     configdb: SharedConfigDB,
     // the blockchain db
     chaindb: SharedChainDB,
+    header_downloader: PeerMessageSender,
     // block downloader sender
     filter_calculator: PeerMessageSender,
     // lightning connector
@@ -64,8 +66,9 @@ impl Dispatcher {
     /// Create a new local node
     pub fn new(network: Network, configdb: SharedConfigDB, chaindb: SharedChainDB, server: bool, connector: Arc<LightningConnector>, p2p: P2PControlSender, incoming: PeerMessageReceiver) -> Arc<Dispatcher> {
 
+        let header_downloader = HeaderDownload::new(chaindb.clone(), p2p.clone());
 
-        let block_downloader = if server {
+        let filter_calculator = if server {
             FilterCalculator::new(network, chaindb.clone(), p2p.clone())
         }
         else {
@@ -76,7 +79,8 @@ impl Dispatcher {
             p2p,
             configdb,
             chaindb,
-            filter_calculator: block_downloader,
+            header_downloader,
+            filter_calculator,
             connector
         });
 
@@ -118,7 +122,7 @@ impl Dispatcher {
     /// called from dispatcher whenever a new peer is connected (after handshake is successful)
     pub fn connected(&self, pm: PeerMessage) -> Result<(), SPVError> {
         debug!("connected peer={}", pm.peer_id());
-        self.get_headers(pm.peer_id())?;
+        self.header_downloader.send (pm.clone());
         self.filter_calculator.send(pm);
         Ok(())
     }
@@ -133,7 +137,7 @@ impl Dispatcher {
     pub fn process(&self, msg: NetworkMessage, peer: PeerId) -> Result<(), SPVError> {
         Ok(match msg {
             NetworkMessage::Ping(nonce) => { self.ping(nonce, peer); Ok(()) },
-            NetworkMessage::Headers(ref v) => self.headers(v, peer),
+            NetworkMessage::Headers(v) => self.headers(v, peer),
             NetworkMessage::Block(b) => self.block(b, peer),
             NetworkMessage::Inv(v) => self.inv(v, peer),
             NetworkMessage::Addr(ref v) => self.addr(v, peer),
@@ -148,84 +152,9 @@ impl Dispatcher {
     }
 
     // process headers message
-    fn headers(&self, headers: &Vec<LoneBlockHeader>, peer: PeerId) -> Result<(), SPVError> {
-        if headers.len() > 0 {
-            // current height
-            let mut height;
-            // some received headers were not yet known
-            let mut some_new = false;
-            let mut moved_tip = None;
-            {
-                let chaindb = self.chaindb.read().unwrap();
-
-                if let Some(tip) = chaindb.header_tip() {
-                    height = tip.height;
-                } else {
-                    return Err(SPVError::NoTip);
-                }
-            }
-
-            let mut headers_queue = VecDeque::new();
-            headers_queue.extend(headers.iter());
-            while !headers_queue.is_empty() {
-                let mut disconnected_headers = Vec::new();
-                {
-                    let mut chaindb = self.chaindb.write().unwrap();
-                    while let Some(header) = headers_queue.pop_front() {
-                        // add to blockchain - this also checks proof of work
-                        match chaindb.add_header(&header.header) {
-                            Ok(Some((stored, unwinds, forwards))) => {
-                                // POW is ok, stored top chaindb
-                                some_new = true;
-
-                                if let Some(forwards) = forwards {
-                                    moved_tip = Some(forwards.last().unwrap().clone());
-                                }
-                                height = stored.height;
-
-                                if let Some(unwinds) = unwinds {
-                                    disconnected_headers.extend(unwinds.iter()
-                                        .map(|h| chaindb.get_header(h).unwrap().header));
-                                    break;
-                                }
-                            }
-                            Ok(None) => {}
-                            Err(SPVError::SpvBadProofOfWork) => {
-                                info!("Incorrect POW, banning peer={}", peer);
-                                self.ban(peer, 100);
-                                return Ok(());
-                            }
-                            Err(e) => {
-                                debug!("error {} processing header {} ", e, header.header.bitcoin_hash());
-                                return Ok(());
-                            }
-                        }
-                    }
-                    chaindb.batch()?;
-                }
-
-                // notify lightning connector of disconnected blocks
-                for header in &disconnected_headers {
-                    // limit context
-                    self.connector.block_disconnected(header);
-                }
-            }
-
-            if some_new {
-                // ping calculator, so it re-checks work
-                self.filter_calculator.send_network(peer, NetworkMessage::Ping(0));
-                // ask if peer knows even more
-                self.get_headers(peer)?;
-            }
-
-            if let Some(new_tip) = moved_tip {
-                info!("received {} headers new tip={} from peer={}", headers.len(), new_tip, peer);
-                self.p2p.send(P2PControl::Height(height));
-            } else {
-                debug!("received {} known or orphan headers from peer={}", headers.len(), peer);
-            }
-
-        }
+    fn headers(&self, headers: Vec<LoneBlockHeader>, peer: PeerId) -> Result<(), SPVError> {
+        self.header_downloader.send_network(peer, NetworkMessage::Headers(headers));
+        self.filter_calculator.send_network(peer, NetworkMessage::Ping(0));
         Ok(())
     }
 
@@ -237,27 +166,7 @@ impl Dispatcher {
 
     // process an incoming inventory announcement
     fn inv(&self, v: Vec<Inventory>, peer: PeerId) -> Result<(), SPVError> {
-        let mut ask_for_headers = false;
-        for inventory in &v {
-            // only care for blocks
-            if inventory.inv_type == InvType::Block {
-                let chaindb = self.chaindb.read().unwrap();
-                debug!("received inv for block {}", inventory.hash);
-                if chaindb.get_header(&inventory.hash).is_none() {
-                    // ask for header(s) if observing a new block
-                    ask_for_headers = true;
-                }
-            } else {
-                // do not spam us with transactions
-                debug!("received unwanted inv {:?} peer={}", inventory.inv_type, peer);
-                self.ban(peer, 10);
-                return Ok(())
-            }
-        }
-        if ask_for_headers {
-            self.get_headers(peer)?;
-        }
-        self.filter_calculator.send_network(peer, NetworkMessage::Inv(v));
+        self.header_downloader.send_network(peer, NetworkMessage::Inv(v));
         Ok(())
     }
 
@@ -278,21 +187,6 @@ impl Dispatcher {
             }
         }
         tx.commit()?;
-        Ok(())
-    }
-
-    /// get headers this peer is ahead of us
-    fn get_headers(&self, peer: PeerId) -> Result<(), SPVError> {
-        let chaindb = self.chaindb.read().unwrap();
-        let locator = chaindb.header_locators();
-        if locator.len() > 0 {
-            let first = if locator.len() > 0 {
-                *locator.first().unwrap()
-            } else {
-                Sha256dHash::default()
-            };
-            self.send(peer,NetworkMessage::GetHeaders(GetHeadersMessage::new(locator, first)));
-        }
         Ok(())
     }
 
