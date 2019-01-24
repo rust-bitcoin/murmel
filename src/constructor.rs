@@ -117,7 +117,7 @@ impl Constructor {
         let (to_dispatcher, from_p2p) = mpsc::sync_channel(BACK_PRESSURE);
 
         let (p2p, p2p_control) =
-            P2P::new(self.user_agent.clone(), self.network, 0, MAX_PROTOCOL_VERSION, PeerMessageSender::new(to_dispatcher));
+            P2P::new(self.user_agent.clone(), self.network, 0, MAX_PROTOCOL_VERSION, self.server, PeerMessageSender::new(to_dispatcher));
 
         let lightning = Arc::new(LightningConnector::new(self.network, Arc::new(Broadcaster { p2p: p2p_control.clone() })));
         self.connector = Some(lightning.clone());

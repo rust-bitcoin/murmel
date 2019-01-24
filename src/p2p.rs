@@ -183,12 +183,14 @@ pub struct P2P {
     // server
     listener: Arc<Mutex<HashMap<Token, Arc<TcpListener>>>>,
     // this node's maximum protocol version
-    max_protocol_version: u32
+    max_protocol_version: u32,
+    // is this a filter (BIP157) server?
+    filter_server: bool
 }
 
 impl P2P {
     /// create a new P2P network controller
-    pub fn new(user_agent: String, network: Network, height: u32, max_protocol_version: u32, dispatcher: PeerMessageSender) -> (Arc<P2P>, P2PControlSender) {
+    pub fn new(user_agent: String, network: Network, height: u32, max_protocol_version: u32, filter_server: bool, dispatcher: PeerMessageSender) -> (Arc<P2P>, P2PControlSender) {
         let (control_sender, control_receiver) = mpsc::channel();
 
         let mut rng =  thread_rng();
@@ -206,7 +208,8 @@ impl P2P {
             next_peer_id: AtomicUsize::new(0),
             waker: Arc::new(Mutex::new(HashMap::new())),
             listener: Arc::new(Mutex::new(HashMap::new())),
-            max_protocol_version: max_protocol_version
+            max_protocol_version: max_protocol_version,
+            filter_server
         });
 
         let p2p2 = p2p.clone();
@@ -373,7 +376,17 @@ impl P2P {
         // now in unix time
         let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
 
-        let services = if self.listener.lock().unwrap().is_empty() { 0 } else { 9 };
+        let services = if self.listener.lock().unwrap().is_empty() {
+            0
+        } else {
+            9 + if self.filter_server {
+                // announce that this node is capable of serving BIP157 messages
+                1 << 6
+            }
+            else {
+                0
+            }
+        };
 
         // build message
         NetworkMessage::Version(VersionMessage {

@@ -25,6 +25,7 @@ use error::SPVError;
 use p2p::{PeerId, PeerMessageSender, PeerMessageReceiver, P2PControlSender, P2PControl, PeerMessage};
 use filtercalculator::FilterCalculator;
 use headerdownload::HeaderDownload;
+use filterserver::FilterServer;
 
 use bitcoin::{
     BitcoinHash,
@@ -58,6 +59,8 @@ pub struct Dispatcher {
     header_downloader: PeerMessageSender,
     // block downloader sender
     filter_calculator: PeerMessageSender,
+    // filter server
+    filter_server: PeerMessageSender,
     // lightning connector
     connector: Arc<LightningConnector>
 }
@@ -75,12 +78,19 @@ impl Dispatcher {
             PeerMessageSender::dummy()
         };
 
+        let filter_server = if server {
+            FilterServer::new(chaindb.clone(), p2p.clone())
+        } else {
+            PeerMessageSender::dummy()
+        };
+
         let dispatcher = Arc::new(Dispatcher {
             p2p,
             configdb,
             chaindb,
             header_downloader,
             filter_calculator,
+            filter_server,
             connector
         });
 
@@ -141,6 +151,19 @@ impl Dispatcher {
             NetworkMessage::Block(b) => self.block(b, peer),
             NetworkMessage::Inv(v) => self.inv(v, peer),
             NetworkMessage::Addr(ref v) => self.addr(v, peer),
+
+            NetworkMessage::GetCFilters(get) => {
+                self.filter_server.send_network(peer, NetworkMessage::GetCFilters(get));
+                Ok(())
+            },
+            NetworkMessage::GetCFHeaders(get) => {
+                self.filter_server.send_network(peer, NetworkMessage::GetCFHeaders(get));
+                Ok(())
+            },
+            NetworkMessage::GetCFCheckpt(get) => {
+                self.filter_server.send_network(peer, NetworkMessage::GetCFCheckpt(get));
+                Ok(())
+            }
             _ => { self.ban(peer,1); Ok(()) }
         }?)
     }
