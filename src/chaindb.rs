@@ -35,6 +35,7 @@ use error::SPVError;
 use filtercache::FilterCache;
 use headercache::{HeaderCache, HeaderIterator, TrunkIterator};
 use blockfilter::{BlockFilter, BlockFilterReader};
+use scriptcache::ScriptCache;
 
 use hammersbald::{
     BitcoinAdaptor, HammersbaldAPI, persistent, PRef,
@@ -59,11 +60,11 @@ pub struct ChainDB {
     heavy: Option<BitcoinAdaptor>,
     headercache: HeaderCache,
     filtercache: FilterCache,
-    script_cache: Mutex<LruCache<OutPoint, Script>>,
+    scriptcache: Mutex<ScriptCache>,
     network: Network,
 }
 
-const UTXO_CACHE_SIZE:usize = 1024*1024;
+const UTXO_CACHE_SIZE:usize = 10*1024*1024;
 
 impl ChainDB {
     /// Create an in-memory database instance
@@ -72,12 +73,12 @@ impl ChainDB {
         let light = BitcoinAdaptor::new(transient(2)?);
         let headercache = HeaderCache::new(network);
         let filtercache = FilterCache::new();
-        let utxocache = Mutex::new(LruCache::new(UTXO_CACHE_SIZE));
+        let scriptcache = Mutex::new(ScriptCache::new(UTXO_CACHE_SIZE));
         if heavy {
             let heavy = Some(BitcoinAdaptor::new(transient(2)?));
-            Ok(ChainDB { light, heavy, network, headercache, filtercache, script_cache: utxocache })
+            Ok(ChainDB { light, heavy, network, headercache, filtercache, scriptcache })
         } else {
-            Ok(ChainDB { light, heavy: None, network, headercache, filtercache, script_cache: utxocache })
+            Ok(ChainDB { light, heavy: None, network, headercache, filtercache, scriptcache })
         }
     }
 
@@ -87,12 +88,12 @@ impl ChainDB {
         let light = BitcoinAdaptor::new(persistent((basename.clone() + ".h").as_str(), 100, 2)?);
         let headercache = HeaderCache::new(network);
         let filtercache = FilterCache::new();
-        let utxocache = Mutex::new(LruCache::new(UTXO_CACHE_SIZE));
+        let scriptcache = Mutex::new(ScriptCache::new(UTXO_CACHE_SIZE));
         if heavy {
             let heavy = Some(BitcoinAdaptor::new(persistent((basename + ".b").as_str(), 1000, 2)?));
-            Ok(ChainDB { light, heavy, network, headercache, filtercache, script_cache: utxocache })
+            Ok(ChainDB { light, heavy, network, headercache, filtercache, scriptcache })
         } else {
-            Ok(ChainDB { light, heavy: None, network, headercache, filtercache, script_cache: utxocache })
+            Ok(ChainDB { light, heavy: None, network, headercache, filtercache, scriptcache })
         }
     }
 
@@ -339,14 +340,15 @@ impl ChainDB {
     }
 
     pub fn cache_scripts(&mut self, block: &Block) {
-        let mut script_cache = self.script_cache.lock().unwrap();
+        let block_id = Arc::new(block.bitcoin_hash());
+        let mut script_cache = self.scriptcache.lock().unwrap();
         for (i, tx) in block.txdata.iter().enumerate() {
             let tx_nr = i as u32;
             let txid = tx.txid();
             for (idx, output) in tx.output.iter().enumerate() {
                 let vout = idx as u32;
                 if !output.script_pubkey.is_provably_unspendable() {
-                    script_cache.insert(OutPoint { txid, vout }, output.script_pubkey.clone());
+                    script_cache.insert(OutPoint { txid, vout }, output.script_pubkey.clone(), block_id.clone());
                 }
             }
         }
@@ -355,7 +357,7 @@ impl ChainDB {
     pub fn get_scripts(&self, prev_block: &Sha256dHash, mut coins: VecDeque<OutPoint>, mut sofar: Vec<Script>) -> Result<Vec<Script>, SPVError> {
         let mut remains = Vec::with_capacity(coins.len());
         {
-            let mut scriptcache = self.script_cache.lock().unwrap();
+            let mut scriptcache = self.scriptcache.lock().unwrap();
             while let Some(coin) = coins.pop_front() {
                 if let Some(script) = scriptcache.remove(&coin) {
                     sofar.push(script);
@@ -370,7 +372,11 @@ impl ChainDB {
         remains.sort();
 
         if remains.len () > 0 {
-            for header in self.iter_to_genesis(prev_block) {
+            let mut start_with = *prev_block;
+            if let Some (oldest) = self.scriptcache.lock().unwrap().oldest_block() {
+                start_with = oldest;
+            }
+            for header in self.iter_to_genesis(&start_with) {
                 if let Some(coin_filter) = header.coin_filter {
                     let filter = self.fetch_filter(coin_filter)?;
                     if let Some(ref content) = filter.filter {
