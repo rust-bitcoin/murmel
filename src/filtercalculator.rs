@@ -58,7 +58,7 @@ pub struct FilterCalculator {
 // pollfrequency in millisecs
 const POLL: u64 = 1000;
 // a block should arrive within this timeout in seconds
-const BLOCK_TIMEOUT: u64 = 60;
+const BLOCK_TIMEOUT: u64 = 300;
 // download in chunks of n blocks
 const CHUNK: usize = 1000;
 // channel size
@@ -152,16 +152,14 @@ impl FilterCalculator {
                     }
                     if missing.last().is_some() && *missing.last().unwrap() == genesis.bitcoin_hash() {
                         let mut chaindb = self.chaindb.write().unwrap();
-                        if chaindb.utxo_tip().expect("can not read utxo tip").is_none() {
-                            let block_ref = chaindb.store_block(&genesis).expect("can not store genesis block");
-                            let script_filter = BlockFilter::compute_script_filter(&genesis, chaindb.get_utxo_accessor(&genesis)).expect("can not compute script filter");
-                            let coin_filter = BlockFilter::compute_coin_filter(&genesis).expect("can not compute coin filter");
-                            chaindb.store_known_filter(&genesis.bitcoin_hash(), &Sha256dHash::default(), &Sha256dHash::default(), script_filter.content, coin_filter.content).expect("failed to store filter");
-                            chaindb.utxo_block(block_ref).expect("failed to apply block to UTXO");
-                            chaindb.batch().expect("can not store genesis block");
-                            let len = missing.len();
-                            missing.truncate(len - 1);
-                        }
+                        let block_ref = chaindb.store_block(&genesis).expect("can not store genesis block");
+                        let script_filter = BlockFilter::compute_script_filter(&genesis, chaindb.get_script_accessor(&genesis)).expect("can not compute script filter");
+                        let coin_filter = BlockFilter::compute_coin_filter(&genesis).expect("can not compute coin filter");
+                        chaindb.store_known_filter(&genesis.bitcoin_hash(), &Sha256dHash::default(), &Sha256dHash::default(), script_filter.content, coin_filter.content).expect("failed to store filter");
+                        chaindb.cache_scripts(&genesis);
+                        chaindb.batch().expect("can not store genesis block");
+                        let len = missing.len();
+                        missing.truncate(len - 1);
                     }
 
                     missing.reverse();
@@ -199,20 +197,15 @@ impl FilterCalculator {
 
     fn forward_utxo (chaindb: &mut RwLockWriteGuard<ChainDB>, block_ref: PRef, block :&Block, header: &StoredHeader) {
         let block_id = block.bitcoin_hash();
-        if let Some(utxo_tip) = chaindb.utxo_tip().expect("can not read utxo tip") {
-            if block.header.prev_blockhash == utxo_tip {
-                if let Some(prev_script) = chaindb.get_block_filter(&block.header.prev_blockhash, 0) {
-                    if let Some(prev_coin) = chaindb.get_block_filter(&block.header.prev_blockhash, 1) {
-                        let script_filter = BlockFilter::compute_script_filter(&block, chaindb.get_utxo_accessor(block)).expect("can not compute script filter");
-                        let coin_filter = BlockFilter::compute_coin_filter(&block).expect("can not compute coin filter");
-                        debug!("store filter {} {} size: {} {}", header.height, block_id, script_filter.content.len(), coin_filter.content.len());
-                        chaindb.store_known_filter(&block_id, &prev_script.bitcoin_hash(), &prev_coin.bitcoin_hash(), script_filter.content, coin_filter.content).expect("failed to store filter");
-                    }
-                }
-                debug!("store utxo   {} {}", header.height, block_id);
-                chaindb.utxo_block(block_ref).expect("failed to apply block to UTXO");
+        if let Some(prev_script) = chaindb.get_block_filter(&block.header.prev_blockhash, 0) {
+            if let Some(prev_coin) = chaindb.get_block_filter(&block.header.prev_blockhash, 1) {
+                let script_filter = BlockFilter::compute_script_filter(&block, chaindb.get_script_accessor(block)).expect("can not compute script filter");
+                let coin_filter = BlockFilter::compute_coin_filter(&block).expect("can not compute coin filter");
+                debug!("store filter {} {} size: {} {}", header.height, block_id, script_filter.content.len(), coin_filter.content.len());
+                chaindb.store_known_filter(&block_id, &prev_script.bitcoin_hash(), &prev_coin.bitcoin_hash(), script_filter.content, coin_filter.content).expect("failed to store filter");
             }
         }
+        chaindb.cache_scripts(block);
     }
 
     fn now() -> u64 {

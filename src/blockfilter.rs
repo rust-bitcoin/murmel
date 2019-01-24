@@ -22,7 +22,7 @@
 //!
 
 use error::SPVError;
-use chaindb::UTXOAccessor;
+use chaindb::ScriptAccessor;
 
 use bitcoin::{
     blockdata::{
@@ -38,7 +38,7 @@ use bitcoin::{
 use siphasher::sip::SipHasher;
 use std::{
     cmp,
-    collections::HashSet,
+    collections::{VecDeque, HashSet},
     hash::Hasher,
     io::{self, Cursor}
 
@@ -56,7 +56,7 @@ pub struct BlockFilter {
 
 impl BlockFilter {
 
-    pub fn compute_script_filter(block: &Block, utxo: impl UTXOAccessor) -> Result<BlockFilter, SPVError> {
+    pub fn compute_script_filter(block: &Block, utxo: impl ScriptAccessor) -> Result<BlockFilter, SPVError> {
         let mut bytes = Vec::new();
         let mut out = Cursor::new(&mut bytes);
         {
@@ -105,24 +105,23 @@ impl <'a> BlockFilterWriter<'a> {
     }
 
     /// Add consumed output scripts of a block to filter
-    fn add_consumed_scripts (&mut self, tx_accessor: impl UTXOAccessor) -> Result<(), SPVError> {
+    fn add_consumed_scripts (&mut self, tx_accessor: impl ScriptAccessor) -> Result<(), SPVError> {
+        let mut coins = VecDeque::new();
         for transaction in &self.block.txdata {
             if !transaction.is_coin_base() {
                 for input in &transaction.input {
-                    if let Some(script) = tx_accessor.get_utxo(&input.previous_output)? {
-                        self.writer.add_element(script.as_bytes());
-                    }
-                    else {
-                        return Err(SPVError::UnknownUTXO)
-                    }
+                    coins.push_back(input.previous_output);
                 }
             }
+        }
+        for script in tx_accessor.get_scripts(coins)? {
+            self.writer.add_element(script.as_bytes());
         }
         Ok(())
     }
 
     /// compile a filter useful for wallets
-    pub fn script_filter(&mut self, tx_accessor: impl UTXOAccessor) -> Result<(), SPVError> {
+    pub fn script_filter(&mut self, tx_accessor: impl ScriptAccessor) -> Result<(), SPVError> {
         self.add_output_scripts();
         self.add_consumed_scripts(tx_accessor)
     }
@@ -166,7 +165,7 @@ impl BlockFilterReader {
     }
 
     /// match any previously added query pattern
-    pub fn match_any (&mut self, reader: &mut io::Read, query: &Vec<Vec<u8>>) -> Result<bool, io::Error> {
+    pub fn match_any (&self, reader: &mut io::Read, query: &Vec<Vec<u8>>) -> Result<bool, io::Error> {
         self.reader.match_any(reader, query)
     }
 }
@@ -181,7 +180,7 @@ impl GCSFilterReader {
         Ok(GCSFilterReader { filter: GCSFilter::new(k0, k1)})
     }
 
-    fn match_any (&mut self, reader: &mut io::Read, query: &Vec<Vec<u8>>) -> Result<bool, io::Error> {
+    fn match_any (&self, reader: &mut io::Read, query: &Vec<Vec<u8>>) -> Result<bool, io::Error> {
         let mut decoder = reader;
         let n_elements: VarInt = Decodable::consensus_decode(&mut decoder)
             .map_err(|_| io::Error::new(io::ErrorKind::UnexpectedEof, "unexpected EOF"))?;
@@ -415,7 +414,7 @@ mod test {
     use std::io::Cursor;
     use std::io::Read;
     use std::path::PathBuf;
-    use std::collections::HashMap;
+    use std::collections::{VecDeque, HashMap};
     use super::*;
 
     extern crate rustc_serialize;
@@ -429,14 +428,17 @@ mod test {
             .map_err(|_| { io::Error::new(io::ErrorKind::InvalidData, "serialization error") })?)
     }
 
-    impl UTXOAccessor for HashMap<(Sha256dHash, u32), Script> {
-        fn get_utxo(&self, coin: &OutPoint) -> Result<Option<Script>, SPVError> {
-            if let Some (ux) = self.get(&(coin.txid, coin.vout)) {
-                Ok(Some(ux.clone()))
+    impl ScriptAccessor for HashMap<OutPoint, Script> {
+        fn get_scripts(&self, mut coins: VecDeque<OutPoint>) -> Result<Vec<Script>, SPVError> {
+            let mut result = Vec::new();
+            while let Some(coin) = coins.pop_front() {
+                if let Some(ux) = self.get(&coin) {
+                    result.push(ux.clone());
+                } else {
+                    panic!("missing {}", coin);
+                }
             }
-            else {
-                panic!("missing {}", coin);
-            }
+            Ok(result)
         }
     }
 
@@ -462,7 +464,7 @@ mod test {
 
             for tx in &block.txdata {
                 for (ix, out) in tx.output.iter().enumerate() {
-                    txmap.insert((tx.txid(), ix as u32), out.script_pubkey.clone());
+                    txmap.insert(OutPoint{ txid: tx.txid(), vout: ix as u32}, out.script_pubkey.clone());
                 }
             }
             for i in 1 .. 9 {
@@ -470,7 +472,7 @@ mod test {
                 let tx: bitcoin::blockdata::transaction::Transaction = decode(hex::decode(line[1].as_string().unwrap()).unwrap()).unwrap();
                 assert_eq!(tx.txid().to_string(), line[0].as_string().unwrap());
                 for (ix, out) in tx.output.iter().enumerate() {
-                    txmap.insert((tx.txid(), ix as u32), out.script_pubkey.clone());
+                    txmap.insert(OutPoint{ txid: tx.txid(), vout: ix as u32}, out.script_pubkey.clone());
                 }
             }
 
@@ -513,7 +515,7 @@ mod test {
         }
         {
             let mut query = Vec::new();
-            let ref mut reader = GCSFilterReader::new(0, 0).unwrap();
+            let reader = GCSFilterReader::new(0, 0).unwrap();
             let mut it = patterns.iter();
             for _ in 0..5 {
                 query.push(it.next().unwrap().clone());
@@ -527,7 +529,7 @@ mod test {
             assert!(reader.match_any(&mut input, &query).unwrap());
         }
         {
-            let mut reader = GCSFilterReader::new(0, 0).unwrap();
+            let reader = GCSFilterReader::new(0, 0).unwrap();
             let mut it = patterns.iter();
             let mut query = Vec::new();
             for _ in 0..100 {
