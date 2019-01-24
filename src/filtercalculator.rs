@@ -128,38 +128,6 @@ impl FilterCalculator {
                 }
             }
 
-            // unwind utxo if no longer on trunk
-            {
-                let mut chaindb = self.chaindb.write().unwrap();
-                if let Some(mut utxo_tip) = chaindb.utxo_tip().expect("can not read utxo tip") {
-                    while chaindb.is_on_trunk(&utxo_tip) == false {
-                        debug!("unwind utxo {}", utxo_tip);
-                        utxo_tip = chaindb.unwind_utxo(&utxo_tip).expect("can not unwind utxo");
-                    }
-                    // roll forward as far as blocks are already known
-                    let forward_path = chaindb.iter_to_tip(&utxo_tip).collect::<Vec<_>>();
-                    for forward in forward_path {
-                        if let Some(header) = chaindb.get_header(&forward) {
-                            if let Some(block_ref) = header.block {
-                                if let Some(block) = chaindb.fetch_block(header.height).expect("can not read blocks") {
-                                    let block = Block{header: header.header, txdata: block.txdata};
-                                    debug!("fast forward utxo {}", utxo_tip);
-                                    Self::forward_utxo(&mut chaindb, block_ref, &block, &header);
-                                }
-                                else {
-                                    panic!("corrupted db, header does not point to a block {}", header.header.bitcoin_hash());
-                                }
-                            }
-                            else {
-                                break;
-                            }
-                        }
-                    }
-                    chaindb.batch().expect("can not batch UTXO store");
-                }
-
-            }
-
             // check for new work
             // what is missing might change through new header or even reorg
 
@@ -186,8 +154,9 @@ impl FilterCalculator {
                         let mut chaindb = self.chaindb.write().unwrap();
                         if chaindb.utxo_tip().expect("can not read utxo tip").is_none() {
                             let block_ref = chaindb.store_block(&genesis).expect("can not store genesis block");
-                            let filter = BlockFilter::compute_wallet_filter(&genesis, chaindb.get_utxo_accessor(&genesis)).expect("can not compute filter");
-                            chaindb.store_known_filter(&genesis.bitcoin_hash(), &Sha256dHash::default(), filter.content).expect("failed to store filter");
+                            let script_filter = BlockFilter::compute_script_filter(&genesis, chaindb.get_utxo_accessor(&genesis)).expect("can not compute script filter");
+                            let coin_filter = BlockFilter::compute_coin_filter(&genesis).expect("can not compute coin filter");
+                            chaindb.store_known_filter(&genesis.bitcoin_hash(), &Sha256dHash::default(), &Sha256dHash::default(), script_filter.content, coin_filter.content).expect("failed to store filter");
                             chaindb.utxo_block(block_ref).expect("failed to apply block to UTXO");
                             chaindb.batch().expect("can not store genesis block");
                             let len = missing.len();
@@ -232,10 +201,13 @@ impl FilterCalculator {
         let block_id = block.bitcoin_hash();
         if let Some(utxo_tip) = chaindb.utxo_tip().expect("can not read utxo tip") {
             if block.header.prev_blockhash == utxo_tip {
-                if let Some(prev_filter) = chaindb.get_block_filter(&block.header.prev_blockhash) {
-                    let filter = BlockFilter::compute_wallet_filter(&block, chaindb.get_utxo_accessor(block)).expect("can not compute filter");
-                    debug!("store filter {} {} size: {}", header.height, block_id, filter.content.len());
-                    chaindb.store_known_filter(&block_id, &prev_filter.bitcoin_hash(), filter.content).expect("failed to store filter");
+                if let Some(prev_script) = chaindb.get_block_filter(&block.header.prev_blockhash, 0) {
+                    if let Some(prev_coin) = chaindb.get_block_filter(&block.header.prev_blockhash, 1) {
+                        let script_filter = BlockFilter::compute_script_filter(&block, chaindb.get_utxo_accessor(block)).expect("can not compute script filter");
+                        let coin_filter = BlockFilter::compute_coin_filter(&block).expect("can not compute coin filter");
+                        debug!("store filter {} {} size: {} {}", header.height, block_id, script_filter.content.len(), coin_filter.content.len());
+                        chaindb.store_known_filter(&block_id, &prev_script.bitcoin_hash(), &prev_coin.bitcoin_hash(), script_filter.content, coin_filter.content).expect("failed to store filter");
+                    }
                 }
                 debug!("store utxo   {} {}", header.height, block_id);
                 chaindb.utxo_block(block_ref).expect("failed to apply block to UTXO");

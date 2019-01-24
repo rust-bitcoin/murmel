@@ -56,23 +56,23 @@ pub struct BlockFilter {
 
 impl BlockFilter {
 
-    pub fn compute_wallet_filter (block: &Block, utxo: impl UTXOAccessor) -> Result<BlockFilter, SPVError> {
+    pub fn compute_script_filter(block: &Block, utxo: impl UTXOAccessor) -> Result<BlockFilter, SPVError> {
         let mut bytes = Vec::new();
         let mut out = Cursor::new(&mut bytes);
         {
             let mut writer = BlockFilterWriter::new(&mut out, block);
-            writer.wallet_filter(utxo)?;
+            writer.script_filter(utxo)?;
             writer.finish()?;
         }
         Ok(BlockFilter{block: block.bitcoin_hash(), filter_type: 1, content: out.into_inner().to_vec()})
     }
 
-    pub fn compute_outpoint_filter(block: &Block) -> Result<BlockFilter, SPVError> {
+    pub fn compute_coin_filter(block: &Block) -> Result<BlockFilter, SPVError> {
         let mut bytes = Vec::new();
         let mut out = Cursor::new(&mut bytes);
         {
             let mut writer = BlockFilterWriter::new(&mut out, block);
-            writer.outpoint_filter()?;
+            writer.coin_filter()?;
             writer.finish()?;
         }
         Ok(BlockFilter{block: block.bitcoin_hash(), filter_type: 2, content: out.into_inner().to_vec()})
@@ -122,13 +122,13 @@ impl <'a> BlockFilterWriter<'a> {
     }
 
     /// compile a filter useful for wallets
-    pub fn wallet_filter (&mut self, tx_accessor: impl UTXOAccessor) -> Result<(), SPVError> {
+    pub fn script_filter(&mut self, tx_accessor: impl UTXOAccessor) -> Result<(), SPVError> {
         self.add_output_scripts();
         self.add_consumed_scripts(tx_accessor)
     }
 
     /// compile a filter useful to find spent outputs
-    pub fn outpoint_filter(&mut self) -> Result<(), SPVError> {
+    pub fn coin_filter(&mut self) -> Result<(), SPVError> {
         let mut buf = Vec::with_capacity(40);
         for tx in &self.block.txdata {
             let txid = tx.txid();
@@ -478,7 +478,7 @@ mod test {
             let mut constructed_filter = Cursor::new(Vec::new());
             {
                 let mut writer = BlockFilterWriter::new(&mut constructed_filter, &block);
-                writer.wallet_filter(txmap).unwrap();
+                writer.script_filter(txmap).unwrap();
                 writer.finish().unwrap();
             }
 

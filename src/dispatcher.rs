@@ -212,6 +212,8 @@ impl Dispatcher {
             }
 
             if some_new {
+                // ping calculator, so it re-checks work
+                self.filter_calculator.send_network(peer, NetworkMessage::Ping(0));
                 // ask if peer knows even more
                 self.get_headers(peer)?;
             }
@@ -222,8 +224,7 @@ impl Dispatcher {
             } else {
                 debug!("received {} known or orphan headers from peer={}", headers.len(), peer);
             }
-            // ping calculator, so it re-checks work
-            self.filter_calculator.send_network(peer, NetworkMessage::Ping(0));
+
         }
         Ok(())
     }

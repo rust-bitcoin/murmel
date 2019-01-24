@@ -136,7 +136,7 @@ impl ChainDB {
             self.headercache.clear();
             while let Some(stored) = sl.pop_front() {
                 self.headercache.add_header_unchecked(&stored);
-                if let Some(filter_ref) = stored.filter {
+                if let Some(filter_ref) = stored.script_filter {
                     let filter = self.fetch_filter(filter_ref)?;
                     self.filtercache.add_filter(&filter);
                 }
@@ -167,8 +167,8 @@ impl ChainDB {
     }
 
 
-    pub fn update_header_with_filter(&mut self, id: &Sha256dHash, filter_ref: PRef) -> Result<Option<PRef>, SPVError> {
-        if let Some(stored) = self.headercache.update_header_with_filter(id, filter_ref) {
+    pub fn update_header_with_filter(&mut self, id: &Sha256dHash, script_ref: PRef, coin_ref: PRef) -> Result<Option<PRef>, SPVError> {
+        if let Some(stored) = self.headercache.update_header_with_filter(id, script_ref, coin_ref) {
             return Ok(Some(self.store_header(&stored)?));
         }
         Ok(None)
@@ -206,13 +206,13 @@ impl ChainDB {
         self.headercache.locator_hashes()
     }
 
-    pub fn get_block_filter (&self, block_id: &Sha256dHash) -> Option<StoredFilter> {
-        self.filtercache.get_block_filter(block_id)
+    pub fn get_block_filter (&self, block_id: &Sha256dHash, filter_type: u8) -> Option<StoredFilter> {
+        self.filtercache.get_block_filter(block_id, filter_type)
     }
 
-    pub fn add_filter_chain(&mut self, prev_block_id: &Sha256dHash, prev_filter_id: &Sha256dHash, filter_hashes: impl Iterator<Item=Sha256dHash>) ->
+    pub fn add_filter_chain(&mut self, prev_block_id: &Sha256dHash, prev_filter_id: &Sha256dHash, filter_type: u8, filter_hashes: impl Iterator<Item=Sha256dHash>) ->
     Result<Option<(Sha256dHash, Sha256dHash)>, SPVError> {
-        if let Some(prev_filter) = self.filtercache.get_block_filter(prev_filter_id) {
+        if let Some(prev_filter) = self.filtercache.get_block_filter(prev_filter_id, filter_type) {
             if prev_filter.block_id == *prev_block_id {
                 let mut previous = *prev_filter_id;
                 let mut p_block = *prev_block_id;
@@ -224,7 +224,7 @@ impl ChainDB {
                     let filter_id = Sha256dHash::from_data(&buf);
                     previous = filter_id;
                     p_block = block_id;
-                    let filter = StoredFilter { block_id, previous, filter_hash, filter: None };
+                    let filter = StoredFilter { block_id, previous, filter_hash, filter: None, filter_type };
                     filters.push(filter);
                 }
                 for filter in filters {
@@ -238,8 +238,8 @@ impl ChainDB {
     }
 
     // update if matching stored filter_header chain
-    pub fn update_filter(&mut self, block_id: &Sha256dHash, filter: Vec<u8>) -> Result<bool, SPVError> {
-        if let Some(filter_header) = self.filtercache.get_block_filter(block_id) {
+    pub fn update_filter(&mut self, block_id: &Sha256dHash, filter_type: u8, filter: Vec<u8>) -> Result<bool, SPVError> {
+        if let Some(filter_header) = self.filtercache.get_block_filter(block_id, filter_type) {
             let filter_hash = Sha256dHash::from_data(filter.as_slice());
             let mut buf = [0u8; 64];
             buf[0..32].copy_from_slice(&filter_hash.to_bytes()[..]);
@@ -251,6 +251,7 @@ impl ChainDB {
                     previous: filter_header.previous,
                     filter_hash,
                     filter: Some(filter),
+                    filter_type
                 };
                 self.store_filter(&stored)?;
                 self.filtercache.add_filter(&stored);
@@ -293,13 +294,19 @@ impl ChainDB {
         return Ok(stored);
     }
 
-    pub fn store_known_filter (&mut self, block_id: &Sha256dHash, previous_filter: &Sha256dHash, content: Vec<u8>) -> Result<Sha256dHash, SPVError> {
-        let stored = StoredFilter{block_id: block_id.clone(), previous: previous_filter.clone(),
-            filter_hash: Sha256dHash::from_data(content.as_slice()), filter: Some(content) };
-        let pref = self.store_filter(&stored)?;
-        self.filtercache.add_filter(&stored);
-        self.update_header_with_filter(block_id, pref)?;
-        Ok(stored.bitcoin_hash())
+    pub fn store_known_filter (&mut self, block_id: &Sha256dHash, previous_script: &Sha256dHash, previous_coin: &Sha256dHash, script_filter: Vec<u8>, coin_filter: Vec<u8>) -> Result<(Sha256dHash, Sha256dHash), SPVError> {
+        let stored_script_filter = StoredFilter{block_id: block_id.clone(), previous: previous_script.clone(),
+            filter_hash: Sha256dHash::from_data(script_filter.as_slice()), filter: Some(script_filter), filter_type: 0 };
+        let pref_script = self.store_filter(&stored_script_filter)?;
+        self.filtercache.add_filter(&stored_script_filter);
+
+        let stored_coin_filter = StoredFilter{block_id: block_id.clone(), previous: previous_coin.clone(),
+            filter_hash: Sha256dHash::from_data(coin_filter.as_slice()), filter: Some(coin_filter), filter_type: 1 };
+        let pref_coin = self.store_filter(&stored_coin_filter)?;
+        self.filtercache.add_filter(&stored_coin_filter);
+
+        self.update_header_with_filter(block_id, pref_script, pref_coin)?;
+        Ok((stored_script_filter.bitcoin_hash(), stored_coin_filter.bitcoin_hash()))
     }
 
     pub fn store_block(&mut self, block: &Block) -> Result<PRef, SPVError> {
@@ -480,8 +487,10 @@ pub struct StoredHeader {
     pub log2work: f32,
     /// pointer to block if known
     pub block: Option<PRef>,
-    /// pointer to filter if known
-    pub filter: Option<PRef>,
+    /// pointer to script filter if known
+    pub script_filter: Option<PRef>,
+    /// pointer to coin filter if known
+    pub coin_filter: Option<PRef>,
 }
 
 // need to implement if put_hash_keyed and get_hash_keyed should be used
@@ -504,7 +513,12 @@ impl<S: Encoder> Encodable<S> for StoredHeader {
         } else {
             PRef::invalid().consensus_encode(s)?;
         }
-        if let Some(pref) = self.filter {
+        if let Some(pref) = self.script_filter {
+            pref.consensus_encode(s)?;
+        } else {
+            PRef::invalid().consensus_encode(s)?;
+        }
+        if let Some(pref) = self.coin_filter {
             pref.consensus_encode(s)?;
         } else {
             PRef::invalid().consensus_encode(s)?;
@@ -531,7 +545,7 @@ impl<D: Decoder> Decodable<D> for StoredHeader {
                     None
                 }
             },
-            filter: {
+            script_filter: {
                 let pref: PRef = Decodable::consensus_decode(d)?;
                 if pref.is_valid() {
                     Some(pref)
@@ -539,6 +553,14 @@ impl<D: Decoder> Decodable<D> for StoredHeader {
                     None
                 }
             },
+            coin_filter: {
+                let pref: PRef = Decodable::consensus_decode(d)?;
+                if pref.is_valid() {
+                    Some(pref)
+                } else {
+                    None
+                }
+            }
         })
     }
 }
@@ -548,6 +570,8 @@ const HEADER_TIP_KEY: &[u8] = &[0u8; 1];
 /// Filter stored
 #[derive(Clone)]
 pub struct StoredFilter {
+    /// filter type
+    pub filter_type: u8,
     /// block
     pub block_id: Sha256dHash,
     /// hash of the filter content
@@ -571,6 +595,7 @@ impl BitcoinHash for StoredFilter {
 // implement encoder. tedious just repeat the consensus_encode lines
 impl<S: Encoder> Encodable<S> for StoredFilter {
     fn consensus_encode(&self, s: &mut S) -> Result<(), encode::Error> {
+        self.filter_type.consensus_encode(s)?;
         self.block_id.consensus_encode(s)?;
         self.filter_hash.consensus_encode(s)?;
         self.previous.consensus_encode(s)?;
@@ -587,6 +612,7 @@ impl<S: Encoder> Encodable<S> for StoredFilter {
 impl<D: Decoder> Decodable<D> for StoredFilter {
     fn consensus_decode(d: &mut D) -> Result<StoredFilter, encode::Error> {
         Ok(StoredFilter {
+            filter_type: Decodable::consensus_decode(d)?,
             block_id: Decodable::consensus_decode(d)?,
             filter_hash: Decodable::consensus_decode(d)?,
             previous: Decodable::consensus_decode(d)?,

@@ -32,7 +32,7 @@ use std::{
 
 pub struct FilterCache {
     // filters by block_id
-    by_block: HashMap<Sha256dHash, Arc<StoredFilter>>,
+    by_block: HashMap<(Sha256dHash, u8), Arc<StoredFilter>>,
     // all known filters
     filters: HashMap<Sha256dHash, Arc<StoredFilter>>,
 }
@@ -54,14 +54,8 @@ impl FilterCache {
         let mut stored = filter.clone();
         stored.filter = None;
         let filter = Arc::new(stored.clone());
-        self.by_block.insert (filter.block_id, filter.clone());
+        self.by_block.insert ((filter.block_id, stored.filter_type), filter.clone());
         self.filters.insert(filter.bitcoin_hash(), filter);
-    }
-
-    pub fn remove(&mut self, block_id: &Sha256dHash) {
-        if let Some(filter) = self.by_block.remove(block_id) {
-            self.filters.remove(&filter.bitcoin_hash());
-        }
     }
 
     /// Fetch a header by its id from cache
@@ -69,8 +63,8 @@ impl FilterCache {
         self.filters.get(id).map(|b|{(**b).clone()})
     }
 
-    pub fn get_block_filter(&self, block_id: &Sha256dHash) -> Option<StoredFilter> {
-        self.by_block.get(block_id).map(|b|{(**b).clone()})
+    pub fn get_block_filter(&self, block_id: &Sha256dHash, filter_type: u8) -> Option<StoredFilter> {
+        self.by_block.get(&(*block_id, filter_type)).map(|b|{(**b).clone()})
     }
 
     /// iterate from id to genesis

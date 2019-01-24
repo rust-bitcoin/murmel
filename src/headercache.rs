@@ -70,9 +70,10 @@ impl HeaderCache {
         }
     }
 
-    pub fn update_header_with_filter(&mut self, id: &Sha256dHash, filter_ref: PRef) -> Option<StoredHeader> {
+    pub fn update_header_with_filter(&mut self, id: &Sha256dHash, script_ref: PRef, coin_ref: PRef) -> Option<StoredHeader> {
         if let Some(ref mut header) = self.headers.get_mut(id) {
-            header.filter = Some(filter_ref);
+            header.script_filter = Some(script_ref);
+            header.coin_filter = Some(coin_ref);
             Some(header.clone())
         } else {
             None
@@ -104,7 +105,8 @@ impl HeaderCache {
                 height: 0,
                 log2work: Self::log2(header.work()),
                 block: None,
-                filter: None,
+                script_filter: None,
+                coin_filter: None
             };
             self.trunk.push(new_tip.clone());
             self.headers.insert(new_tip.clone(), stored.clone());
@@ -207,7 +209,8 @@ impl HeaderCache {
             height: prev.height + 1,
             log2work: Self::log2(next.work() + Self::exp2(prev.log2work)),
             block: None,
-            filter: None,
+            script_filter: None,
+            coin_filter: None
         };
         let next_hash = Arc::new(next.bitcoin_hash());
 
