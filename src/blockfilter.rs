@@ -25,7 +25,10 @@ use error::SPVError;
 use chaindb::UTXOAccessor;
 
 use bitcoin::{
-    blockdata::block::Block
+    blockdata::{
+        transaction::OutPoint,
+        block::Block
+    }
 };
 use bitcoin::{
     consensus::{encode::VarInt, Decodable, Encodable},
@@ -62,6 +65,17 @@ impl BlockFilter {
             writer.finish()?;
         }
         Ok(BlockFilter{block: block.bitcoin_hash(), filter_type: 1, content: out.into_inner().to_vec()})
+    }
+
+    pub fn compute_outpoint_filter(block: &Block) -> Result<BlockFilter, SPVError> {
+        let mut bytes = Vec::new();
+        let mut out = Cursor::new(&mut bytes);
+        {
+            let mut writer = BlockFilterWriter::new(&mut out, block);
+            writer.outpoint_filter()?;
+            writer.finish()?;
+        }
+        Ok(BlockFilter{block: block.bitcoin_hash(), filter_type: 2, content: out.into_inner().to_vec()})
     }
 }
 
@@ -113,6 +127,23 @@ impl <'a> BlockFilterWriter<'a> {
         self.add_consumed_scripts(tx_accessor)
     }
 
+    /// compile a filter useful to find spent outputs
+    pub fn outpoint_filter(&mut self) -> Result<(), SPVError> {
+        let mut buf = Vec::with_capacity(40);
+        for tx in &self.block.txdata {
+            let txid = tx.txid();
+            for (vout, o) in tx.output.iter().enumerate() {
+                if !o.script_pubkey.is_op_return() {
+                    let coin = OutPoint { txid, vout: vout as u32 };
+                    coin.consensus_encode(&mut buf)?;
+                    self.writer.add_element(&buf.as_slice());
+                    buf.clear();
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Write block filter
     pub fn finish(&mut self) -> Result<usize, io::Error> {
         self.writer.finish()
@@ -134,35 +165,23 @@ impl BlockFilterReader {
         })
     }
 
-    /// add a query pattern
-    pub fn add_query_pattern (&mut self, element: &[u8]) {
-        self.reader.add_query_pattern (element);
-    }
-
     /// match any previously added query pattern
-    pub fn match_any (&mut self, reader: &mut io::Read) -> Result<bool, io::Error> {
-        self.reader.match_any(reader)
+    pub fn match_any (&mut self, reader: &mut io::Read, query: &Vec<Vec<u8>>) -> Result<bool, io::Error> {
+        self.reader.match_any(reader, query)
     }
 }
 
 
 struct GCSFilterReader {
-    filter: GCSFilter,
-    query: HashSet<u64>
+    filter: GCSFilter
 }
 
 impl GCSFilterReader {
     fn new (k0: u64, k1: u64) -> Result<GCSFilterReader, io::Error> {
-        Ok(GCSFilterReader {
-            filter: GCSFilter::new(k0, k1),
-            query: HashSet::new() })
+        Ok(GCSFilterReader { filter: GCSFilter::new(k0, k1)})
     }
 
-    fn add_query_pattern (&mut self, element: &[u8]) {
-        self.query.insert (self.filter.hash(element));
-    }
-
-    fn match_any (&mut self, reader: &mut io::Read) -> Result<bool, io::Error> {
+    fn match_any (&mut self, reader: &mut io::Read, query: &Vec<Vec<u8>>) -> Result<bool, io::Error> {
         let mut decoder = reader;
         let n_elements: VarInt = Decodable::consensus_decode(&mut decoder)
             .map_err(|_| io::Error::new(io::ErrorKind::UnexpectedEof, "unexpected EOF"))?;
@@ -171,12 +190,8 @@ impl GCSFilterReader {
             return Ok(false)
         }
         // map hashes to [0, n_elements << grp]
-        let mut mapped = Vec::new();
-        mapped.reserve(self.query.len());
         let nm = n_elements.0 * M;
-        for h in &self.query {
-            mapped.push(map_to_range(*h, nm));
-        }
+        let mut mapped = query.iter().map(|e| map_to_range(self.filter.hash(e.as_slice()), nm)).collect::<Vec<_>>();
         // sort
         mapped.sort();
 
@@ -486,40 +501,42 @@ mod test {
         for _ in 0..1000 {
             let mut bytes = [0u8; 8];
             rng.fill_bytes(&mut bytes);
-            patterns.insert(bytes);
+            patterns.insert(bytes.to_vec());
         }
         {
             let mut out = Cursor::new(&mut bytes);
             let mut writer = GCSFilterWriter::new(&mut out, 0, 0);
             for p in &patterns {
-                writer.add_element(p);
+                writer.add_element(p.as_slice());
             }
             writer.finish().unwrap();
         }
         {
+            let mut query = Vec::new();
             let ref mut reader = GCSFilterReader::new(0, 0).unwrap();
             let mut it = patterns.iter();
             for _ in 0..5 {
-                reader.add_query_pattern(it.next().unwrap());
+                query.push(it.next().unwrap().clone());
             }
             for _ in 0..100 {
-                let mut p = it.next().unwrap().to_vec();
+                let mut p = it.next().unwrap().clone();
                 p [0] = !p[0];
-                reader.add_query_pattern(p.as_slice());
+                query.push(p);
             }
             let mut input = Cursor::new(&bytes);
-            assert!(reader.match_any(&mut input).unwrap());
+            assert!(reader.match_any(&mut input, &query).unwrap());
         }
         {
             let mut reader = GCSFilterReader::new(0, 0).unwrap();
             let mut it = patterns.iter();
+            let mut query = Vec::new();
             for _ in 0..100 {
-                let mut p = it.next().unwrap().to_vec();
+                let mut p = it.next().unwrap().clone();
                 p [0] = !p[0];
-                reader.add_query_pattern(p.as_slice());
+                query.push(p);
             }
             let mut input = Cursor::new(&bytes);
-            assert!(!reader.match_any(&mut input).unwrap());
+            assert!(!reader.match_any(&mut input, &query).unwrap());
         }
     }
 
