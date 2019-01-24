@@ -38,9 +38,12 @@ use hammersbald::{
     transient,
 };
 use headercache::{HeaderCache, HeaderIterator, TrunkIterator};
+
+use lru_cache::LruCache;
+
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    sync::{Arc, RwLock},
+    sync::{Arc, RwLock, Mutex},
 };
 use std::{
     path::Path
@@ -53,9 +56,11 @@ pub struct ChainDB {
     heavy: Option<BitcoinAdaptor>,
     headercache: HeaderCache,
     filtercache: FilterCache,
+    utxocache: Mutex<LruCache<u64, Script>>,
     network: Network,
 }
 
+const UTXO_CACHE_SIZE:usize = 1024*1024;
 
 impl ChainDB {
     /// Create an in-memory database instance
@@ -64,11 +69,12 @@ impl ChainDB {
         let light = BitcoinAdaptor::new(transient(2)?);
         let headercache = HeaderCache::new(network);
         let filtercache = FilterCache::new();
+        let utxocache = Mutex::new(LruCache::new(UTXO_CACHE_SIZE));
         if heavy {
             let heavy = Some(BitcoinAdaptor::new(transient(2)?));
-            Ok(ChainDB { light, heavy, network, headercache, filtercache })
+            Ok(ChainDB { light, heavy, network, headercache, filtercache, utxocache })
         } else {
-            Ok(ChainDB { light, heavy: None, network, headercache, filtercache })
+            Ok(ChainDB { light, heavy: None, network, headercache, filtercache, utxocache })
         }
     }
 
@@ -78,11 +84,12 @@ impl ChainDB {
         let light = BitcoinAdaptor::new(persistent((basename.clone() + ".h").as_str(), 100, 2)?);
         let headercache = HeaderCache::new(network);
         let filtercache = FilterCache::new();
+        let utxocache = Mutex::new(LruCache::new(UTXO_CACHE_SIZE));
         if heavy {
             let heavy = Some(BitcoinAdaptor::new(persistent((basename + ".b").as_str(), 1000, 100)?));
-            Ok(ChainDB { light, heavy, network, headercache, filtercache })
+            Ok(ChainDB { light, heavy, network, headercache, filtercache, utxocache })
         } else {
-            Ok(ChainDB { light, heavy: None, network, headercache, filtercache })
+            Ok(ChainDB { light, heavy: None, network, headercache, filtercache, utxocache })
         }
     }
 
@@ -364,7 +371,7 @@ impl ChainDB {
                     let vout = idx as u32;
                     if !output.script_pubkey.is_provably_unspendable() {
                         let utxo = StoredUTXO::new(block.height, tx_nr, vout);
-                        new_utxos.insert(OutPoint { txid, vout }, utxo);
+                        new_utxos.insert(OutPoint { txid, vout }, (utxo, output.script_pubkey.clone()));
                     }
                 }
                 if !tx.is_coin_base() {
@@ -381,8 +388,10 @@ impl ChainDB {
                     }
                 }
             }
-            for (coin, utxo) in &new_utxos {
+            let mut utxocache = self.utxocache.lock().unwrap();
+            for (coin, (utxo, script)) in &new_utxos {
                 heavy.put_keyed_encodable(utxo_key(coin).as_bytes(), utxo)?;
+                utxocache.insert(utxo.utxo_id, script.clone());
             }
             heavy.put_keyed_encodable(&unwind_key(&block.id).as_bytes()[..], &UTXOUnwind { unwinds })?;
             heavy.put_keyed_encodable(UTXO_TIP, &block.id)?;
@@ -392,6 +401,7 @@ impl ChainDB {
     }
 
     pub fn unwind_utxo(&mut self, id: &Sha256dHash) -> Result<Sha256dHash, SPVError> {
+        self.utxocache.lock().unwrap().clear();
         if let Some(header) = self.headercache.get_header(id) {
             let height = header.height;
             if let Some(stored_block) = self.fetch_block(height)? {
@@ -427,9 +437,15 @@ impl ChainDB {
         Err(SPVError::UnknownUTXO)
     }
 
-    pub fn get_utxo(&self, coin: &OutPoint) -> Result<Option<(Script, u64)>, SPVError> {
+    pub fn get_utxo(&self, coin: &OutPoint) -> Result<Option<Script>, SPVError> {
         if let Some(ref heavy) = self.heavy {
             if let Some((_, utxo)) = heavy.get_keyed_decodable::<StoredUTXO>(utxo_key(coin).as_bytes())? {
+                {
+                    let mut utxocache = self.utxocache.lock().unwrap();
+                    if let Some(script) = utxocache.get_mut(&utxo.utxo_id) {
+                        return Ok(Some(script.clone()));
+                    }
+                }
                 if let Some(block) = self.fetch_block(utxo.height())? {
                     let tx_nr = utxo.tx_nr() as usize;
                     if tx_nr < block.txdata.len() {
@@ -437,7 +453,7 @@ impl ChainDB {
                         let vout = utxo.vout() as usize;
                         if vout < tx.output.len() {
                             let ref out = tx.output[vout];
-                            return Ok(Some((out.script_pubkey.clone(), out.value)));
+                            return Ok(Some(out.script_pubkey.clone()));
                         }
                     }
                 }
@@ -691,7 +707,7 @@ fn unwind_key(block_id: &Sha256dHash) -> Sha256dHash {
 
 pub struct DBUTXOAccessor<'a> {
     utxostore: &'a ChainDB,
-    same_block_utxo: HashMap<(Sha256dHash, u32), (Script, u64)>,
+    same_block_utxo: HashMap<(Sha256dHash, u32), Script>,
 }
 
 impl<'a> DBUTXOAccessor<'a> {
@@ -700,7 +716,7 @@ impl<'a> DBUTXOAccessor<'a> {
         for t in &block.txdata {
             let id = t.txid();
             for (ix, o) in t.output.iter().enumerate() {
-                acc.same_block_utxo.insert((id, ix as u32), (o.script_pubkey.clone(), o.value));
+                acc.same_block_utxo.insert((id, ix as u32), o.script_pubkey.clone());
             }
         }
         acc
@@ -709,11 +725,11 @@ impl<'a> DBUTXOAccessor<'a> {
 
 
 pub trait UTXOAccessor {
-    fn get_utxo(&self, coin: &OutPoint) -> Result<Option<(Script, u64)>, SPVError>;
+    fn get_utxo(&self, coin: &OutPoint) -> Result<Option<Script>, SPVError>;
 }
 
 impl<'a> UTXOAccessor for DBUTXOAccessor<'a> {
-    fn get_utxo(&self, coin: &OutPoint) -> Result<Option<(Script, u64)>, SPVError> {
+    fn get_utxo(&self, coin: &OutPoint) -> Result<Option<Script>, SPVError> {
         if let Some(r) = self.same_block_utxo.get(&(coin.txid, coin.vout)) {
             return Ok(Some(r.clone()));
         }

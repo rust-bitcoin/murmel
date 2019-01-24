@@ -95,7 +95,7 @@ impl <'a> BlockFilterWriter<'a> {
         for transaction in &self.block.txdata {
             if !transaction.is_coin_base() {
                 for input in &transaction.input {
-                    if let Some((script, _)) = tx_accessor.get_utxo(&input.previous_output)? {
+                    if let Some(script) = tx_accessor.get_utxo(&input.previous_output)? {
                         self.writer.add_element(script.as_bytes());
                     }
                     else {
@@ -414,8 +414,8 @@ mod test {
             .map_err(|_| { io::Error::new(io::ErrorKind::InvalidData, "serialization error") })?)
     }
 
-    impl UTXOAccessor for HashMap<(Sha256dHash, u32), (Script, u64)> {
-        fn get_utxo(&self, coin: &OutPoint) -> Result<Option<(Script, u64)>, SPVError> {
+    impl UTXOAccessor for HashMap<(Sha256dHash, u32), Script> {
+        fn get_utxo(&self, coin: &OutPoint) -> Result<Option<Script>, SPVError> {
             if let Some (ux) = self.get(&(coin.txid, coin.vout)) {
                 Ok(Some(ux.clone()))
             }
@@ -447,7 +447,7 @@ mod test {
 
             for tx in &block.txdata {
                 for (ix, out) in tx.output.iter().enumerate() {
-                    txmap.insert((tx.txid(), ix as u32), (out.script_pubkey.clone(), out.value));
+                    txmap.insert((tx.txid(), ix as u32), out.script_pubkey.clone());
                 }
             }
             for i in 1 .. 9 {
@@ -455,7 +455,7 @@ mod test {
                 let tx: bitcoin::blockdata::transaction::Transaction = decode(hex::decode(line[1].as_string().unwrap()).unwrap()).unwrap();
                 assert_eq!(tx.txid().to_string(), line[0].as_string().unwrap());
                 for (ix, out) in tx.output.iter().enumerate() {
-                    txmap.insert((tx.txid(), ix as u32), (out.script_pubkey.clone(), out.value));
+                    txmap.insert((tx.txid(), ix as u32), out.script_pubkey.clone());
                 }
             }
 
