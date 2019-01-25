@@ -42,10 +42,8 @@ use hammersbald::{
     transient,
 };
 
-use lru_cache::LruCache;
-
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, VecDeque},
     sync::{Arc, RwLock, Mutex},
 };
 use std::{

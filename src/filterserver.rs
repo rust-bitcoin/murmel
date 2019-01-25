@@ -68,7 +68,7 @@ impl FilterServer {
                 error!("Error processing headers: {}", e);
             }
         }
-        panic!("Header download thread failed.");
+        panic!("Filter server thread failed.");
     }
 
     fn filter_headers(&self, filter_type: u8, stop_hash: Sha256dHash) -> Vec<StoredFilter> {

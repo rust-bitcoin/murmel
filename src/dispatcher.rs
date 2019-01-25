@@ -26,13 +26,12 @@ use p2p::{PeerId, PeerMessageSender, PeerMessageReceiver, P2PControlSender, P2PC
 use filtercalculator::FilterCalculator;
 use headerdownload::HeaderDownload;
 use filterserver::FilterServer;
+use blockserver::BlockServer;
 
 use bitcoin::{
-    BitcoinHash,
     blockdata::{
         block::{Block, LoneBlockHeader}
     },
-    util::hash::Sha256dHash,
     network::{
         address::Address,
         constants::Network,
@@ -44,8 +43,7 @@ use bitcoin::{
 use std::{
     thread,
     sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
-    collections::VecDeque,
+    time::{SystemTime, UNIX_EPOCH}
 };
 
 
@@ -61,6 +59,8 @@ pub struct Dispatcher {
     filter_calculator: PeerMessageSender,
     // filter server
     filter_server: PeerMessageSender,
+    // block server
+    block_server: PeerMessageSender,
     // lightning connector
     connector: Arc<LightningConnector>
 }
@@ -84,6 +84,13 @@ impl Dispatcher {
             PeerMessageSender::dummy()
         };
 
+        let block_server = if server {
+            BlockServer::new(chaindb.clone(), p2p.clone())
+        } else {
+            PeerMessageSender::dummy()
+        };
+
+
         let dispatcher = Arc::new(Dispatcher {
             p2p,
             configdb,
@@ -91,6 +98,7 @@ impl Dispatcher {
             header_downloader,
             filter_calculator,
             filter_server,
+            block_server,
             connector
         });
 
@@ -151,6 +159,19 @@ impl Dispatcher {
             NetworkMessage::Block(b) => self.block(b, peer),
             NetworkMessage::Inv(v) => self.inv(v, peer),
             NetworkMessage::Addr(ref v) => self.addr(v, peer),
+
+            NetworkMessage::GetHeaders(get) =>{
+                self.block_server.send_network(peer, NetworkMessage::GetHeaders(get));
+                Ok(())
+            },
+            NetworkMessage::GetBlocks(get) => {
+                self.block_server.send_network(peer, NetworkMessage::GetBlocks(get));
+                Ok(())
+            },
+            NetworkMessage::GetData(get) => {
+                self.block_server.send_network(peer, NetworkMessage::GetData(get));
+                Ok(())
+            },
 
             NetworkMessage::GetCFilters(get) => {
                 self.filter_server.send_network(peer, NetworkMessage::GetCFilters(get));

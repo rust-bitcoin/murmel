@@ -30,17 +30,15 @@ use bitcoin::{
     },
     util::hash::Sha256dHash,
 };
-use chaindb::{SharedChainDB, ChainDB, StoredHeader};
+use chaindb::SharedChainDB;
 use blockfilter::BlockFilter;
 use p2p::{P2PControl, P2PControlSender, PeerId, PeerMessage, PeerMessageReceiver, PeerMessageSender};
 use error::SPVError;
 use blockfilter::{COIN_FILTER, SCRIPT_FILTER};
 
-use hammersbald::PRef;
-
 use std::{
     collections::HashSet,
-    sync::{mpsc, RwLockWriteGuard},
+    sync::mpsc,
     thread,
     time::{Duration, SystemTime}
 };
