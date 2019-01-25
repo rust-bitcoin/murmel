@@ -627,10 +627,10 @@ pub trait ScriptAccessor {
 }
 
 impl<'a> ScriptAccessor for DBScriptAccessor<'a> {
-    fn get_scripts(&self, mut coins: VecDeque<OutPoint>) -> Result<Vec<Script>, SPVError> {
+    fn get_scripts(&self, coins: VecDeque<OutPoint>) -> Result<Vec<Script>, SPVError> {
         let mut sofar = Vec::with_capacity(coins.len());
         let mut remains = VecDeque::with_capacity(coins.len());
-        for coin in coins.pop_front() {
+        for coin in coins {
             if let Some(r) = self.same_block_scripts.get(&coin) {
                 sofar.push(r.clone());
             }
