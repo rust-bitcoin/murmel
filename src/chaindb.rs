@@ -344,11 +344,11 @@ impl ChainDB {
         let mut script_cache = self.scriptcache.lock().unwrap();
         for (i, tx) in block.txdata.iter().enumerate() {
             let tx_nr = i as u32;
-            let txid = tx.txid();
+            let txid = Arc::new(tx.txid());
             for (idx, output) in tx.output.iter().enumerate() {
                 let vout = idx as u32;
                 if !output.script_pubkey.is_provably_unspendable() {
-                    script_cache.insert(OutPoint { txid, vout }, output.script_pubkey.clone(), block_id.clone());
+                    script_cache.insert(txid.clone(), vout, output.script_pubkey.clone(), block_id.clone());
                 }
             }
         }
@@ -374,7 +374,9 @@ impl ChainDB {
         if remains.len () > 0 {
             let mut start_with = *prev_block;
             if let Some (oldest) = self.scriptcache.lock().unwrap().oldest_block() {
-                start_with = oldest;
+                if self.is_on_trunk(&oldest) {
+                    start_with = oldest;
+                }
             }
             for header in self.iter_to_genesis(&start_with) {
                 if let Some(coin_filter) = header.coin_filter {
