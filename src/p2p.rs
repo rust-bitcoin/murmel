@@ -236,12 +236,12 @@ impl P2P {
                 },
                 P2PControl::Broadcast(message) => {
                     for peer in self.peers.read().unwrap().values() {
-                        peer.lock().unwrap().send(&message).expect("could not send to peer");
+                        peer.lock().unwrap().send(message.clone()).expect("could not send to peer");
                     }
                 }
                 P2PControl::Send(peer_id, message) => {
                     if let Some (peer) = self.peers.read().unwrap().get (&peer_id) {
-                        peer.lock().unwrap().send(&message).expect("could not send to peer");
+                        peer.lock().unwrap().send(message).expect("could not send to peer");
                     }
                 }
             }
@@ -365,7 +365,7 @@ impl P2P {
         }
         if outgoing {
             // send this node's version message to peer
-            peers.get(&pid).unwrap().lock().unwrap().send(&self.version(&addr, self.max_protocol_version))?;
+            peers.get(&pid).unwrap().lock().unwrap().send(self.version(&addr, self.max_protocol_version))?;
         }
 
         Ok(addr)
@@ -557,10 +557,10 @@ impl P2P {
                                                         trace!("send version to incoming connection {}", addr);
                                                         // do not show higher version than the peer speaks
                                                         let version = self.version (&addr, version.version);
-                                                        locked_peer.send(&version)?;
+                                                        locked_peer.send(version)?;
                                                     }
                                                     // acknowledge version message received
-                                                    locked_peer.send(&NetworkMessage::Verack)?;
+                                                    locked_peer.send(NetworkMessage::Verack)?;
                                                     // all right, remember this peer
                                                     info!("client {} height: {} peer={}", version.user_agent, version.start_height, pid);
                                                     let mut vm = version.clone();
@@ -727,9 +727,9 @@ impl Peer {
     }
 
     /// send a message to P2P network
-    pub fn send (&self, msg: &NetworkMessage) -> Result<(), SPVError> {
+    pub fn send (&self, msg: NetworkMessage) -> Result<(), SPVError> {
         // send to outgoing message channel
-        self.sender.send(msg.clone()).map_err(| _ | SPVError::Downstream("can not send to peer queue".to_owned()))?;
+        self.sender.send(msg).map_err(| _ | SPVError::Downstream("can not send to peer queue".to_owned()))?;
         // register for writable peer events since we have outgoing message
         self.reregister_write()?;
         Ok(())
