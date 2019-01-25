@@ -38,7 +38,7 @@ use bitcoin::{
 use siphasher::sip::SipHasher;
 use std::{
     cmp,
-    collections::{VecDeque, HashSet},
+    collections::HashSet,
     hash::Hasher,
     io::{self, Cursor}
 
@@ -109,11 +109,11 @@ impl <'a> BlockFilterWriter<'a> {
 
     /// Add consumed output scripts of a block to filter
     fn add_consumed_scripts (&mut self, tx_accessor: impl ScriptAccessor) -> Result<(), SPVError> {
-        let mut coins = VecDeque::new();
+        let mut coins = Vec::new();
         for transaction in &self.block.txdata {
             if !transaction.is_coin_base() {
                 for input in &transaction.input {
-                    coins.push_back(input.previous_output);
+                    coins.push(input.previous_output);
                 }
             }
         }
@@ -432,9 +432,9 @@ mod test {
     }
 
     impl ScriptAccessor for HashMap<OutPoint, Script> {
-        fn get_scripts(&self, mut coins: VecDeque<OutPoint>) -> Result<Vec<Script>, SPVError> {
+        fn get_scripts(&self, coins: Vec<OutPoint>) -> Result<Vec<Script>, SPVError> {
             let mut result = Vec::new();
-            while let Some(coin) = coins.pop_front() {
+            for coin in coins {
                 if let Some(ux) = self.get(&coin) {
                     result.push(ux.clone());
                 } else {
