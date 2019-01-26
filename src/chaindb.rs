@@ -361,6 +361,7 @@ impl ChainDB {
     pub fn get_scripts(&self, coins: Vec<OutPoint>, mut sofar: Vec<Script>) -> Result<Vec<Script>, SPVError> {
         let mut remains = Vec::with_capacity(coins.len());
         {
+            // check in script cache
             let mut scriptcache = self.scriptcache.lock().unwrap();
             for coin in coins {
                 if let Some(script) = scriptcache.remove(&coin) {
@@ -375,26 +376,45 @@ impl ChainDB {
         }
         remains.sort();
         if remains.len() > 0 {
+            // check what remains in coin filters
             let from = self.scriptcache.lock().unwrap().complete_after();
+            // iterate backward on blocks starting with the highest one not covered by the cache
             for header in self.iter_trunk_rev(Some(from)) {
+                // if filter header known for this block
                 if let Some(coin_filter) = header.coin_filter {
+                    // retrieve actual filter content
                     let filter = self.fetch_filter_by_ref(coin_filter)?;
+                    // if content is not empty (means if it is not just a header)
                     if let Some(ref content) = filter.filter {
+                        // check in a single pass read if any coins we search for might be in the filter for this block
                         let reader = BlockFilterReader::new(&header.bitcoin_hash())?;
                         if reader.match_any(&mut Cursor::new(content), &remains)? {
+                            // do we have the block ?
                             if let Some(block_ref) = header.block {
+                                // retrieve the block
                                 let block = self.fetch_block_by_ref(block_ref)?;
+                                // for all transactions
                                 for tx in &block.txdata {
                                     let txid = tx.txid();
-                                    if let Ok(pos) = remains.binary_search_by(|r| r[0..32].cmp(txid.as_bytes())) {
+                                    // check if any or many! outputs of this transaction are those we search for
+                                    while let Ok(pos) = remains.binary_search_by(|r| r[0..32].cmp(txid.as_bytes())) {
+                                        // a transaction that we are interested in
                                         let coin = OutPoint::consensus_decode(&mut Cursor::new(remains[pos].as_slice()))?;
+                                        // get the script
                                         sofar.push(tx.output[coin.vout as usize].script_pubkey.clone());
+                                        // one less to worry about
                                         remains.remove(pos);
+                                        // are we done?
                                         if remains.len() == 0 {
                                             break;
                                         }
                                     }
+                                    // are we done?
+                                    if remains.len() == 0 {
+                                        break;
+                                    }
                                 }
+                                // are we done?
                                 if remains.len() == 0 {
                                     break;
                                 }
@@ -403,11 +423,8 @@ impl ChainDB {
                     }
                 }
             }
-            if remains.len () > 0 {
-                debug!("could not find coins in filters up-to {}", from);
-            }
         }
-
+        // are we done?
         if remains.len () > 0 {
             let coins = remains.iter().map(|v| OutPoint::consensus_decode(&mut Cursor::new(v.as_slice())).unwrap())
                 .map(|o| format!("{} {}", o.txid, o.vout)).collect::<Vec<_>>();
