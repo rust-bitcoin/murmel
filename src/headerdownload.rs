@@ -31,24 +31,28 @@ use chaindb::SharedChainDB;
 use error::SPVError;
 use p2p::{P2PControl, P2PControlSender, PeerId, PeerMessage, PeerMessageReceiver, PeerMessageSender};
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     sync::mpsc,
-    thread
+    thread,
+    time::{SystemTime, UNIX_EPOCH, Duration}
 };
 
 pub struct HeaderDownload {
     p2p: P2PControlSender,
     chaindb: SharedChainDB,
+    task_pending: HashMap<PeerId, u64>
 }
 
 // channel size
 const BACK_PRESSURE: usize = 10;
+// peer timout secs
+const PEER_TIMEOUT: u64 = 60;
 
 impl HeaderDownload {
     pub fn new(chaindb: SharedChainDB, p2p: P2PControlSender) -> PeerMessageSender {
         let (sender, receiver) = mpsc::sync_channel(BACK_PRESSURE);
 
-        let mut headerdownload = HeaderDownload { chaindb, p2p };
+        let mut headerdownload = HeaderDownload { chaindb, p2p, task_pending: HashMap::new() };
 
         thread::spawn(move || { headerdownload.run(receiver) });
 
@@ -56,29 +60,37 @@ impl HeaderDownload {
     }
 
     fn run(&mut self, receiver: PeerMessageReceiver) {
-        while let Ok(msg) = receiver.recv() {
-            if let Err(e) = match msg {
-                PeerMessage::Connected(pid) => {
-                    self.get_headers(pid)
-                }
-                PeerMessage::Disconnected(_) => { Ok(())}
-                PeerMessage::Message(pid, msg) => {
-                    match msg {
-                        NetworkMessage::Headers(ref headers) => self.headers(headers, pid),
-                        NetworkMessage::Inv(ref inv) => self.inv(inv, pid),
-                        NetworkMessage::Ping(_) => { Ok(()) }
-                        _ => { Ok(()) }
+        loop {
+            while let Ok(msg) = receiver.recv_timeout(Duration::from_millis(1000)) {
+                if let Err(e) = match msg {
+                    PeerMessage::Connected(pid) => {
+                        self.get_headers(pid)
                     }
+                    PeerMessage::Disconnected(_) => { Ok(()) }
+                    PeerMessage::Message(pid, msg) => {
+                        match msg {
+                            NetworkMessage::Headers(ref headers) => self.headers(headers, pid),
+                            NetworkMessage::Inv(ref inv) => self.inv(inv, pid),
+                            NetworkMessage::Ping(_) => { Ok(()) }
+                            _ => { Ok(()) }
+                        }
+                    }
+                } {
+                    error!("Error processing headers: {}", e);
                 }
-            } {
-                error!("Error processing headers: {}", e);
+            }
+            for (peer, timeout) in &self.task_pending {
+                if *timeout > Self::now () {
+                    debug!("too slow delivering headers, banning peer={}", peer);
+                    self.p2p.send(P2PControl::Ban(*peer, 100));
+                }
             }
         }
         panic!("Header download thread failed.");
     }
 
     // process an incoming inventory announcement
-    fn inv(&self, v: &Vec<Inventory>, peer: PeerId) -> Result<(), SPVError> {
+    fn inv(&mut self, v: &Vec<Inventory>, peer: PeerId) -> Result<(), SPVError> {
         let mut ask_for_headers = false;
         for inventory in v {
             // only care for blocks
@@ -103,7 +115,10 @@ impl HeaderDownload {
     }
 
     /// get headers this peer is ahead of us
-    fn get_headers(&self, peer: PeerId) -> Result<(), SPVError> {
+    fn get_headers(&mut self, peer: PeerId) -> Result<(), SPVError> {
+        if let Some(pending) = self.task_pending.get(&peer) {
+            return Ok(())
+        }
         let chaindb = self.chaindb.read().unwrap();
         let locator = chaindb.header_locators();
         if locator.len() > 0 {
@@ -112,12 +127,14 @@ impl HeaderDownload {
             } else {
                 Sha256dHash::default()
             };
+            self.task_pending.insert(peer, Self::now() + PEER_TIMEOUT);
             self.send(peer, NetworkMessage::GetHeaders(GetHeadersMessage::new(locator, first)));
         }
         Ok(())
     }
 
-    fn headers(&self, headers: &Vec<LoneBlockHeader>, peer: PeerId) -> Result<(), SPVError> {
+    fn headers(&mut self, headers: &Vec<LoneBlockHeader>, peer: PeerId) -> Result<(), SPVError> {
+        self.task_pending.remove(&peer);
         if headers.len() > 0 {
             // current height
             let mut height;
@@ -197,5 +214,9 @@ impl HeaderDownload {
 
     fn send(&self, peer: PeerId, msg: NetworkMessage) {
         self.p2p.send(P2PControl::Send(peer, msg))
+    }
+
+    fn now() -> u64 {
+        SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs()
     }
 }
