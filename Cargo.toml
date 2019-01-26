@@ -19,9 +19,9 @@ name = "server"
 path = "src/bin/server.rs"
 
 [dependencies]
-bitcoin = { version = "0.15.1", features = ["bitcoinconsensus"] }
-hammersbald = { version="1.4.1", features=["bitcoin_support"]}
-lightning = "0.0.7"
+bitcoin = { version = "0.16", features = ["bitcoinconsensus"] }
+hammersbald = { version="1.5", features=["bitcoin_support"]}
+lightning = "0.0.8"
 mio = "0.6"
 rand = "0.5"
 siphasher = "0.2"
@@ -39,4 +39,4 @@ hex = "0.3"
 tempfile = "3.0.2"
 
 [patch.crates-io]
-bitcoin = { git= "https://github.com/tamasblummer/rust-bitcoin.git", branch = "open_prs" }
+bitcoin = { git= "https://github.com/tamasblummer/rust-bitcoin.git", branch = "open_prs_0.16" }
