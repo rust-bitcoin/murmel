@@ -198,6 +198,8 @@ impl FilterCalculator {
                             let coin_filter = BlockFilter::compute_coin_filter(&block)?;
                             debug!("store filter {} {} size: {} {}", header.height, block_id, script_filter.content.len(), coin_filter.content.len());
                             chaindb.store_known_filter(&prev_script.bitcoin_hash(), &prev_coin.bitcoin_hash(), &script_filter, &coin_filter)?;
+                            // let client know we have a new block
+                            self.p2p.send(P2PControl::Broadcast(NetworkMessage::Inv(vec!(Inventory{inv_type: InvType::Block, hash:block_id}))));
                         }
                     }
                 }
