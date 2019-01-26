@@ -352,11 +352,11 @@ impl ChainDB {
         }
     }
 
-    pub fn get_scripts(&self, prev_block: &Sha256dHash, mut coins: VecDeque<OutPoint>, mut sofar: Vec<Script>) -> Result<Vec<Script>, SPVError> {
+    pub fn get_scripts(&self, prev_block: &Sha256dHash, coins: Vec<OutPoint>, mut sofar: Vec<Script>) -> Result<Vec<Script>, SPVError> {
         let mut remains = Vec::with_capacity(coins.len());
         {
             let mut scriptcache = self.scriptcache.lock().unwrap();
-            while let Some(coin) = coins.pop_front() {
+            for coin in coins {
                 if let Some(script) = scriptcache.remove(&coin) {
                     sofar.push(script);
                 }
@@ -623,19 +623,19 @@ impl<'a> DBScriptAccessor<'a> {
 
 
 pub trait ScriptAccessor {
-    fn get_scripts(&self, coins: VecDeque<OutPoint>) -> Result<Vec<Script>, SPVError>;
+    fn get_scripts(&self, coins: Vec<OutPoint>) -> Result<Vec<Script>, SPVError>;
 }
 
 impl<'a> ScriptAccessor for DBScriptAccessor<'a> {
-    fn get_scripts(&self, coins: VecDeque<OutPoint>) -> Result<Vec<Script>, SPVError> {
+    fn get_scripts(&self, coins: Vec<OutPoint>) -> Result<Vec<Script>, SPVError> {
         let mut sofar = Vec::with_capacity(coins.len());
-        let mut remains = VecDeque::with_capacity(coins.len());
+        let mut remains = Vec::with_capacity(coins.len());
         for coin in coins {
             if let Some(r) = self.same_block_scripts.get(&coin) {
                 sofar.push(r.clone());
             }
             else {
-                remains.push_back(coin);
+                remains.push(coin);
             }
         }
         self.db.get_scripts(&self.prev_block, remains, sofar)
