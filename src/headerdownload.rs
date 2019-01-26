@@ -34,19 +34,19 @@ use std::{
     collections::{HashMap, VecDeque},
     sync::mpsc,
     thread,
-    time::{SystemTime, UNIX_EPOCH, Duration}
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 pub struct HeaderDownload {
     p2p: P2PControlSender,
     chaindb: SharedChainDB,
-    task_pending: HashMap<PeerId, u64>
+    task_pending: HashMap<PeerId, u64>,
 }
 
 // channel size
 const BACK_PRESSURE: usize = 10;
 // peer timout secs
-const PEER_TIMEOUT: u64 = 60;
+const PEER_TIMEOUT: u64 = 120;
 
 impl HeaderDownload {
     pub fn new(chaindb: SharedChainDB, p2p: P2PControlSender) -> PeerMessageSender {
@@ -61,12 +61,15 @@ impl HeaderDownload {
 
     fn run(&mut self, receiver: PeerMessageReceiver) {
         loop {
-            while let Ok(msg) = receiver.recv_timeout(Duration::from_millis(1000)) {
+            while let Ok(msg) = receiver.recv_timeout(Duration::from_millis(10000)) {
                 if let Err(e) = match msg {
                     PeerMessage::Connected(pid) => {
                         self.get_headers(pid)
                     }
-                    PeerMessage::Disconnected(_) => { Ok(()) }
+                    PeerMessage::Disconnected(peer) => {
+                        self.task_pending.remove(&peer);
+                        Ok(())
+                    }
                     PeerMessage::Message(pid, msg) => {
                         match msg {
                             NetworkMessage::Headers(ref headers) => self.headers(headers, pid),
@@ -80,7 +83,7 @@ impl HeaderDownload {
                 }
             }
             for (peer, timeout) in &self.task_pending {
-                if *timeout > Self::now () {
+                if *timeout < Self::now() {
                     debug!("too slow delivering headers, banning peer={}", peer);
                     self.p2p.send(P2PControl::Ban(*peer, 100));
                 }
@@ -117,7 +120,7 @@ impl HeaderDownload {
     /// get headers this peer is ahead of us
     fn get_headers(&mut self, peer: PeerId) -> Result<(), SPVError> {
         if let Some(pending) = self.task_pending.get(&peer) {
-            return Ok(())
+            return Ok(());
         }
         let chaindb = self.chaindb.read().unwrap();
         let locator = chaindb.header_locators();
@@ -134,7 +137,9 @@ impl HeaderDownload {
     }
 
     fn headers(&mut self, headers: &Vec<LoneBlockHeader>, peer: PeerId) -> Result<(), SPVError> {
+
         self.task_pending.remove(&peer);
+
         if headers.len() > 0 {
             // current height
             let mut height;

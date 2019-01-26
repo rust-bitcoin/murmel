@@ -197,12 +197,12 @@ impl FilterCalculator {
                     if let Some(prev_script) = chaindb.get_block_filter_header(&block.header.prev_blockhash, SCRIPT_FILTER) {
                         if let Some(prev_coin) = chaindb.get_block_filter_header(&block.header.prev_blockhash, COIN_FILTER) {
                             // store block
-                            debug!("store block  {} {}", header.height, block_id);
+                            debug!("store block  {} {} peer={}", header.height, block_id, peer);
                             chaindb.store_block(block)?;
                             // calculate filters
                             let script_filter = BlockFilter::compute_script_filter(&block, chaindb.get_script_accessor(block))?;
                             let coin_filter = BlockFilter::compute_coin_filter(&block)?;
-                            debug!("store filter {} {} size: {} {}", header.height, block_id, script_filter.content.len(), coin_filter.content.len());
+                            debug!("store filter {} {} size: {} {} peer={}", header.height, block_id, script_filter.content.len(), coin_filter.content.len(), peer);
                             // store known filters into header
                             chaindb.store_known_filter(&prev_script.bitcoin_hash(), &prev_coin.bitcoin_hash(), &script_filter, &coin_filter)?;
                             // let client know we have a new block

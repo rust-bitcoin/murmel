@@ -95,7 +95,6 @@ impl ChainDB {
 
     pub fn init(&mut self, server: bool) -> Result<(), SPVError> {
         self.init_headers(server)?;
-        // TODO read filters
         Ok(())
     }
 
