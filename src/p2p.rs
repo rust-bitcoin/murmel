@@ -522,7 +522,7 @@ impl P2P {
                     if let Ok(len) = locked_peer.stream.read(iobuf) {
                         trace!("received {} bytes from peer={}", len, pid);
                         // accumulate in a buffer
-                        locked_peer.read_buffer.write(&iobuf[0..len])?;
+                        locked_peer.read_buffer.write_all(&iobuf[0..len])?;
                         // extract messages from the buffer
                         while let Some(msg) = decode(&mut locked_peer.read_buffer)? {
                             trace!("received {} peer={}", msg.command(), pid);

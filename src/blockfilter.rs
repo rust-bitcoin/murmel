@@ -393,7 +393,7 @@ impl<'a> BitStreamWriter<'a> {
     /// flush bits not yet written
     pub fn flush (&mut self) -> Result<usize, io::Error> {
         if self.offset > 0 {
-            self.writer.write(&self.buffer)?;
+            self.writer.write_all(&self.buffer)?;
             self.buffer [0] = 0u8;
             self.offset = 0;
             Ok(1)
