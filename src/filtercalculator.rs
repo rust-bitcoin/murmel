@@ -192,8 +192,8 @@ impl FilterCalculator {
                 if block.check_merkle_root() && block.check_witness_commitment() {
                     chaindb.store_block(block)?;
                     chaindb.cache_scripts(block, header.height);
-                    if let Some(prev_script) = chaindb.get_block_filter(&block.header.prev_blockhash, SCRIPT_FILTER) {
-                        if let Some(prev_coin) = chaindb.get_block_filter(&block.header.prev_blockhash, COIN_FILTER) {
+                    if let Some(prev_script) = chaindb.get_block_filter_header(&block.header.prev_blockhash, SCRIPT_FILTER) {
+                        if let Some(prev_coin) = chaindb.get_block_filter_header(&block.header.prev_blockhash, COIN_FILTER) {
                             let script_filter = BlockFilter::compute_script_filter(&block, chaindb.get_script_accessor(block))?;
                             let coin_filter = BlockFilter::compute_coin_filter(&block)?;
                             debug!("store filter {} {} size: {} {}", header.height, block_id, script_filter.content.len(), coin_filter.content.len());

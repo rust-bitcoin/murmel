@@ -34,7 +34,7 @@ use byteorder::{BigEndian, ByteOrder};
 use error::SPVError;
 use filtercache::FilterCache;
 use headercache::{HeaderCache, HeaderIterator};
-use blockfilter::{BlockFilter, BlockFilterReader};
+use blockfilter::{BlockFilter, BlockFilterReader, COIN_FILTER, SCRIPT_FILTER};
 use scriptcache::ScriptCache;
 
 use hammersbald::{
@@ -93,8 +93,8 @@ impl ChainDB {
         }
     }
 
-    pub fn init(&mut self) -> Result<(), SPVError> {
-        self.init_headers()?;
+    pub fn init(&mut self, server: bool) -> Result<(), SPVError> {
+        self.init_headers(server)?;
         // TODO read filters
         Ok(())
     }
@@ -107,7 +107,7 @@ impl ChainDB {
         Ok(())
     }
 
-    fn init_headers(&mut self) -> Result<(), SPVError> {
+    fn init_headers(&mut self, server: bool) -> Result<(), SPVError> {
         let mut sl = VecDeque::new();
         {
             if let Some(tip) = self.fetch_header_tip()? {
@@ -138,11 +138,16 @@ impl ChainDB {
                 self.headercache.add_header_unchecked(&stored);
                 if let Some(filter_ref) = stored.script_filter {
                     let filter = self.fetch_filter_by_ref(filter_ref)?;
-                    self.filtercache.add_filter(&filter);
+                    self.filtercache.add_filter_header(&filter);
                 }
                 if let Some(filter_ref) = stored.coin_filter {
                     let filter = self.fetch_filter_by_ref(filter_ref)?;
-                    self.filtercache.add_filter(&filter);
+                    if server {
+                        self.filtercache.add_filter(&filter);
+                    }
+                    else {
+                        self.filtercache.add_filter_header(&filter);
+                    }
                 }
             }
             info!("read {} filter header", self.filtercache.len());
@@ -218,8 +223,30 @@ impl ChainDB {
         self.headercache.locator_hashes()
     }
 
-    pub fn get_block_filter (&self, block_id: &Sha256dHash, filter_type: u8) -> Option<StoredFilter> {
+    pub fn get_block_filter_header(&self, block_id: &Sha256dHash, filter_type: u8) -> Option<StoredFilter> {
         self.filtercache.get_block_filter(block_id, filter_type)
+    }
+
+    pub fn get_block_filter(&self, block_id: &Sha256dHash, filter_type: u8) -> Result<Option<StoredFilter>, SPVError> {
+        if let Some(filter) = self.filtercache.get_block_filter(block_id, filter_type) {
+            if filter.filter.is_some () {
+                return Ok(Some(filter));
+            }
+            else {
+                if let Some(header) = self.get_header (block_id) {
+                    if let Some(filter_ref) = if filter_type == SCRIPT_FILTER {
+                        header.script_filter
+                    } else if filter_type == COIN_FILTER {
+                        header.coin_filter
+                    } else {
+                        None
+                    } {
+                        return Ok(Some(self.fetch_filter_by_ref(filter_ref)?));
+                    }
+                }
+            }
+        }
+        Ok(None)
     }
 
     pub fn add_filter_chain(&mut self, prev_block_id: &Sha256dHash, prev_filter_id: &Sha256dHash, filter_type: u8, filter_hashes: Box<Iterator<Item=Sha256dHash>>) ->
@@ -242,7 +269,7 @@ impl ChainDB {
                     let filter = StoredFilter { block_id, previous, filter_hash, filter: None, filter_type };
 
                     self.store_filter(&filter)?;
-                    self.filtercache.add_filter(&filter);
+                    self.filtercache.add_filter_header(&filter);
                 }
                 return Ok(Some((p_block, previous)));
             }
@@ -267,7 +294,7 @@ impl ChainDB {
                     filter_type
                 };
                 self.store_filter(&stored)?;
-                self.filtercache.add_filter(&stored);
+                self.filtercache.add_filter_header(&stored);
                 return Ok(true);
             }
         }
@@ -308,12 +335,12 @@ impl ChainDB {
         let stored_script_filter = StoredFilter{block_id: script_filter.block, previous: previous_script.clone(),
             filter_hash: Sha256dHash::from_data(script_filter.content.as_slice()), filter: Some(script_filter.content.clone()), filter_type: script_filter.filter_type };
         let pref_script = self.store_filter(&stored_script_filter)?;
-        self.filtercache.add_filter(&stored_script_filter);
+        self.filtercache.add_filter_header(&stored_script_filter);
 
         let stored_coin_filter = StoredFilter{block_id: coin_filter.block, previous: previous_coin.clone(),
             filter_hash: Sha256dHash::from_data(coin_filter.content.as_slice()), filter: Some(coin_filter.content.clone()), filter_type: coin_filter.filter_type };
         let pref_coin = self.store_filter(&stored_coin_filter)?;
-        self.filtercache.add_filter(&stored_coin_filter);
+        self.filtercache.add_filter_header(&stored_coin_filter);
 
         self.update_header_with_filter(&script_filter.block, pref_script, pref_coin)?;
         Ok((stored_script_filter.bitcoin_hash(), stored_coin_filter.bitcoin_hash()))
@@ -378,35 +405,26 @@ impl ChainDB {
             let from = self.scriptcache.lock().unwrap().complete_after();
             // iterate backward on blocks starting with the highest one not covered by the cache
             for header in self.iter_trunk_rev(Some(from)) {
-                // if filter header known for this block
-                if let Some(coin_filter) = header.coin_filter {
-                    // retrieve actual filter content
-                    let filter = self.fetch_filter_by_ref(coin_filter)?;
-                    // if content is not empty (means if it is not just a header)
-                    if let Some(ref content) = filter.filter {
-                        // check in a single pass read if any coins we search for might be in the filter for this block
-                        let reader = BlockFilterReader::new(&header.bitcoin_hash())?;
-                        if reader.match_any(&mut Cursor::new(content), &remains)? {
-                            // do we have the block ?
-                            if let Some(block_ref) = header.block {
-                                // retrieve the block
-                                let block = self.fetch_block_by_ref(block_ref)?;
-                                // for all transactions
-                                for tx in &block.txdata {
-                                    let txid = tx.txid();
-                                    // check if any or many! outputs of this transaction are those we search for
-                                    while let Ok(pos) = remains.binary_search_by(|r| r[0..32].cmp(txid.as_bytes())) {
-                                        // a transaction that we are interested in
-                                        let coin = OutPoint::consensus_decode(&mut Cursor::new(remains[pos].as_slice()))?;
-                                        // get the script
-                                        sofar.push(tx.output[coin.vout as usize].script_pubkey.clone());
-                                        // one less to worry about
-                                        remains.remove(pos);
-                                        // are we done?
-                                        if remains.len() == 0 {
-                                            break;
-                                        }
-                                    }
+                // if filter is known for this block
+                if let Some(filter) = self.get_block_filter(&header.header.bitcoin_hash(), COIN_FILTER)? {
+                    // check in a single pass read if any coins we search for might be in the filter for this block
+                    let reader = BlockFilterReader::new(&header.bitcoin_hash())?;
+                    if reader.match_any(&mut Cursor::new(filter.filter.unwrap()), &remains)? {
+                        // do we have the block ?
+                        if let Some(block_ref) = header.block {
+                            // retrieve the block
+                            let block = self.fetch_block_by_ref(block_ref)?;
+                            // for all transactions
+                            for tx in &block.txdata {
+                                let txid = tx.txid();
+                                // check if any or many! outputs of this transaction are those we search for
+                                while let Ok(pos) = remains.binary_search_by(|r| r[0..32].cmp(txid.as_bytes())) {
+                                    // a transaction that we are interested in
+                                    let coin = OutPoint::consensus_decode(&mut Cursor::new(remains[pos].as_slice()))?;
+                                    // get the script
+                                    sofar.push(tx.output[coin.vout as usize].script_pubkey.clone());
+                                    // one less to worry about
+                                    remains.remove(pos);
                                     // are we done?
                                     if remains.len() == 0 {
                                         break;
@@ -416,6 +434,10 @@ impl ChainDB {
                                 if remains.len() == 0 {
                                     break;
                                 }
+                            }
+                            // are we done?
+                            if remains.len() == 0 {
+                                break;
                             }
                         }
                     }

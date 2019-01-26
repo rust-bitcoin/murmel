@@ -127,7 +127,7 @@ impl Constructor {
         let dispatcher =
             Dispatcher::new(self.network, self.configdb.clone(), self.chaindb.clone(), self.server, lightning, p2p_control.clone(), from_p2p);
 
-        dispatcher.init().unwrap();
+        dispatcher.init(self.server).unwrap();
 
         for addr in &self.listen {
             p2p_control.send(P2PControl::Bind(addr.clone()));

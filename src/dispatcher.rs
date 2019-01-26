@@ -132,8 +132,8 @@ impl Dispatcher {
     }
 
     /// initialize node
-    pub fn init(&self) -> Result<(), SPVError> {
-        self.chaindb.write().unwrap().init()?;
+    pub fn init(&self, server: bool) -> Result<(), SPVError> {
+        self.chaindb.write().unwrap().init(server)?;
         Ok(())
     }
 
