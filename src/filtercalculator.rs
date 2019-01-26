@@ -187,16 +187,23 @@ impl FilterCalculator {
             self.last_seen = Self::now();
             let block_id = block.bitcoin_hash();
             let mut chaindb = self.chaindb.write().unwrap();
+            // have to know header before storing a block
             if let Some(header) = chaindb.get_header(&block_id) {
-                debug!("store block  {} {}", header.height, block_id);
+                // do not store fake blocks
                 if block.check_merkle_root() && block.check_witness_commitment() {
-                    chaindb.store_block(block)?;
+                    // cache output scripts for later calculation
                     chaindb.cache_scripts(block, header.height);
+                    // if this is the next block for filter calculation
                     if let Some(prev_script) = chaindb.get_block_filter_header(&block.header.prev_blockhash, SCRIPT_FILTER) {
                         if let Some(prev_coin) = chaindb.get_block_filter_header(&block.header.prev_blockhash, COIN_FILTER) {
+                            // store block
+                            debug!("store block  {} {}", header.height, block_id);
+                            chaindb.store_block(block)?;
+                            // calculate filters
                             let script_filter = BlockFilter::compute_script_filter(&block, chaindb.get_script_accessor(block))?;
                             let coin_filter = BlockFilter::compute_coin_filter(&block)?;
                             debug!("store filter {} {} size: {} {}", header.height, block_id, script_filter.content.len(), coin_filter.content.len());
+                            // store known filters into header
                             chaindb.store_known_filter(&prev_script.bitcoin_hash(), &prev_coin.bitcoin_hash(), &script_filter, &coin_filter)?;
                             // let client know we have a new block
                             self.p2p.send(P2PControl::Broadcast(NetworkMessage::Inv(vec!(Inventory{inv_type: InvType::Block, hash:block_id}))));
