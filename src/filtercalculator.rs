@@ -149,7 +149,7 @@ impl FilterCalculator {
                 {
                     debug!("calculate missing blocks...");
                     let chaindb = self.chaindb.read().unwrap();
-                    for header in chaindb.iter_trunk_to_genesis() {
+                    for header in chaindb.iter_trunk_rev(None) {
                         let id = header.bitcoin_hash();
                         if header.block.is_none() && !self.tasks.contains(&id) {
                             missing.push(id);
@@ -163,7 +163,7 @@ impl FilterCalculator {
                     let script_filter = BlockFilter::compute_script_filter(&genesis, chaindb.get_script_accessor(&genesis))?;
                     let coin_filter = BlockFilter::compute_coin_filter(&genesis)?;
                     chaindb.store_known_filter(&Sha256dHash::default(), &Sha256dHash::default(), &script_filter, &coin_filter)?;
-                    chaindb.cache_scripts(&genesis);
+                    chaindb.cache_scripts(&genesis, 0);
                     chaindb.batch()?;
                     let len = missing.len();
                     missing.truncate(len - 1);
@@ -199,7 +199,7 @@ impl FilterCalculator {
                             chaindb.store_known_filter(&prev_script.bitcoin_hash(), &prev_coin.bitcoin_hash(), &script_filter, &coin_filter)?;
                         }
                     }
-                    chaindb.cache_scripts(block);
+                    chaindb.cache_scripts(block, header.height);
                 }
                 else {
                     debug!("received tampered block, banning peer={}", peer);

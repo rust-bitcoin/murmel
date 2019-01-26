@@ -26,47 +26,39 @@ use bitcoin::{
 
 use lru_cache::LruCache;
 
-use std::sync::Arc;
+use std::{
+    cmp::max,
+    sync::Arc
+};
 
 pub struct ScriptCache {
-    cache: LruCache<OptimizedOutpoint, (Script, Arc<Sha256dHash>)>,
-    oldest: Option<Arc<Sha256dHash>>
-}
-
-#[derive(Hash, Eq, PartialEq)]
-struct OptimizedOutpoint {
-    pub txid: Arc<Sha256dHash>,
-    pub vout: u32
+    cache: LruCache<OutPoint, (Script, u32)>,
+    complete_after: u32
 }
 
 impl ScriptCache {
     pub fn new (capacity: usize) -> ScriptCache {
-        ScriptCache{ cache: LruCache::new(capacity), oldest: None }
+        ScriptCache{ cache: LruCache::new(capacity), complete_after: 0 }
     }
 
-    pub fn insert (&mut self, txid: Arc<Sha256dHash>, vout: u32, script: Script, block_id: Arc<Sha256dHash>) {
-        if self.oldest.is_none () {
-            self.oldest = Some(block_id.clone());
-        }
+    pub fn insert (&mut self, coin: OutPoint, script: Script, height: u32) {
+        self.complete_after = height;
         if self.cache.len() == self.cache.capacity () {
-            if let Some((k, v)) = self.cache.remove_lru() {
-                self.oldest = Some(v.1.clone());
+            if let Some((_, (_, lru_height))) = self.cache.remove_lru() {
+                self.complete_after = max(self.complete_after, lru_height);
             }
         }
-        self.cache.insert(OptimizedOutpoint{txid, vout}, (script, block_id));
+        self.cache.insert(coin, (script, height));
     }
 
     pub fn remove(&mut self, coin: &OutPoint) -> Option<Script> {
-        if let Some((s, b)) = self.cache.remove(&OptimizedOutpoint{txid: Arc::new(coin.txid), vout: coin.vout}) {
+        if let Some((s, b)) = self.cache.remove(coin) {
             return Some(s);
         }
         None
     }
 
-    pub fn oldest_block(&self) -> Option<Sha256dHash> {
-        if let Some(ref oldest) = self.oldest {
-            return Some(**oldest);
-        }
-        None
+    pub fn complete_after(&self) -> u32 {
+        self.complete_after
     }
 }

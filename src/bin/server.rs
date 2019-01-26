@@ -42,7 +42,7 @@ pub fn main() {
         println!("--client : use a block filter server");
         println!("defaults:");
         println!("--db server");
-        println!("--log info");
+        println!("--log debug");
         println!("--connections 1");
         println!("--network main");
         println!("in memory database");
@@ -59,7 +59,7 @@ pub fn main() {
         }
     }
     else {
-        simple_logger::init_with_level(Level::Info).unwrap();
+        simple_logger::init_with_level(Level::Debug).unwrap();
     }
 
     let mut network = Network::Bitcoin;
@@ -83,7 +83,7 @@ pub fn main() {
         spv = Constructor::new("/https://github.com/rust-bitcoin/rust-bitcoin-spv/".to_string(), network, Path::new(path.as_str()), server, listen).unwrap();
     }
     else {
-        spv = Constructor::new("/https://github.com/rust-bitcoin/rust-bitcoin-spv/".to_string(), network, Path::new("server"), server, listen).unwrap();
+        spv = Constructor::new("/https://github.com/rust-bitcoin/rust-bitcoin-spv/".to_string(), network, Path::new("server.db"), server, listen).unwrap();
     }
     spv.run(peers, connections, find_opt("nodns")).expect("can not start SPV");
 }

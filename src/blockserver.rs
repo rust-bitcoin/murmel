@@ -76,10 +76,10 @@ impl BlockServer {
     fn get_headers(&self, peer: PeerId, get: GetHeadersMessage) -> Result<(), SPVError> {
         let chaindb = self.chaindb.read().unwrap();
         for locator in get.locator_hashes.iter () {
-            if chaindb.is_on_trunk(locator) {
+            if let Some(pos) = chaindb.pos_on_trunk(locator) {
                 let mut headers = Vec::with_capacity(2000);
-                for block_id in chaindb.iter_to_tip(locator).take(2000) {
-                    headers.push(LoneBlockHeader{header: chaindb.get_header(&block_id).unwrap().header, tx_count: VarInt(0)})
+                for header in chaindb.iter_trunk(pos).take(2000) {
+                    headers.push(LoneBlockHeader{header: header.header, tx_count: VarInt(0)})
                 }
                 if headers.len () > 0 {
                     self.p2p.send(P2PControl::Send(peer, NetworkMessage::Headers(headers)));
@@ -93,9 +93,8 @@ impl BlockServer {
     fn get_blocks(&self, peer: PeerId, get: GetBlocksMessage) -> Result<(), SPVError> {
         let chaindb = self.chaindb.read().unwrap();
         for locator in get.locator_hashes.iter () {
-            if chaindb.is_on_trunk(locator) {
-                for block_id in chaindb.iter_to_tip(locator).take(500) {
-                    let header = chaindb.get_header(&block_id).unwrap();
+            if let Some(pos) = chaindb.pos_on_trunk(locator) {
+                for header in chaindb.iter_trunk(pos).take(500) {
                     if let Some(pref) = header.block {
                         let block = chaindb.fetch_block_by_ref(pref)?;
                         self.p2p.send(P2PControl::Send(peer, NetworkMessage::Block(Block{header: header.header, txdata: block.txdata})));

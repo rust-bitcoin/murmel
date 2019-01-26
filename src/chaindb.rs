@@ -33,7 +33,7 @@ use bitcoin::{
 use byteorder::{BigEndian, ByteOrder};
 use error::SPVError;
 use filtercache::FilterCache;
-use headercache::{HeaderCache, HeaderIterator, TrunkIterator};
+use headercache::{HeaderCache, HeaderIterator};
 use blockfilter::{BlockFilter, BlockFilterReader};
 use scriptcache::ScriptCache;
 
@@ -139,11 +139,11 @@ impl ChainDB {
             while let Some(stored) = sl.pop_front() {
                 self.headercache.add_header_unchecked(&stored);
                 if let Some(filter_ref) = stored.script_filter {
-                    let filter = self.fetch_filter(filter_ref)?;
+                    let filter = self.fetch_filter_by_ref(filter_ref)?;
                     self.filtercache.add_filter(&filter);
                 }
                 if let Some(filter_ref) = stored.coin_filter {
-                    let filter = self.fetch_filter(filter_ref)?;
+                    let filter = self.fetch_filter_by_ref(filter_ref)?;
                     self.filtercache.add_filter(&filter);
                 }
             }
@@ -180,21 +180,24 @@ impl ChainDB {
         Ok(None)
     }
 
-    pub fn iter_to_genesis<'a>(&'a self, id: &Sha256dHash) -> HeaderIterator<'a> {
-        return self.headercache.iter_to_genesis(id);
+    // itarate from any hash to genesis. start_with might not be on trunk. result is an iterator of [genesis .. from]
+    pub fn iter_to_genesis<'a>(&'a self, from: Option<Sha256dHash>) -> HeaderIterator<'a> {
+        return self.headercache.iter_to_genesis(from);
     }
 
-    pub fn iter_trunk_to_genesis<'a>(&'a self) -> HeaderIterator<'a> {
-        return self.headercache.iter_trunk_to_genesis();
+    // return position of hash on trunk if hash is on trunk
+    pub fn pos_on_trunk(&self, hash: &Sha256dHash) -> Option<u32> {
+        self.headercache.pos_on_trunk(hash)
     }
 
-    pub fn iter_to_tip<'a>(&'a self, id: &Sha256dHash) -> TrunkIterator<'a> {
-        return self.headercache.iter_to_tip(id);
+    // iterate trunk (after .. tip]
+    pub fn iter_trunk<'a> (&'a self, after: u32) -> impl Iterator<Item=StoredHeader> +'a {
+        self.headercache.iter_trunk(after)
     }
 
-    /// is the given hash part of the trunk (chain from genesis to tip)
-    pub fn is_on_trunk(&self, hash: &Sha256dHash) -> bool {
-        self.headercache.is_on_trunk(hash)
+    // iterate trunk [genesis .. from] in reverse order from is the tip if not specified
+    pub fn iter_trunk_rev<'a> (&'a self, from: Option<u32>) -> impl Iterator<Item=StoredHeader> +'a {
+        self.headercache.iter_trunk_rev(from)
     }
 
     /// retrieve the id of the block/header with most work
@@ -207,6 +210,11 @@ impl ChainDB {
         self.headercache.get_header(id)
     }
 
+    /// Fetch a header by its id from cache
+    pub fn get_header_for_height(&self, height: u32) -> Option<StoredHeader> {
+        self.headercache.get_header_for_height(height)
+    }
+
     // locator for getheaders message
     pub fn header_locators(&self) -> Vec<Sha256dHash> {
         self.headercache.locator_hashes()
@@ -216,24 +224,25 @@ impl ChainDB {
         self.filtercache.get_block_filter(block_id, filter_type)
     }
 
-    pub fn add_filter_chain(&mut self, prev_block_id: &Sha256dHash, prev_filter_id: &Sha256dHash, filter_type: u8, filter_hashes: impl Iterator<Item=Sha256dHash>) ->
+    pub fn add_filter_chain(&mut self, prev_block_id: &Sha256dHash, prev_filter_id: &Sha256dHash, filter_type: u8, filter_hashes: Box<Iterator<Item=Sha256dHash>>) ->
     Result<Option<(Sha256dHash, Sha256dHash)>, SPVError> {
-        if let Some(prev_filter) = self.filtercache.get_block_filter(prev_filter_id, filter_type) {
-            if prev_filter.block_id == *prev_block_id {
+        if let Some(trunk_pos) = self.pos_on_trunk(prev_block_id) {
+            if let Some(prev_filter) = self.filtercache.get_block_filter(prev_block_id, filter_type) {
                 let mut previous = *prev_filter_id;
                 let mut p_block = *prev_block_id;
-                let mut filters = Vec::new();
-                for (block_id, filter_hash) in self.headercache.iter_to_tip(prev_block_id).zip(filter_hashes) {
+                let id_pairs = self.headercache.iter_trunk(trunk_pos).map(|h|h.bitcoin_hash()).zip(filter_hashes).collect::<Vec<_>>();
+                for (block_id, filter_hash) in id_pairs {
+
                     let mut buf = [0u8; 64];
                     buf[0..32].copy_from_slice(&filter_hash.to_bytes()[..]);
                     buf[32..].copy_from_slice(&previous.to_bytes()[..]);
                     let filter_id = Sha256dHash::from_data(&buf);
+
                     previous = filter_id;
                     p_block = block_id;
+
                     let filter = StoredFilter { block_id, previous, filter_hash, filter: None, filter_type };
-                    filters.push(filter);
-                }
-                for filter in filters {
+
                     self.store_filter(&filter)?;
                     self.filtercache.add_filter(&filter);
                 }
@@ -277,17 +286,11 @@ impl ChainDB {
     }
 
     pub fn fetch_header_tip(&self) -> Result<Option<Sha256dHash>, SPVError> {
-        if let Some((_, h)) = self.light.get_keyed_decodable(HEADER_TIP_KEY)? {
-            return Ok(Some(h));
-        }
-        Ok(None)
+        Ok(self.light.get_keyed_decodable::<Sha256dHash>(HEADER_TIP_KEY)?.map(|(_, h)| h.clone()))
     }
 
     pub fn fetch_header(&self, id: &Sha256dHash) -> Result<Option<StoredHeader>, SPVError> {
-        if let Some((_, stored)) = self.light.get_hash_keyed::<StoredHeader>(id)? {
-            return Ok(Some(stored));
-        }
-        Ok(None)
+        Ok(self.light.get_hash_keyed::<StoredHeader>(id)?.map(|(_, header)| header))
     }
 
     pub fn store_filter(&mut self, filter: &StoredFilter) -> Result<PRef, SPVError> {
@@ -295,9 +298,12 @@ impl ChainDB {
     }
 
 
-    pub fn fetch_filter(&self, pref: PRef) -> Result<StoredFilter, SPVError> {
-        let (_, stored) = self.light.get_decodable::<StoredFilter>(pref)?;
-        return Ok(stored);
+    pub fn fetch_filter_by_ref(&self, pref: PRef) -> Result<StoredFilter, SPVError> {
+        Ok(self.light.get_decodable::<StoredFilter>(pref).map(|(_, filter)| filter)?)
+    }
+
+    pub fn fetch_filter(&self, filter_id: &Sha256dHash) -> Result<Option<StoredFilter>, SPVError> {
+        Ok(self.light.get_hash_keyed::<StoredFilter>(filter_id)?.map(|(_, filter)| filter))
     }
 
     pub fn store_known_filter (&mut self, previous_script: &Sha256dHash, previous_coin: &Sha256dHash, script_filter: &BlockFilter, coin_filter: &BlockFilter) -> Result<(Sha256dHash, Sha256dHash), SPVError> {
@@ -337,22 +343,22 @@ impl ChainDB {
         panic!("Configuration error. No db to fetch block.");
     }
 
-    pub fn cache_scripts(&mut self, block: &Block) {
+    pub fn cache_scripts(&mut self, block: &Block, height: u32) {
         let block_id = Arc::new(block.bitcoin_hash());
         let mut script_cache = self.scriptcache.lock().unwrap();
         for (i, tx) in block.txdata.iter().enumerate() {
             let tx_nr = i as u32;
-            let txid = Arc::new(tx.txid());
+            let txid = tx.txid();
             for (idx, output) in tx.output.iter().enumerate() {
                 let vout = idx as u32;
                 if !output.script_pubkey.is_provably_unspendable() {
-                    script_cache.insert(txid.clone(), vout, output.script_pubkey.clone(), block_id.clone());
+                    script_cache.insert(OutPoint{txid, vout}, output.script_pubkey.clone(), height);
                 }
             }
         }
     }
 
-    pub fn get_scripts(&self, prev_block: &Sha256dHash, coins: Vec<OutPoint>, mut sofar: Vec<Script>) -> Result<Vec<Script>, SPVError> {
+    pub fn get_scripts(&self, coins: Vec<OutPoint>, mut sofar: Vec<Script>) -> Result<Vec<Script>, SPVError> {
         let mut remains = Vec::with_capacity(coins.len());
         {
             let mut scriptcache = self.scriptcache.lock().unwrap();
@@ -368,17 +374,11 @@ impl ChainDB {
             }
         }
         remains.sort();
-
-        if remains.len () > 0 {
-            let mut start_with = *prev_block;
-            if let Some (oldest) = self.scriptcache.lock().unwrap().oldest_block() {
-                if self.is_on_trunk(&oldest) {
-                    start_with = oldest;
-                }
-            }
-            for header in self.iter_to_genesis(&start_with) {
+        if remains.len() > 0 {
+            let from = self.scriptcache.lock().unwrap().complete_after();
+            for header in self.iter_trunk_rev(Some(from)) {
                 if let Some(coin_filter) = header.coin_filter {
-                    let filter = self.fetch_filter(coin_filter)?;
+                    let filter = self.fetch_filter_by_ref(coin_filter)?;
                     if let Some(ref content) = filter.filter {
                         let reader = BlockFilterReader::new(&header.bitcoin_hash())?;
                         if reader.match_any(&mut Cursor::new(content), &remains)? {
@@ -403,11 +403,15 @@ impl ChainDB {
                     }
                 }
             }
+            if remains.len () > 0 {
+                debug!("could not find coins in filters up-to {}", from);
+            }
         }
 
         if remains.len () > 0 {
-            let coins = remains.iter().map(|v| OutPoint::consensus_decode(&mut Cursor::new(v.as_slice())).unwrap()).collect::<Vec<_>>();
-            debug!("can not find coins {:?}", coins);
+            let coins = remains.iter().map(|v| OutPoint::consensus_decode(&mut Cursor::new(v.as_slice())).unwrap())
+                .map(|o| format!("{} {}", o.txid, o.vout)).collect::<Vec<_>>();
+            error!("can not find coins {:?}", coins);
             return Err(SPVError::UnknownUTXO);
         }
         Ok(sofar)
@@ -638,6 +642,6 @@ impl<'a> ScriptAccessor for DBScriptAccessor<'a> {
                 remains.push(coin);
             }
         }
-        self.db.get_scripts(&self.prev_block, remains, sofar)
+        self.db.get_scripts(remains, sofar)
     }
 }

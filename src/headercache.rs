@@ -32,6 +32,7 @@ use hammersbald::PRef;
 use std::{
     collections::HashMap,
     sync::Arc,
+    iter
 };
 
 pub struct HeaderCache {
@@ -224,7 +225,7 @@ impl HeaderCache {
                 // compute path to new tip
                 let mut forks_at = next.prev_blockhash;
                 let mut path_to_new_tip = Vec::new();
-                while !self.is_on_trunk(&forks_at) {
+                while self.pos_on_trunk(&forks_at).is_none() {
                     if let Some(h) = self.headers.get(&forks_at) {
                         forks_at = h.header.prev_blockhash;
                         path_to_new_tip.push(forks_at);
@@ -265,9 +266,9 @@ impl HeaderCache {
         }
     }
 
-    /// is the hash part of the trunk (chain from genesis to tip)
-    pub fn is_on_trunk(&self, hash: &Sha256dHash) -> bool {
-        self.trunk.iter().rposition(|e| { **e == *hash }).is_some()
+    /// position on trunk (chain with most work from genesis to tip)
+    pub fn pos_on_trunk(&self, hash: &Sha256dHash) -> Option<u32> {
+        self.trunk.iter().rev().position(|e| { **e == *hash }).map(|p| (self.trunk.len() - p - 1) as u32)
     }
 
     /// retrieve the id of the block/header with most work
@@ -311,20 +312,32 @@ impl HeaderCache {
         None
     }
 
-    /// iterate from id to genesis
-    pub fn iter_to_genesis<'a>(&'a self, id: &Sha256dHash) -> HeaderIterator<'a> {
-        return HeaderIterator::new(self, id);
-    }
-
-    pub fn iter_trunk_to_genesis<'a>(&'a self) -> HeaderIterator<'a> {
-        if let Some(tip) = self.trunk.last() {
-            return HeaderIterator::new(self, tip);
+    pub fn get_header_for_height(&self, height: u32) -> Option<StoredHeader> {
+        if height < self.trunk.len() as u32 {
+            self.headers.get(&self.trunk[height as usize]).cloned()
         }
-        return HeaderIterator::new(self, &Sha256dHash::default());
+        else {
+            None
+        }
     }
 
-    pub fn iter_to_tip<'a>(&'a self, id: &Sha256dHash) -> TrunkIterator<'a> {
-        return TrunkIterator::new(self, id);
+    /// iterate from id to genesis
+    pub fn iter_to_genesis<'a>(&'a self, start_with: Option<Sha256dHash>) -> HeaderIterator<'a> {
+        return HeaderIterator::new(self, start_with);
+    }
+
+    pub fn iter_trunk<'a> (&'a self, after: u32) -> Box<Iterator<Item=StoredHeader> +'a> {
+        Box::new(self.trunk.iter().skip(after as usize).map(move |a| self.headers.get(&*a).unwrap().clone()))
+    }
+
+    pub fn iter_trunk_rev<'a> (&'a self, from: Option<u32>) -> Box<Iterator<Item=StoredHeader> +'a> {
+        let len = self.trunk.len();
+        if let Some(from) = from {
+            Box::new(self.trunk.iter().rev().skip(len - from as usize).map(move |a| self.headers.get(&*a).unwrap().clone()))
+        }
+        else {
+            Box::new(self.trunk.iter().rev().map(move |a| self.headers.get(&*a).unwrap().clone()))
+        }
     }
 
     // locator for getheaders message
@@ -351,42 +364,19 @@ impl HeaderCache {
     }
 }
 
-pub struct TrunkIterator<'a> {
-    current: Option<usize>,
-    cache: &'a HeaderCache,
-}
-
-impl<'a> TrunkIterator<'a> {
-    pub fn new(cache: &'a HeaderCache, current: &Sha256dHash) -> TrunkIterator<'a> {
-        TrunkIterator { current: cache.trunk.iter().rposition(|s| { **s == *current }), cache }
-    }
-}
-
-impl<'a> Iterator for TrunkIterator<'a> {
-    type Item = Sha256dHash;
-
-    fn next(&mut self) -> Option<<Self as Iterator>::Item> {
-        if let Some(pos) = self.current {
-            if pos < self.cache.trunk.len() - 1 {
-                let s = *self.cache.trunk[pos + 1];
-                self.current = Some(pos + 1);
-                return Some(s);
-            } else {
-                self.current = None;
-            }
-        }
-        None
-    }
-}
-
 pub struct HeaderIterator<'a> {
-    current: Sha256dHash,
+    current: Option<Sha256dHash>,
     cache: &'a HeaderCache,
 }
 
 impl<'a> HeaderIterator<'a> {
-    pub fn new(cache: &'a HeaderCache, tip: &Sha256dHash) -> HeaderIterator<'a> {
-        HeaderIterator { current: tip.clone(), cache }
+    pub fn new(cache: &'a HeaderCache, current: Option<Sha256dHash>) -> HeaderIterator<'a> {
+        if current.is_some() {
+            HeaderIterator { current, cache }
+        }
+        else {
+            HeaderIterator { current: cache.trunk.last().map(|tip| **tip), cache }
+        }
     }
 }
 
@@ -394,12 +384,14 @@ impl<'a> Iterator for HeaderIterator<'a> {
     type Item = StoredHeader;
 
     fn next(&mut self) -> Option<<Self as Iterator>::Item> {
-        if self.current == Sha256dHash::default() {
-            return None;
-        }
-        if let Some(header) = self.cache.headers.get(&self.current) {
-            self.current = header.header.prev_blockhash;
-            return Some(header.clone());
+        if let Some(ref mut current) = self.current {
+            if *current == Sha256dHash::default() {
+                return None;
+            }
+            if let Some(header) = self.cache.headers.get(current) {
+                *current = header.header.prev_blockhash;
+                return Some(header.clone());
+            }
         }
         return None;
     }

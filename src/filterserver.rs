@@ -23,14 +23,15 @@ use bitcoin::{
     network::message::NetworkMessage,
     network::message_filter::{GetCFHeaders, GetCFilters, GetCFCheckpt, CFCheckpt, CFHeaders, CFilter}
 };
-use chaindb::SharedChainDB;
+use chaindb::{SharedChainDB, ChainDB};
 use blockfilter::{COIN_FILTER, SCRIPT_FILTER};
 use chaindb::StoredFilter;
 use error::SPVError;
 use p2p::{P2PControl, P2PControlSender, PeerId, PeerMessage, PeerMessageReceiver, PeerMessageSender};
 use std::{
-    sync::mpsc,
-    thread
+    sync::{mpsc, RwLockReadGuard},
+    thread,
+    iter
 };
 
 pub struct FilterServer {
@@ -71,16 +72,18 @@ impl FilterServer {
         panic!("Filter server thread failed.");
     }
 
-    fn filter_headers(&self, filter_type: u8, stop_hash: Sha256dHash) -> Vec<StoredFilter> {
-        let chaindb = self.chaindb.read().unwrap();
-        let headers = chaindb.iter_to_genesis(&stop_hash);
-        let mut headers = headers.filter_map(|h| chaindb.get_block_filter(&h.header.bitcoin_hash(), filter_type)).collect::<Vec<_>> ();
-        headers.reverse();
-        headers
+    fn filter_headers<'a>(&self, chaindb: &'a RwLockReadGuard<ChainDB>, filter_type: u8, start: u32, stop_hash: Sha256dHash) -> Box<Iterator<Item=StoredFilter> + 'a> {
+        if let Some(pos) = chaindb.pos_on_trunk(&stop_hash) {
+            if pos >= start {
+                return Box::new(chaindb.iter_trunk(start).take((pos - start) as usize).filter_map(move |h| chaindb.get_block_filter(&h.header.bitcoin_hash(), filter_type)))
+            }
+        }
+        Box::new(iter::empty::<StoredFilter>())
     }
 
     fn get_cfcheckpt(&self, peer: PeerId, get: GetCFCheckpt) -> Result<(), SPVError> {
-        let headers = self.filter_headers(get.filter_type, get.stop_hash).iter().enumerate()
+        let chaindb = self.chaindb.read().unwrap();
+        let headers = self.filter_headers(&chaindb, get.filter_type, 0, get.stop_hash).enumerate()
             .filter_map(|(i, h)| if i % 1000 == 0 { Some(h.bitcoin_hash())} else { None }).collect::<Vec<_>>();
         if headers.len () > 0 {
             self.p2p.send(P2PControl::Send(peer, NetworkMessage::CFCheckpt(
@@ -95,50 +98,51 @@ impl FilterServer {
     }
 
     fn get_cfheaders(&self, peer: PeerId, get: GetCFHeaders) -> Result<(), SPVError> {
-        let filters = self.filter_headers(get.filter_type, get.stop_hash).iter().skip(get.start_height as usize).cloned().collect::<Vec<_>>();
         let chaindb = self.chaindb.read().unwrap();
-        if filters.len() > 0 && filters.len () <= 2000 {
-            let previous_filter = filters.first().unwrap().previous;
+        let filter_hashes = self.filter_headers(&chaindb, get.filter_type, get.start_height, get.stop_hash).take(2000).map(|f| f.filter_hash).collect::<Vec<_>>();
+        if get.start_height == 0 {
             self.p2p.send(P2PControl::Send(peer, NetworkMessage::CFHeaders(
                 CFHeaders {
                     filter_type: get.filter_type,
                     stop_hash: get.stop_hash,
-                    previous_filter: previous_filter,
-                    filter_hashes: filters.iter().map(|f| f.filter_hash).collect::<Vec<_>>()
+                    previous_filter: Sha256dHash::default(),
+                    filter_hashes
                 }
             )));
         }
+        else {
+            if let Some(header) = chaindb.get_header_for_height(get.start_height - 1) {
+                if let Some(previous_filter) = chaindb.get_block_filter(&header.header.bitcoin_hash(), get.filter_type) {
+                    self.p2p.send(P2PControl::Send(peer, NetworkMessage::CFHeaders(
+                        CFHeaders {
+                            filter_type: get.filter_type,
+                            stop_hash: get.stop_hash,
+                            previous_filter: previous_filter.bitcoin_hash(),
+                            filter_hashes
+                        }
+                    )));
+                }
+            }
+        };
+
         Ok(())
     }
 
     fn get_cfilters(&self, peer: PeerId, get: GetCFilters) -> Result<(), SPVError> {
         let chaindb = self.chaindb.read().unwrap();
-        let headers = chaindb.iter_to_genesis(&get.stop_hash);
-        let mut headers = headers.filter_map(|h|
-            if get.filter_type == SCRIPT_FILTER {
-                Some((h.header.bitcoin_hash(), h.script_filter))
-            }
-            else if get.filter_type == COIN_FILTER {
-                Some((h.header.bitcoin_hash(), h.coin_filter))
-            }
-            else {
-                None
-            }
-        ).collect::<Vec<_>> ();
-        headers.reverse();
-        for (block_id, filter_pref) in headers.iter().skip(get.start_height as usize) {
-            if let Some(pref) = filter_pref {
-                let filter = chaindb.fetch_filter(*pref)?;
-                if let Some(content) = filter.filter {
-                    self.p2p.send(P2PControl::Send(peer, NetworkMessage::CFilter(
-                        CFilter {
-                            filter_type: get.filter_type,
-                            block_hash: filter.block_id,
-                            filter: content
-                        }
-                    )));
+        let filter_ids = self.filter_headers(&chaindb, get.filter_type, get.start_height, get.stop_hash).map(|f| f.bitcoin_hash()).collect::<Vec<_>>();
+        for filter_id in &filter_ids {
+                if let Some(filter) = chaindb.fetch_filter(filter_id)? {
+                    if let Some(content) = filter.filter {
+                        self.p2p.send(P2PControl::Send(peer, NetworkMessage::CFilter(
+                            CFilter {
+                                filter_type: get.filter_type,
+                                block_hash: filter.block_id,
+                                filter: content
+                            }
+                        )));
+                    }
                 }
-            }
         }
         Ok(())
     }
