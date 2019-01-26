@@ -191,6 +191,7 @@ impl FilterCalculator {
                 debug!("store block  {} {}", header.height, block_id);
                 if block.check_merkle_root() && block.check_witness_commitment() {
                     chaindb.store_block(block)?;
+                    chaindb.cache_scripts(block, header.height);
                     if let Some(prev_script) = chaindb.get_block_filter(&block.header.prev_blockhash, SCRIPT_FILTER) {
                         if let Some(prev_coin) = chaindb.get_block_filter(&block.header.prev_blockhash, COIN_FILTER) {
                             let script_filter = BlockFilter::compute_script_filter(&block, chaindb.get_script_accessor(block))?;
@@ -199,7 +200,6 @@ impl FilterCalculator {
                             chaindb.store_known_filter(&prev_script.bitcoin_hash(), &prev_coin.bitcoin_hash(), &script_filter, &coin_filter)?;
                         }
                     }
-                    chaindb.cache_scripts(block, header.height);
                 }
                 else {
                     debug!("received tampered block, banning peer={}", peer);
