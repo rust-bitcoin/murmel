@@ -40,11 +40,13 @@ pub fn main() {
         println!("--listen ip_address:port : accept incoming connection requests");
         println!("--nodns : do not use dns seed");
         println!("--client : use a block filter server");
+        println!("--cache : cache of utxo in millions - set it up to 60 if doing initial load and you have plenty of RAM");
         println!("defaults:");
         println!("--db server");
         println!("--log debug");
         println!("--connections 1");
         println!("--network main");
+        println!("--cache 1");
         println!("in memory database");
         return;
     }
@@ -71,19 +73,23 @@ pub fn main() {
         }
     }
 
+    let mut cache = 1024usize *1024usize;
+    if let Some(numstring) = find_arg("cache") {
+        cache *= numstring.parse::<usize>().unwrap() as usize;
+    }
+
     let peers = get_peers();
     let mut connections = 1;
     if let Some(numstring) = find_arg("connections") {
         connections = numstring.parse().unwrap();
     }
     let mut spv;
-    let server = true;
     let listen = get_listeners();
     if let Some(path) = find_arg("db") {
-        spv = Constructor::new("/https://github.com/rust-bitcoin/rust-bitcoin-spv/".to_string(), network, Path::new(path.as_str()), server, listen).unwrap();
+        spv = Constructor::new("/https://github.com/rust-bitcoin/rust-bitcoin-spv/".to_string(), network, Path::new(path.as_str()),  listen, cache).unwrap();
     }
     else {
-        spv = Constructor::new("/https://github.com/rust-bitcoin/rust-bitcoin-spv/".to_string(), network, Path::new("server.db"), server, listen).unwrap();
+        spv = Constructor::new("/https://github.com/rust-bitcoin/rust-bitcoin-spv/".to_string(), network, Path::new("server.db"), listen, cache).unwrap();
     }
     spv.run(peers, connections, find_opt("nodns")).expect("can not start SPV");
 }

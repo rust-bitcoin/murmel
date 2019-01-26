@@ -62,16 +62,14 @@ pub struct ChainDB {
     network: Network,
 }
 
-const UTXO_CACHE_SIZE:usize = 10*1024*1024;
-
 impl ChainDB {
     /// Create an in-memory database instance
-    pub fn mem(network: Network, heavy: bool) -> Result<ChainDB, SPVError> {
+    pub fn mem(network: Network, heavy: bool, script_cache_size: usize) -> Result<ChainDB, SPVError> {
         info!("working with in memory chain db");
         let light = BitcoinAdaptor::new(transient(2)?);
         let headercache = HeaderCache::new(network);
         let filtercache = FilterCache::new();
-        let scriptcache = Mutex::new(ScriptCache::new(UTXO_CACHE_SIZE));
+        let scriptcache = Mutex::new(ScriptCache::new(script_cache_size));
         if heavy {
             let heavy = Some(BitcoinAdaptor::new(transient(2)?));
             Ok(ChainDB { light, heavy, network, headercache, filtercache, scriptcache })
@@ -81,12 +79,12 @@ impl ChainDB {
     }
 
     /// Create or open a persistent database instance identified by the path
-    pub fn new(path: &Path, network: Network, heavy: bool) -> Result<ChainDB, SPVError> {
+    pub fn new(path: &Path, network: Network, heavy: bool, script_cache_size: usize) -> Result<ChainDB, SPVError> {
         let basename = path.to_str().unwrap().to_string();
         let light = BitcoinAdaptor::new(persistent((basename.clone() + ".h").as_str(), 100, 2)?);
         let headercache = HeaderCache::new(network);
         let filtercache = FilterCache::new();
-        let scriptcache = Mutex::new(ScriptCache::new(UTXO_CACHE_SIZE));
+        let scriptcache = Mutex::new(ScriptCache::new(script_cache_size));
         if heavy {
             let heavy = Some(BitcoinAdaptor::new(persistent((basename + ".b").as_str(), 1000, 2)?));
             Ok(ChainDB { light, heavy, network, headercache, filtercache, scriptcache })
