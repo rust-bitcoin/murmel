@@ -33,7 +33,8 @@ const TIMEOUT:u64 = 30;
 #[derive(Eq, PartialEq, Hash, Debug)]
 pub enum ExpectedReply {
     Block,
-    Headers
+    Headers,
+    Pong
 }
 
 pub struct Timeout {

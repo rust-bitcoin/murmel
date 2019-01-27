@@ -124,12 +124,20 @@ impl P2PControlSender {
         self.sender.lock().unwrap().send(control).expect("P2P control send failed");
     }
 
+    pub fn send_network (&self, peer: PeerId, msg: NetworkMessage) {
+        self.send(P2PControl::Send(peer, msg))
+    }
+
     pub fn peer_version (&self, peer: PeerId) -> Option<VersionMessage> {
         if let Some(peer) = self.peers.read().unwrap().get(&peer) {
             let locked_peer = peer.lock().unwrap();
             return locked_peer.version.clone();
         }
         None
+    }
+
+    pub fn peers (&self) -> Vec<PeerId> {
+        self.peers.read().unwrap().keys().cloned().collect::<Vec<_>>()
     }
 }
 

@@ -28,6 +28,7 @@ use headerdownload::HeaderDownload;
 use filterserver::FilterServer;
 use blockserver::BlockServer;
 use timeout::{Timeout, SharedTimeout};
+use ping::Ping;
 
 use bitcoin::{
     blockdata::{
@@ -62,6 +63,8 @@ pub struct Dispatcher {
     filter_server: PeerMessageSender,
     // block server
     block_server: PeerMessageSender,
+    // pinger
+    ping: PeerMessageSender,
     // peer timeout tracker
     timeout: SharedTimeout,
     // lightning connector
@@ -76,7 +79,7 @@ impl Dispatcher {
 
         let header_downloader = HeaderDownload::new(chaindb.clone(), p2p.clone(), timeout.clone());
 
-
+        let ping = Ping::new(p2p.clone(), timeout.clone());
 
         let filter_calculator = if server {
             FilterCalculator::new(network, chaindb.clone(), p2p.clone(), timeout.clone())
@@ -106,6 +109,7 @@ impl Dispatcher {
             filter_calculator,
             filter_server,
             block_server,
+            ping,
             timeout,
             connector
         });
@@ -163,46 +167,50 @@ impl Dispatcher {
     pub fn process(&self, msg: NetworkMessage, peer: PeerId) -> Result<(), SPVError> {
         Ok(match msg {
             NetworkMessage::Ping(nonce) => {
-                self.p2p.send(P2PControl::Send(peer, NetworkMessage::Pong(nonce)));
+                self.p2p.send_network(peer, NetworkMessage::Pong(nonce));
                 Ok(())
             },
-            NetworkMessage::Headers(headers) => {
-                self.header_downloader.send_network(peer, NetworkMessage::Headers(headers));
+            NetworkMessage::Pong(_) => {
+                self.ping.send_network(peer, msg);
                 Ok(())
             },
-            NetworkMessage::Block(block) => {
-                self.filter_calculator.send_network(peer, NetworkMessage::Block(block));
+            NetworkMessage::Headers(_) => {
+                self.header_downloader.send_network(peer, msg);
                 Ok(())
             },
-            NetworkMessage::Inv(v) => {
-                self.header_downloader.send_network(peer, NetworkMessage::Inv(v));
+            NetworkMessage::Block(_) => {
+                self.filter_calculator.send_network(peer, msg);
+                Ok(())
+            },
+            NetworkMessage::Inv(_) => {
+                self.header_downloader.send_network(peer, msg);
                 Ok(())
             },
             NetworkMessage::Addr(ref v) => self.addr(v, peer),
 
-            NetworkMessage::GetHeaders(get) =>{
-                self.block_server.send_network(peer, NetworkMessage::GetHeaders(get));
+            NetworkMessage::GetHeaders(_) =>{
+                self.block_server.send_network(peer, msg);
                 Ok(())
             },
-            NetworkMessage::GetBlocks(get) => {
-                self.block_server.send_network(peer, NetworkMessage::GetBlocks(get));
+            NetworkMessage::GetBlocks(_) => {
+                self.block_server.send_network(peer, msg);
                 Ok(())
             },
-            NetworkMessage::GetData(get) => {
-                self.block_server.send_network(peer, NetworkMessage::GetData(get));
+            NetworkMessage::GetData(_) => {
+                self.block_server.send_network(peer, msg);
                 Ok(())
             },
 
-            NetworkMessage::GetCFilters(get) => {
-                self.filter_server.send_network(peer, NetworkMessage::GetCFilters(get));
+            NetworkMessage::GetCFilters(_) => {
+                self.filter_server.send_network(peer, msg);
                 Ok(())
             },
-            NetworkMessage::GetCFHeaders(get) => {
-                self.filter_server.send_network(peer, NetworkMessage::GetCFHeaders(get));
+            NetworkMessage::GetCFHeaders(_) => {
+                self.filter_server.send_network(peer, msg);
                 Ok(())
             },
-            NetworkMessage::GetCFCheckpt(get) => {
-                self.filter_server.send_network(peer, NetworkMessage::GetCFCheckpt(get));
+            NetworkMessage::GetCFCheckpt(_) => {
+                self.filter_server.send_network(peer, msg);
                 Ok(())
             }
             _ => { self.p2p.send(P2PControl::Ban(peer, 1)); Ok(()) }
