@@ -176,6 +176,7 @@ impl Dispatcher {
             },
             NetworkMessage::Headers(_) => {
                 self.header_downloader.send_network(peer, msg);
+                self.filter_calculator.send_network(peer, NetworkMessage::Ping(0));
                 Ok(())
             },
             NetworkMessage::Block(_) => {

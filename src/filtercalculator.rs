@@ -168,16 +168,19 @@ impl FilterCalculator {
                     }
 
                     missing.reverse();
-                    self.missing = missing.clone();
                 }
 
+                let mut cs = 0;
                 if let Some(chunk) = missing.as_slice().chunks(CHUNK).next() {
+                    cs = chunk.len();
                     let invs = chunk.iter().map(|s| { Inventory { inv_type: InvType::WitnessBlock, hash: s.clone() } }).collect::<Vec<_>>();
                     self.timeout.lock().unwrap().expect(peer, invs.len(), ExpectedReply::Block);
                     debug!("asking {} blocks from peer={}", invs.len(), peer);
                     self.p2p.send(P2PControl::Send(peer, NetworkMessage::GetData(invs)));
                     chunk.iter().for_each( |id| { self.want.insert(id.clone()); });
                 }
+                self.missing.clear();
+                self.missing.extend(missing.iter().skip(cs));
             }
         }
         Ok(())
