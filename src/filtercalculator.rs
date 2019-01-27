@@ -35,12 +35,13 @@ use blockfilter::BlockFilter;
 use p2p::{P2PControl, P2PControlSender, PeerId, PeerMessage, PeerMessageReceiver, PeerMessageSender};
 use error::SPVError;
 use blockfilter::{COIN_FILTER, SCRIPT_FILTER};
+use timeout::{ExpectedReply, SharedTimeout};
 
 use std::{
     collections::HashSet,
     sync::mpsc,
     thread,
-    time::{Duration, SystemTime}
+    time::Duration
 };
 
 
@@ -50,8 +51,8 @@ pub struct FilterCalculator {
     p2p: P2PControlSender,
     peer: Option<PeerId>,
     peers: HashSet<PeerId>,
-    tasks: HashSet<Sha256dHash>,
-    last_seen: u64
+    want: HashSet<Sha256dHash>,
+    timeout: SharedTimeout
 }
 
 
@@ -65,10 +66,10 @@ const CHUNK: usize = 1000;
 const BACK_PRESSURE: usize = 10;
 
 impl FilterCalculator {
-    pub fn new(network: Network, chaindb: SharedChainDB, p2p: P2PControlSender) -> PeerMessageSender {
+    pub fn new(network: Network, chaindb: SharedChainDB, p2p: P2PControlSender, timeout: SharedTimeout) -> PeerMessageSender {
         let (sender, receiver) = mpsc::sync_channel(BACK_PRESSURE);
 
-        let mut filtercalculator = FilterCalculator { network, chaindb, p2p, peer: None, tasks: HashSet::new(), peers: HashSet::new(), last_seen: Self::now() };
+        let mut filtercalculator = FilterCalculator { network, chaindb, p2p, peer: None, peers: HashSet::new(), want: HashSet::new(), timeout };
 
         thread::spawn(move || { filtercalculator.run(receiver) });
 
@@ -78,19 +79,13 @@ impl FilterCalculator {
     fn run(&mut self, receiver: PeerMessageReceiver) {
         let mut re_check = true;
         loop {
-            if self.peer.is_some() && !self.tasks.is_empty() && self.last_seen  + BLOCK_TIMEOUT < Self::now () {
-                let peer = self.peer.unwrap();
-                debug!("Too slow delivering blocks disconnect peer={}", peer);
-                self.p2p.send(P2PControl::Ban(peer, 100));
-                self.last_seen = Self::now();
-            }
+            self.timeout.lock().unwrap().check();
             // wait some time for incoming block messages, process them if available
             while let Ok(msg) = receiver.recv_timeout(Duration::from_millis(POLL)) {
                 match msg {
                     PeerMessage::Connected(pid) => {
                         if self.peer.is_none() {
                             debug!("block download from peer={}", pid);
-                            self.tasks.clear();
                             self.peer = Some(pid);
                             re_check = true;
                         }
@@ -100,7 +95,7 @@ impl FilterCalculator {
                         self.peers.remove(&pid);
                         if self.peer.is_some() {
                             if self.peer.unwrap() == pid {
-                                self.tasks.clear();
+                                self.want.clear();
                                 if let Some(new_peer) = self.peers.iter().next() {
                                     self.peer = Some(*new_peer);
                                     re_check = true;
@@ -116,6 +111,7 @@ impl FilterCalculator {
                         match msg {
                             NetworkMessage::Block(block) => {
                                 re_check = true;
+                                self.timeout.lock().unwrap().received(pid, 1, ExpectedReply::Block);
                                 self.block(pid, &block).expect("block store failed");
                             },
                             NetworkMessage::Ping(_) => {
@@ -141,9 +137,9 @@ impl FilterCalculator {
         let genesis = genesis_block(self.network);
         // can not work if no peer is connected
         if let Some(peer) = self.peer {
-            if self.tasks.is_empty () {
+            // if not already waiting for some blocks
+            if self.timeout.lock().unwrap().is_busy_with(peer, ExpectedReply::Block) == false {
                 // compute the list of missing blocks
-                // missing that is on trunk, we do not yet have and also not yet asked for
                 let mut missing = Vec::new();
 
                 {
@@ -151,7 +147,7 @@ impl FilterCalculator {
                     let chaindb = self.chaindb.read().unwrap();
                     for header in chaindb.iter_trunk_rev(None) {
                         let id = header.bitcoin_hash();
-                        if header.block.is_none() && !self.tasks.contains(&id) {
+                        if header.block.is_none() {
                             missing.push(id);
                         }
                     }
@@ -173,9 +169,10 @@ impl FilterCalculator {
 
                 if let Some(chunk) = missing.as_slice().chunks(CHUNK).next() {
                     let invs = chunk.iter().map(|s| { Inventory { inv_type: InvType::WitnessBlock, hash: s.clone() } }).collect::<Vec<_>>();
+                    self.timeout.lock().unwrap().expect(peer, invs.len(), ExpectedReply::Block);
                     debug!("asking {} blocks from peer={}", invs.len(), peer);
                     self.p2p.send(P2PControl::Send(peer, NetworkMessage::GetData(invs)));
-                    chunk.iter().for_each(|id| { self.tasks.insert(id.clone()); });
+                    chunk.iter().for_each(|id| { self.want.insert(id.clone()); });
                 }
             }
         }
@@ -183,8 +180,7 @@ impl FilterCalculator {
     }
 
     fn block(&mut self, peer: PeerId, block: &Block) -> Result<(), SPVError> {
-        if self.tasks.remove(&block.bitcoin_hash()) {
-            self.last_seen = Self::now();
+        if self.want.remove(&block.bitcoin_hash()) {
             let block_id = block.bitcoin_hash();
             let mut chaindb = self.chaindb.write().unwrap();
             // have to know header before storing a block
@@ -216,7 +212,7 @@ impl FilterCalculator {
                 }
             }
             // batch sometimes
-            if self.tasks.is_empty () {
+            if self.want.is_empty () {
                 chaindb.batch()?;
             }
         }
@@ -224,9 +220,5 @@ impl FilterCalculator {
             debug!("received unwanted block {}", block.bitcoin_hash());
         }
         Ok(())
-    }
-
-    fn now() -> u64 {
-        SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs()
     }
 }

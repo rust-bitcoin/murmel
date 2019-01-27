@@ -27,6 +27,7 @@ use filtercalculator::FilterCalculator;
 use headerdownload::HeaderDownload;
 use filterserver::FilterServer;
 use blockserver::BlockServer;
+use timeout::{Timeout, SharedTimeout};
 
 use bitcoin::{
     blockdata::{
@@ -42,7 +43,7 @@ use bitcoin::{
 
 use std::{
     thread,
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH}
 };
 
@@ -61,6 +62,8 @@ pub struct Dispatcher {
     filter_server: PeerMessageSender,
     // block server
     block_server: PeerMessageSender,
+    // peer timeout tracker
+    timeout: SharedTimeout,
     // lightning connector
     connector: Arc<LightningConnector>
 }
@@ -69,10 +72,12 @@ impl Dispatcher {
     /// Create a new local node
     pub fn new(network: Network, configdb: SharedConfigDB, chaindb: SharedChainDB, server: bool, connector: Arc<LightningConnector>, p2p: P2PControlSender, incoming: PeerMessageReceiver) -> Arc<Dispatcher> {
 
-        let header_downloader = HeaderDownload::new(chaindb.clone(), p2p.clone());
+        let timeout = Arc::new(Mutex::new(Timeout::new(p2p.clone())));
+
+        let header_downloader = HeaderDownload::new(chaindb.clone(), p2p.clone(), timeout.clone());
 
         let filter_calculator = if server {
-            FilterCalculator::new(network, chaindb.clone(), p2p.clone())
+            FilterCalculator::new(network, chaindb.clone(), p2p.clone(), timeout.clone())
         }
         else {
             PeerMessageSender::dummy()
@@ -99,6 +104,7 @@ impl Dispatcher {
             filter_calculator,
             filter_server,
             block_server,
+            timeout,
             connector
         });
 
