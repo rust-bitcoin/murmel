@@ -39,12 +39,10 @@ pub struct FilterServer {
     chaindb: SharedChainDB,
 }
 
-// channel size
-const BACK_PRESSURE: usize = 10;
 
 impl FilterServer {
     pub fn new(chaindb: SharedChainDB, p2p: P2PControlSender) -> PeerMessageSender {
-        let (sender, receiver) = mpsc::sync_channel(BACK_PRESSURE);
+        let (sender, receiver) = mpsc::sync_channel(p2p.back_pressure);
 
         let mut filterserver = FilterServer { chaindb, p2p };
 

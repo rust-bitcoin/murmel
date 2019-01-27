@@ -48,7 +48,7 @@ pub struct FilterDownload {
 
 impl FilterDownload {
     pub fn new(chaindb: SharedChainDB, p2p: P2PControlSender, timeout: SharedTimeout) -> PeerMessageSender {
-        let (sender, receiver) = mpsc::sync_channel(10);
+        let (sender, receiver) = mpsc::sync_channel(p2p.back_pressure);
 
         let mut filterdownload = FilterDownload { chaindb, p2p, timeout };
 

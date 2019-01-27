@@ -44,14 +44,12 @@ pub struct HeaderDownload {
     timeout: SharedTimeout
 }
 
-// channel size
-const BACK_PRESSURE: usize = 10;
 // peer timout secs
 const PEER_TIMEOUT: u64 = 120;
 
 impl HeaderDownload {
     pub fn new(chaindb: SharedChainDB, p2p: P2PControlSender, timeout: SharedTimeout) -> PeerMessageSender {
-        let (sender, receiver) = mpsc::sync_channel(BACK_PRESSURE);
+        let (sender, receiver) = mpsc::sync_channel(p2p.back_pressure);
 
         let mut headerdownload = HeaderDownload { chaindb, p2p, timeout };
 

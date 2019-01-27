@@ -52,8 +52,6 @@ use futures::{
 use rand::{thread_rng, RngCore};
 
 const MAX_PROTOCOL_VERSION :u32 = 70001;
-// incoming message queue size
-const BACK_PRESSURE: usize = 10;
 
 /// a helper class to implement LightningConnector
 pub struct Broadcaster {
@@ -114,10 +112,16 @@ impl Constructor {
 	/// from those discovered in earlier runs
     pub fn run(&mut self, peers: Vec<SocketAddr>, min_connections: usize, nodns: bool) -> Result<(), SPVError>{
 
-        let (to_dispatcher, from_p2p) = mpsc::sync_channel(BACK_PRESSURE);
+        let back_pressure = if self.server {
+            1000
+        } else {
+            10
+        };
+
+        let (to_dispatcher, from_p2p) = mpsc::sync_channel(back_pressure);
 
         let (p2p, p2p_control) =
-            P2P::new(self.user_agent.clone(), self.network, 0, MAX_PROTOCOL_VERSION, self.server, PeerMessageSender::new(to_dispatcher));
+            P2P::new(self.user_agent.clone(), self.network, 0, MAX_PROTOCOL_VERSION, self.server, PeerMessageSender::new(to_dispatcher), back_pressure);
 
         let lightning = Arc::new(LightningConnector::new(self.network, Arc::new(Broadcaster { p2p: p2p_control.clone() })));
         self.connector = Some(lightning.clone());

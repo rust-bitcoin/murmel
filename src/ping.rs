@@ -45,7 +45,7 @@ pub struct Ping {
 
 impl Ping {
     pub fn new(p2p: P2PControlSender, timeout: SharedTimeout) -> PeerMessageSender  {
-        let (sender, receiver) = mpsc::sync_channel(10);
+        let (sender, receiver) = mpsc::sync_channel(p2p.back_pressure);
         let mut ping = Ping { p2p, timeout, asked: HashMap::new() };
 
         thread::spawn(move || { ping.run(receiver) });

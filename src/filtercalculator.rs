@@ -61,14 +61,10 @@ pub struct FilterCalculator {
 const POLL: u64 = 100;
 // a block should arrive within this timeout in seconds
 const BLOCK_TIMEOUT: u64 = 300;
-// download in chunks of n blocks
-const CHUNK: usize = 10;
-// channel size
-const BACK_PRESSURE: usize = 10;
 
 impl FilterCalculator {
     pub fn new(network: Network, chaindb: SharedChainDB, p2p: P2PControlSender, timeout: SharedTimeout) -> PeerMessageSender {
-        let (sender, receiver) = mpsc::sync_channel(BACK_PRESSURE);
+        let (sender, receiver) = mpsc::sync_channel(p2p.back_pressure);
 
         let mut filtercalculator = FilterCalculator { network, chaindb, p2p, peer: None, peers: HashSet::new(), want: HashSet::new(), missing: Vec::new(), timeout };
 
@@ -176,7 +172,7 @@ impl FilterCalculator {
                 }
 
                 let mut cs = 0;
-                if let Some(chunk) = missing.as_slice().chunks(CHUNK).next() {
+                if let Some(chunk) = missing.as_slice().chunks(self.p2p.back_pressure).next() {
                     cs = chunk.len();
                     let invs = chunk.iter().map(|s| { Inventory { inv_type: InvType::WitnessBlock, hash: s.clone() } }).collect::<Vec<_>>();
                     self.timeout.lock().unwrap().expect(peer, invs.len(), ExpectedReply::Block);

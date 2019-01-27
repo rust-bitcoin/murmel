@@ -112,12 +112,13 @@ type P2PControlReceiver = mpsc::Receiver<P2PControl>;
 #[derive(Clone)]
 pub struct P2PControlSender {
     sender: Arc<Mutex<mpsc::Sender<P2PControl>>>,
-    peers: Arc<RwLock<PeerMap>>
+    peers: Arc<RwLock<PeerMap>>,
+    pub back_pressure: usize
 }
 
 impl P2PControlSender {
-    fn new (sender: mpsc::Sender<P2PControl>, peers: Arc<RwLock<PeerMap>>) -> P2PControlSender {
-        P2PControlSender { sender: Arc::new(Mutex::new(sender)), peers }
+    fn new (sender: mpsc::Sender<P2PControl>, peers: Arc<RwLock<PeerMap>>, back_pressure: usize) -> P2PControlSender {
+        P2PControlSender { sender: Arc::new(Mutex::new(sender)), peers, back_pressure }
     }
 
     pub fn send (&self, control: P2PControl) {
@@ -210,7 +211,7 @@ pub struct P2P {
 
 impl P2P {
     /// create a new P2P network controller
-    pub fn new(user_agent: String, network: Network, height: u32, max_protocol_version: u32, filter_server: bool, dispatcher: PeerMessageSender) -> (Arc<P2P>, P2PControlSender) {
+    pub fn new(user_agent: String, network: Network, height: u32, max_protocol_version: u32, filter_server: bool, dispatcher: PeerMessageSender, back_pressure: usize) -> (Arc<P2P>, P2PControlSender) {
         let (control_sender, control_receiver) = mpsc::channel();
 
         let mut rng =  thread_rng();
@@ -238,7 +239,7 @@ impl P2P {
 
         thread::spawn(move || p2p2.control_loop(control_receiver));
 
-        (p2p, P2PControlSender::new(control_sender, peers))
+        (p2p, P2PControlSender::new(control_sender, peers, back_pressure))
     }
 
     fn control_loop (&self, receiver: P2PControlReceiver) {
