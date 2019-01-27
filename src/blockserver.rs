@@ -81,9 +81,7 @@ impl BlockServer {
                 for header in chaindb.iter_trunk(pos).take(2000) {
                     headers.push(LoneBlockHeader{header: header.header, tx_count: VarInt(0)})
                 }
-                if headers.len () > 0 {
-                    self.p2p.send(P2PControl::Send(peer, NetworkMessage::Headers(headers)));
-                }
+                self.p2p.send(P2PControl::Send(peer, NetworkMessage::Headers(headers)));
                 break;
             }
         }

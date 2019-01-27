@@ -14,10 +14,6 @@ readme = "README.md"
 name = "bitcoin_spv"
 path = "src/lib.rs"
 
-[[bin]]
-name = "server"
-path = "src/bin/server.rs"
-
 [dependencies]
 bitcoin = { version = "0.16", features = ["bitcoinconsensus"] }
 hammersbald = { version="1.5", features=["bitcoin_support"]}

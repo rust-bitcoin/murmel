@@ -30,24 +30,20 @@ use std::path::Path;
 /// simple test drive that connects to a local bitcoind
 pub fn main() {
     if find_opt("help") {
-        println!("BIP157 Filter Server");
+        println!("BIP157 Filter Client");
         println!("{} [--help] [--log trace|debug|info|warn|error] [--connections n] [--peer ip_address:port] [--db database_file] [--network main|test]", args().next().unwrap());
         println!("--log level: level is one of trace|debug|info|warn|error");
         println!("--connections n: maintain at least n connections");
         println!("--peer ip_address: connect to the given peer at start. You may use more than one --peer option.");
         println!("--db file: store data in the given sqlite database file. Created if does not exist.");
         println!("--network net: net is one of main|test for corresponding Bitcoin networks");
-        println!("--listen ip_address:port : accept incoming connection requests");
         println!("--nodns : do not use dns seed");
-        println!("--cache : cache of utxo in millions - set it up to 60 if doing initial load and you have plenty of RAM");
         println!("defaults:");
-        println!("--db server.db");
+        println!("--peer 127.0.0.1:8333");
+        println!("--db client.db");
         println!("--log debug");
-        println!("--listen 127.0.0.1:8333");
-        println!("--connections 1");
+        println!("--nodns");
         println!("--network main");
-        println!("--cache 1");
-        println!("in memory database");
         return;
     }
     if let Some (log) = find_arg("log") {
@@ -73,28 +69,25 @@ pub fn main() {
         }
     }
 
-    let mut cache = 1024usize *1024usize;
-    if let Some(numstring) = find_arg("cache") {
-        cache *= numstring.parse::<usize>().unwrap() as usize;
-    }
+    let cache = 0;
 
-    let peers = get_peers();
+    let mut peers = get_peers();
+    if peers.is_empty () {
+        peers.push(SocketAddr::from(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 8333)));
+    }
     let mut connections = 1;
     if let Some(numstring) = find_arg("connections") {
         connections = numstring.parse().unwrap();
     }
     let mut spv;
-    let mut listen = get_listeners();
-    if listen.is_empty() {
-        listen.push(SocketAddr::from(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 8333)));
-    }
+    let listen = get_listeners();
     if let Some(path) = find_arg("db") {
         spv = Constructor::new("/https://github.com/rust-bitcoin/rust-bitcoin-spv/".to_string(), network, Path::new(path.as_str()),  listen, cache).unwrap();
     }
     else {
-        spv = Constructor::new("/https://github.com/rust-bitcoin/rust-bitcoin-spv/".to_string(), network, Path::new("server.db"), listen, cache).unwrap();
+        spv = Constructor::new("/https://github.com/rust-bitcoin/rust-bitcoin-spv/".to_string(), network, Path::new("client.db"), listen, cache).unwrap();
     }
-    spv.run(peers, connections, find_opt("nodns")).expect("can not start SPV");
+    spv.run(peers, connections, true).expect("can not start SPV");
 }
 
 use std::str::FromStr;

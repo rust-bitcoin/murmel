@@ -61,7 +61,7 @@ use std::{
 
 const IO_BUFFER_SIZE:usize = 1024*1024;
 const EVENT_BUFFER_SIZE:usize = 1024;
-const CONNECT_TIMEOUT_SECONDS: u64 = 10;
+const CONNECT_TIMEOUT_SECONDS: u64 = 30;
 const BAN :u32 = 100;
 
 /// A peer's Id

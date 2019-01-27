@@ -160,10 +160,22 @@ impl Dispatcher {
     /// Process incoming messages
     pub fn process(&self, msg: NetworkMessage, peer: PeerId) -> Result<(), SPVError> {
         Ok(match msg {
-            NetworkMessage::Ping(nonce) => { self.ping(nonce, peer); Ok(()) },
-            NetworkMessage::Headers(v) => self.headers(v, peer),
-            NetworkMessage::Block(b) => self.block(b, peer),
-            NetworkMessage::Inv(v) => self.inv(v, peer),
+            NetworkMessage::Ping(nonce) => {
+                self.p2p.send(P2PControl::Send(peer, NetworkMessage::Pong(nonce)));
+                Ok(())
+            },
+            NetworkMessage::Headers(headers) => {
+                self.header_downloader.send_network(peer, NetworkMessage::Headers(headers));
+                Ok(())
+            },
+            NetworkMessage::Block(block) => {
+                self.filter_calculator.send_network(peer, NetworkMessage::Block(block));
+                Ok(())
+            },
+            NetworkMessage::Inv(v) => {
+                self.header_downloader.send_network(peer, NetworkMessage::Inv(v));
+                Ok(())
+            },
             NetworkMessage::Addr(ref v) => self.addr(v, peer),
 
             NetworkMessage::GetHeaders(get) =>{
@@ -191,33 +203,8 @@ impl Dispatcher {
                 self.filter_server.send_network(peer, NetworkMessage::GetCFCheckpt(get));
                 Ok(())
             }
-            _ => { self.ban(peer,1); Ok(()) }
+            _ => { self.p2p.send(P2PControl::Ban(peer, 1)); Ok(()) }
         }?)
-    }
-
-    // received ping
-    fn ping(&self, nonce: u64, peer: PeerId) {
-        // send pong
-        self.send(peer, NetworkMessage::Pong(nonce))
-    }
-
-    // process headers message
-    fn headers(&self, headers: Vec<LoneBlockHeader>, peer: PeerId) -> Result<(), SPVError> {
-        self.header_downloader.send_network(peer, NetworkMessage::Headers(headers));
-        self.filter_calculator.send_network(peer, NetworkMessage::Ping(0));
-        Ok(())
-    }
-
-    // process an incoming block
-    fn block(&self, block: Block, peer: PeerId) -> Result<(), SPVError> {
-        self.filter_calculator.send_network(peer, NetworkMessage::Block(block));
-        Ok(())
-    }
-
-    // process an incoming inventory announcement
-    fn inv(&self, v: Vec<Inventory>, peer: PeerId) -> Result<(), SPVError> {
-        self.header_downloader.send_network(peer, NetworkMessage::Inv(v));
-        Ok(())
     }
 
     // process incoming addr messages
@@ -238,14 +225,5 @@ impl Dispatcher {
         }
         tx.commit()?;
         Ok(())
-    }
-
-    fn ban (&self, peer: PeerId, score: u32) {
-        self.p2p.send(P2PControl::Ban(peer, score))
-    }
-
-    /// send to peer
-    fn send(&self, peer: PeerId, msg: NetworkMessage) {
-        self.p2p.send(P2PControl::Send(peer, msg))
     }
 }

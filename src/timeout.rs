@@ -96,7 +96,7 @@ impl Timeout {
         let mut banned = Vec::new();
         for (peer, timeout) in &self.timeouts {
             if *timeout < Self::now () {
-                debug!("too slow answering requests, banning peer=0");
+                debug!("too slow answering requests, banning peer={}", *peer);
                 self.p2p.send(P2PControl::Ban(*peer, 100));
                 banned.push (*peer);
             }

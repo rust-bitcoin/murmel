@@ -52,6 +52,7 @@ pub struct FilterCalculator {
     peer: Option<PeerId>,
     peers: HashSet<PeerId>,
     want: HashSet<Sha256dHash>,
+    missing: Vec<Sha256dHash>,
     timeout: SharedTimeout
 }
 
@@ -61,7 +62,7 @@ const POLL: u64 = 100;
 // a block should arrive within this timeout in seconds
 const BLOCK_TIMEOUT: u64 = 300;
 // download in chunks of n blocks
-const CHUNK: usize = 1000;
+const CHUNK: usize = 10;
 // channel size
 const BACK_PRESSURE: usize = 10;
 
@@ -69,7 +70,7 @@ impl FilterCalculator {
     pub fn new(network: Network, chaindb: SharedChainDB, p2p: P2PControlSender, timeout: SharedTimeout) -> PeerMessageSender {
         let (sender, receiver) = mpsc::sync_channel(BACK_PRESSURE);
 
-        let mut filtercalculator = FilterCalculator { network, chaindb, p2p, peer: None, peers: HashSet::new(), want: HashSet::new(), timeout };
+        let mut filtercalculator = FilterCalculator { network, chaindb, p2p, peer: None, peers: HashSet::new(), want: HashSet::new(), missing: Vec::new(), timeout };
 
         thread::spawn(move || { filtercalculator.run(receiver) });
 
@@ -112,6 +113,7 @@ impl FilterCalculator {
                             NetworkMessage::Block(block) => {
                                 re_check = true;
                                 self.timeout.lock().unwrap().received(pid, 1, ExpectedReply::Block);
+                                thread::yield_now();
                                 self.block(pid, &block).expect("block store failed");
                             },
                             NetworkMessage::Ping(_) => {
@@ -125,7 +127,7 @@ impl FilterCalculator {
 
             // check for new work
             // what is missing might change through new header or even reorg
-            if re_check {
+            if re_check  {
                 self.download().expect("download failed");
                 re_check = false;
             }
@@ -139,40 +141,42 @@ impl FilterCalculator {
         if let Some(peer) = self.peer {
             // if not already waiting for some blocks
             if self.timeout.lock().unwrap().is_busy_with(peer, ExpectedReply::Block) == false {
-                // compute the list of missing blocks
-                let mut missing = Vec::new();
-
-                {
-                    debug!("calculate missing blocks...");
-                    let chaindb = self.chaindb.read().unwrap();
-                    for header in chaindb.iter_trunk_rev(None) {
-                        let id = header.bitcoin_hash();
-                        if header.block.is_none() {
-                            missing.push(id);
+                let mut missing = self.missing.clone();
+                if self.missing.is_empty() {
+                    // compute the list of missing blocks
+                    {
+                        debug!("calculate missing blocks...");
+                        let chaindb = self.chaindb.read().unwrap();
+                        for header in chaindb.iter_trunk_rev(None) {
+                            let id = header.bitcoin_hash();
+                            if header.block.is_none() {
+                                missing.push(id);
+                            }
                         }
+                        debug!("missing {} blocks", missing.len());
                     }
-                    debug!("missing {} blocks", missing.len());
-                }
-                if missing.last().is_some() && *missing.last().unwrap() == genesis.bitcoin_hash() {
-                    let mut chaindb = self.chaindb.write().unwrap();
-                    let block_ref = chaindb.store_block(&genesis)?;
-                    let script_filter = BlockFilter::compute_script_filter(&genesis, chaindb.get_script_accessor(&genesis))?;
-                    let coin_filter = BlockFilter::compute_coin_filter(&genesis)?;
-                    chaindb.store_known_filter(&Sha256dHash::default(), &Sha256dHash::default(), &script_filter, &coin_filter)?;
-                    chaindb.cache_scripts(&genesis, 0);
-                    chaindb.batch()?;
-                    let len = missing.len();
-                    missing.truncate(len - 1);
-                }
+                    if missing.last().is_some() && *missing.last().unwrap() == genesis.bitcoin_hash() {
+                        let mut chaindb = self.chaindb.write().unwrap();
+                        let block_ref = chaindb.store_block(&genesis)?;
+                        let script_filter = BlockFilter::compute_script_filter(&genesis, chaindb.get_script_accessor(&genesis))?;
+                        let coin_filter = BlockFilter::compute_coin_filter(&genesis)?;
+                        chaindb.store_known_filter(&Sha256dHash::default(), &Sha256dHash::default(), &script_filter, &coin_filter)?;
+                        chaindb.cache_scripts(&genesis, 0);
+                        chaindb.batch()?;
+                        let len = missing.len();
+                        missing.truncate(len - 1);
+                    }
 
-                missing.reverse();
+                    missing.reverse();
+                    self.missing = missing.clone();
+                }
 
                 if let Some(chunk) = missing.as_slice().chunks(CHUNK).next() {
                     let invs = chunk.iter().map(|s| { Inventory { inv_type: InvType::WitnessBlock, hash: s.clone() } }).collect::<Vec<_>>();
                     self.timeout.lock().unwrap().expect(peer, invs.len(), ExpectedReply::Block);
                     debug!("asking {} blocks from peer={}", invs.len(), peer);
                     self.p2p.send(P2PControl::Send(peer, NetworkMessage::GetData(invs)));
-                    chunk.iter().for_each(|id| { self.want.insert(id.clone()); });
+                    chunk.iter().for_each( |id| { self.want.insert(id.clone()); });
                 }
             }
         }
