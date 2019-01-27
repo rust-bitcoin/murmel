@@ -29,7 +29,7 @@ use bitcoin::{
 };
 use chaindb::SharedChainDB;
 use error::SPVError;
-use p2p::{P2PControl, P2PControlSender, PeerId, PeerMessage, PeerMessageReceiver, PeerMessageSender};
+use p2p::{P2PControl, P2PControlSender, PeerId, PeerMessage, PeerMessageReceiver, PeerMessageSender, SERVICE_BLOCKS};
 use timeout::{ExpectedReply, SharedTimeout};
 use std::{
     collections::{HashMap, VecDeque},
@@ -65,15 +65,20 @@ impl HeaderDownload {
             while let Ok(msg) = receiver.recv_timeout(Duration::from_millis(1000)) {
                 if let Err(e) = match msg {
                     PeerMessage::Connected(pid) => {
-                        self.get_headers(pid)
+                        if self.is_serving_blocks(pid) {
+                            self.get_headers(pid)
+                        }
+                        else {
+                            Ok(())
+                        }
                     },
                     PeerMessage::Disconnected(_) => {
                         Ok(())
                     },
                     PeerMessage::Message(pid, msg) => {
                         match msg {
-                            NetworkMessage::Headers(ref headers) => self.headers(headers, pid),
-                            NetworkMessage::Inv(ref inv) => self.inv(inv, pid),
+                            NetworkMessage::Headers(ref headers) => if self.is_serving_blocks(pid) {self.headers(headers, pid)} else {Ok(())},
+                            NetworkMessage::Inv(ref inv) => if self.is_serving_blocks(pid) {self.inv(inv, pid)} else {Ok(())},
                             NetworkMessage::Ping(_) => { Ok(()) }
                             _ => { Ok(()) }
                         }
@@ -84,6 +89,13 @@ impl HeaderDownload {
             }
             self.timeout.lock().unwrap().check();
         }
+    }
+
+    fn is_serving_blocks (&self, peer: PeerId) -> bool {
+        if let Some(peer_version) = self.p2p.peer_version(peer) {
+            return peer_version.services & SERVICE_BLOCKS != 0;
+        }
+        false
     }
 
     // process an incoming inventory announcement

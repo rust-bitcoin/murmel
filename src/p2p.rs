@@ -64,6 +64,9 @@ const EVENT_BUFFER_SIZE:usize = 1024;
 const CONNECT_TIMEOUT_SECONDS: u64 = 30;
 const BAN :u32 = 100;
 
+pub const SERVICE_BLOCKS:u64 = 1;
+pub const SERVICE_WITNESS:u64 =  1 << 3;
+pub const SERVICE_FILTERS:u64 = 1 << 6;
 /// A peer's Id
 #[derive(Hash, Eq, PartialEq, Copy, Clone)]
 pub struct PeerId {
@@ -77,7 +80,7 @@ impl fmt::Display for PeerId {
         Ok(())
     }
 }
-type PeerMap = HashMap<PeerId, Mutex<Peer>>;
+pub type PeerMap = HashMap<PeerId, Mutex<Peer>>;
 
 #[derive(Clone)]
 pub enum PeerMessage {
@@ -104,20 +107,29 @@ pub enum P2PControl {
     Bind(SocketAddr)
 }
 
-pub type P2PControlReceiver = mpsc::Receiver<P2PControl>;
+type P2PControlReceiver = mpsc::Receiver<P2PControl>;
 
 #[derive(Clone)]
 pub struct P2PControlSender {
-    sender: Arc<Mutex<mpsc::Sender<P2PControl>>>
+    sender: Arc<Mutex<mpsc::Sender<P2PControl>>>,
+    peers: Arc<RwLock<PeerMap>>
 }
 
 impl P2PControlSender {
-    pub fn new (sender: mpsc::Sender<P2PControl>) -> P2PControlSender {
-        P2PControlSender { sender: Arc::new(Mutex::new(sender)) }
+    fn new (sender: mpsc::Sender<P2PControl>, peers: Arc<RwLock<PeerMap>>) -> P2PControlSender {
+        P2PControlSender { sender: Arc::new(Mutex::new(sender)), peers }
     }
 
     pub fn send (&self, control: P2PControl) {
         self.sender.lock().unwrap().send(control).expect("P2P control send failed");
+    }
+
+    pub fn peer_version (&self, peer: PeerId) -> Option<VersionMessage> {
+        if let Some(peer) = self.peers.read().unwrap().get(&peer) {
+            let locked_peer = peer.lock().unwrap();
+            return locked_peer.version.clone();
+        }
+        None
     }
 }
 
@@ -196,6 +208,8 @@ impl P2P {
         let mut rng =  thread_rng();
         let magic = network.magic();
 
+        let peers = Arc::new(RwLock::new(PeerMap::new()));
+
         let p2p = Arc::new(P2P {
             network: network,
             dispatcher,
@@ -203,7 +217,7 @@ impl P2P {
             nonce: rng.next_u64(),
             height: AtomicUsize::new(height as usize),
             user_agent,
-            peers: Arc::new(RwLock::new(PeerMap::new())),
+            peers: peers.clone(),
             poll: Arc::new(Poll::new().unwrap()),
             next_peer_id: AtomicUsize::new(0),
             waker: Arc::new(Mutex::new(HashMap::new())),
@@ -216,7 +230,7 @@ impl P2P {
 
         thread::spawn(move || p2p2.control_loop(control_receiver));
 
-        (p2p, P2PControlSender::new(control_sender))
+        (p2p, P2PControlSender::new(control_sender, peers))
     }
 
     fn control_loop (&self, receiver: P2PControlReceiver) {
@@ -379,9 +393,9 @@ impl P2P {
         let services = if self.listener.lock().unwrap().is_empty() {
             0
         } else {
-            9 + if self.filter_server {
+            SERVICE_BLOCKS + SERVICE_WITNESS + if self.filter_server {
                 // announce that this node is capable of serving BIP157 messages
-                1 << 6
+                SERVICE_FILTERS
             }
             else {
                 0
@@ -441,7 +455,7 @@ impl P2P {
         }
     }
 
-    fn event_processor (&self, event: Event, pid: PeerId, iobuf: &mut [u8]) -> Result<(), SPVError> {
+    fn event_processor (&self, event: Event, pid: PeerId, needed_services: u64, iobuf: &mut [u8]) -> Result<(), SPVError> {
         let readiness = UnixReady::from(event.readiness());
         // check for error first
         if readiness.is_hup() || readiness.is_error() {
@@ -546,8 +560,8 @@ impl P2P {
                                                 disconnect = true;
                                                 break;
                                             } else {
-                                                // want to connect to full nodes supporting segwit
-                                                if false {// version.services & 9 != 9 || version.version < 70013 {
+                                                if version.version < 70001 || (needed_services & version.services) != needed_services {
+                                                    debug!("rejecting peer of version {} and services {:b} peer={}", version.version, version.services, pid);
                                                     disconnect = true;
                                                     break;
                                                 } else {
@@ -559,6 +573,7 @@ impl P2P {
                                                         let version = self.version (&addr, version.version);
                                                         locked_peer.send(version)?;
                                                     }
+                                                    debug!("accepting peer of version {} and services {:b} peer={}", version.version, version.services, pid);
                                                     // acknowledge version message received
                                                     locked_peer.send(NetworkMessage::Verack)?;
                                                     // all right, remember this peer
@@ -626,7 +641,7 @@ impl P2P {
     /// run the message dispatcher loop
     /// this method does not return unless there is an error obtaining network events
     /// run in its own thread, which will process all network events
-    pub fn run(&self, ctx: &mut Context) -> Result<(), io::Error>{
+    pub fn run(&self, needed_services: u64, ctx: &mut Context) -> Result<(), io::Error>{
         trace!("start mio event loop");
         loop {
             // events buffer
@@ -650,7 +665,7 @@ impl P2P {
                 else {
                     // construct the id of the peer the event concerns
                     let pid = PeerId { token: event.token() };
-                    if let Err(error) = self.event_processor(event, pid, iobuf.as_mut_slice()) {
+                    if let Err(error) = self.event_processor(event, pid, needed_services, iobuf.as_mut_slice()) {
                         use std::error::Error;
 
                         warn!("error {} peer={}", error.to_string(), pid);

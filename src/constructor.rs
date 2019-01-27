@@ -22,7 +22,7 @@
 use configdb::{ConfigDB, SharedConfigDB};
 use error::SPVError;
 use dispatcher::Dispatcher;
-use p2p::{P2P,PeerMessageSender, P2PControl, P2PControlSender, PeerSource};
+use p2p::{P2P,PeerMessageSender, P2PControl, P2PControlSender, PeerSource, SERVICE_BLOCKS, SERVICE_WITNESS, SERVICE_FILTERS};
 use chaindb::{ChainDB, SharedChainDB};
 use dns::dns_seed;
 
@@ -133,9 +133,15 @@ impl Constructor {
             p2p_control.send(P2PControl::Bind(addr.clone()));
         }
 
+        let needed_services = if self.server {
+            0
+        } else {
+            SERVICE_BLOCKS + SERVICE_FILTERS
+        };
+
         let p2p2 = p2p.clone();
         let p2p_task = Box::new(future::poll_fn (move |ctx| {
-            p2p2.run(ctx).unwrap();
+            p2p2.run(needed_services, ctx).unwrap();
             Ok(Async::Ready(()))
         }));
 

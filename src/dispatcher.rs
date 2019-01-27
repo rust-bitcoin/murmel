@@ -76,6 +76,8 @@ impl Dispatcher {
 
         let header_downloader = HeaderDownload::new(chaindb.clone(), p2p.clone(), timeout.clone());
 
+
+
         let filter_calculator = if server {
             FilterCalculator::new(network, chaindb.clone(), p2p.clone(), timeout.clone())
         }
