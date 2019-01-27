@@ -64,11 +64,11 @@ pub struct ChainDB {
 
 impl ChainDB {
     /// Create an in-memory database instance
-    pub fn mem(network: Network, heavy: bool, script_cache_size: usize) -> Result<ChainDB, SPVError> {
+    pub fn mem(network: Network, heavy: bool, server: bool, script_cache_size: usize) -> Result<ChainDB, SPVError> {
         info!("working with in memory chain db");
         let light = BitcoinAdaptor::new(transient(2)?);
         let headercache = HeaderCache::new(network);
-        let filtercache = FilterCache::new();
+        let filtercache = FilterCache::new(server);
         let scriptcache = Mutex::new(ScriptCache::new(script_cache_size));
         if heavy {
             let heavy = Some(BitcoinAdaptor::new(transient(2)?));
@@ -79,11 +79,11 @@ impl ChainDB {
     }
 
     /// Create or open a persistent database instance identified by the path
-    pub fn new(path: &Path, network: Network, heavy: bool, script_cache_size: usize) -> Result<ChainDB, SPVError> {
+    pub fn new(path: &Path, network: Network, heavy: bool, server: bool, script_cache_size: usize) -> Result<ChainDB, SPVError> {
         let basename = path.to_str().unwrap().to_string();
         let light = BitcoinAdaptor::new(persistent((basename.clone() + ".h").as_str(), 100, 2)?);
         let headercache = HeaderCache::new(network);
-        let filtercache = FilterCache::new();
+        let filtercache = FilterCache::new(server);
         let scriptcache = Mutex::new(ScriptCache::new(script_cache_size));
         if heavy {
             let heavy = Some(BitcoinAdaptor::new(persistent((basename + ".b").as_str(), 1000, 2)?));
@@ -107,6 +107,12 @@ impl ChainDB {
     }
 
     fn init_headers(&mut self, server: bool) -> Result<(), SPVError> {
+        if server {
+            info!("Running as filter server");
+        }
+        else {
+            info!("Running as filter client");
+        }
         let mut sl = VecDeque::new();
         {
             if let Some(tip) = self.fetch_header_tip()? {
@@ -135,18 +141,12 @@ impl ChainDB {
             self.headercache.clear();
             while let Some(stored) = sl.pop_front() {
                 self.headercache.add_header_unchecked(&stored);
-                if let Some(filter_ref) = stored.script_filter {
-                    let filter = self.fetch_filter_by_ref(filter_ref)?;
-                    self.filtercache.add_filter_header(&filter);
+                let block_id = stored.header.bitcoin_hash();
+                if let Some(filter) = self.fetch_filter(&block_id, SCRIPT_FILTER)? {
+                    self.filtercache.add_filter(&filter);
                 }
-                if let Some(filter_ref) = stored.coin_filter {
-                    let filter = self.fetch_filter_by_ref(filter_ref)?;
-                    if server {
-                        self.filtercache.add_filter(&filter);
-                    }
-                    else {
-                        self.filtercache.add_filter_header(&filter);
-                    }
+                if let Some(filter) = self.fetch_filter(&block_id, COIN_FILTER)? {
+                    self.filtercache.add_filter(&filter);
                 }
             }
             info!("read {} filter header", self.filtercache.len());
@@ -163,21 +163,6 @@ impl ChainDB {
                 }
             }
             return Ok(Some((stored, unwinds, forward)));
-        }
-        Ok(None)
-    }
-
-    pub fn update_header_with_block(&mut self, id: &Sha256dHash, block_ref: PRef) -> Result<Option<PRef>, SPVError> {
-        if let Some(stored) = self.headercache.update_header_with_block(id, block_ref) {
-            return Ok(Some(self.store_header(&stored)?));
-        }
-        Ok(None)
-    }
-
-
-    pub fn update_header_with_filter(&mut self, block_id: &Sha256dHash, script_ref: PRef, coin_ref: PRef) -> Result<Option<PRef>, SPVError> {
-        if let Some(stored) = self.headercache.update_header_with_filter(block_id, script_ref, coin_ref) {
-            return Ok(Some(self.store_header(&stored)?));
         }
         Ok(None)
     }
@@ -222,70 +207,18 @@ impl ChainDB {
         self.headercache.locator_hashes()
     }
 
-    pub fn add_filter_header (&mut self, filter: StoredFilter) -> Result<(), SPVError> {
-        let filter_pref = self.store_filter(&filter)?;
-        self.filtercache.add_filter_header(&filter);
-        if filter.filter_type == SCRIPT_FILTER {
-            self.update_header_with_filter(&filter.block_id, filter_pref, PRef::invalid())?;
-        }
-        if filter.filter_type == COIN_FILTER {
-            self.update_header_with_filter(&filter.block_id, PRef::invalid(),filter_pref)?;
-        }
+    pub fn add_filter (&mut self, filter: StoredFilter) -> Result<(), SPVError> {
+        self.store_filter(&filter)?;
+        self.filtercache.add_filter(&filter);
         Ok(())
     }
 
-    pub fn get_filter_header(&self, filter_id: &Sha256dHash) -> Option<StoredFilter> {
+    pub fn get_filter(&self, filter_id: &Sha256dHash) -> Option<StoredFilter> {
         self.filtercache.get_filter(filter_id)
     }
 
-    pub fn get_block_filter_header(&self, block_id: &Sha256dHash, filter_type: u8) -> Option<StoredFilter> {
+    pub fn get_block_filter(&self, block_id: &Sha256dHash, filter_type: u8) -> Option<StoredFilter> {
         self.filtercache.get_block_filter(block_id, filter_type)
-    }
-
-    pub fn get_block_filter(&self, block_id: &Sha256dHash, filter_type: u8) -> Result<Option<StoredFilter>, SPVError> {
-        if let Some(filter) = self.filtercache.get_block_filter(block_id, filter_type) {
-            if filter.filter.is_some () {
-                return Ok(Some(filter));
-            }
-            else {
-                if let Some(header) = self.get_header (block_id) {
-                    if let Some(filter_ref) = if filter_type == SCRIPT_FILTER {
-                        header.script_filter
-                    } else if filter_type == COIN_FILTER {
-                        header.coin_filter
-                    } else {
-                        None
-                    } {
-                        return Ok(Some(self.fetch_filter_by_ref(filter_ref)?));
-                    }
-                }
-            }
-        }
-        Ok(None)
-    }
-
-    // update if matching stored filter_header chain
-    pub fn update_filter(&mut self, block_id: &Sha256dHash, filter_type: u8, filter: Vec<u8>) -> Result<bool, SPVError> {
-        if let Some(filter_header) = self.filtercache.get_block_filter(block_id, filter_type) {
-            let filter_hash = Sha256dHash::from_data(filter.as_slice());
-            let mut buf = [0u8; 64];
-            buf[0..32].copy_from_slice(&filter_hash.to_bytes()[..]);
-            buf[32..].copy_from_slice(&filter_header.previous.to_bytes()[..]);
-            let filter_id = Sha256dHash::from_data(&buf);
-            if filter_id == filter_header.bitcoin_hash() {
-                let stored = StoredFilter {
-                    block_id: *block_id,
-                    previous: filter_header.previous,
-                    filter_hash,
-                    filter: Some(filter),
-                    filter_type
-                };
-                self.store_filter(&stored)?;
-                self.filtercache.add_filter_header(&stored);
-                return Ok(true);
-            }
-        }
-        Ok(false)
     }
 
     pub fn store_header(&mut self, stored: &StoredHeader) -> Result<PRef, SPVError> {
@@ -309,28 +242,42 @@ impl ChainDB {
         Ok(self.light.put_hash_keyed(filter)?)
     }
 
-
-    pub fn fetch_filter_by_ref(&self, pref: PRef) -> Result<StoredFilter, SPVError> {
-        Ok(self.light.get_decodable::<StoredFilter>(pref).map(|(_, filter)| filter)?)
+    pub fn fetch_filter(&self, block_id: &Sha256dHash, filter_type: u8) -> Result<Option<StoredFilter>, SPVError> {
+        let mut id_data = [0u8; 33];
+        id_data[0..32].copy_from_slice(&block_id.as_bytes()[..]);
+        id_data[32] = filter_type;
+        let key = Sha256dHash::from_data(&id_data);
+        Ok(self.light.get_hash_keyed::<StoredFilter>(&key)?.map(|(_, filter)| filter))
     }
 
-    pub fn fetch_filter(&self, filter_id: &Sha256dHash) -> Result<Option<StoredFilter>, SPVError> {
-        Ok(self.light.get_hash_keyed::<StoredFilter>(filter_id)?.map(|(_, filter)| filter))
-    }
-
-    pub fn store_known_filter (&mut self, previous_script: &Sha256dHash, previous_coin: &Sha256dHash, script_filter: &BlockFilter, coin_filter: &BlockFilter) -> Result<(Sha256dHash, Sha256dHash), SPVError> {
+    pub fn store_known_filter (&mut self, previous_script: &Sha256dHash, previous_coin: &Sha256dHash, script_filter: &BlockFilter, coin_filter: &BlockFilter) -> Result<(), SPVError> {
         let stored_script_filter = StoredFilter{block_id: script_filter.block, previous: previous_script.clone(),
             filter_hash: Sha256dHash::from_data(script_filter.content.as_slice()), filter: Some(script_filter.content.clone()), filter_type: script_filter.filter_type };
-        let pref_script = self.store_filter(&stored_script_filter)?;
-        self.filtercache.add_filter_header(&stored_script_filter);
+        self.store_filter(&stored_script_filter)?;
+        self.filtercache.add_filter(&stored_script_filter);
 
         let stored_coin_filter = StoredFilter{block_id: coin_filter.block, previous: previous_coin.clone(),
             filter_hash: Sha256dHash::from_data(coin_filter.content.as_slice()), filter: Some(coin_filter.content.clone()), filter_type: coin_filter.filter_type };
-        let pref_coin = self.store_filter(&stored_coin_filter)?;
-        self.filtercache.add_filter_header(&stored_coin_filter);
+        self.store_filter(&stored_coin_filter)?;
+        self.filtercache.add_filter(&stored_coin_filter);
+        Ok(())
+    }
 
-        self.update_header_with_filter(&script_filter.block, pref_script, pref_coin)?;
-        Ok((stored_script_filter.bitcoin_hash(), stored_coin_filter.bitcoin_hash()))
+    pub fn may_have_block (&self, block_id: &Sha256dHash) -> Result<bool, SPVError> {
+        if let Some(ref heavy) = self.heavy {
+            return Ok(heavy.may_have_hash_key (block_id)?);
+        }
+        Ok(false)
+    }
+
+    pub fn fetch_block (&self, block_id: &Sha256dHash) -> Result<Option<StoredBlock>, SPVError> {
+        if let Some(ref heavy) = self.heavy {
+            if let Some((_, block)) = heavy.get_hash_keyed::<StoredBlock>(block_id)? {
+                return Ok(Some(block));
+            }
+            return Ok(None)
+        }
+        panic!("configuration error: no block store");
     }
 
     pub fn store_block(&mut self, block: &Block) -> Result<PRef, SPVError> {
@@ -341,18 +288,9 @@ impl ChainDB {
             } else {
                 panic!("Configuration error. No db to store block.");
             }
-            self.update_header_with_block(&block.bitcoin_hash(), pref)?;
             return Ok(pref);
         }
         panic!("should not call store block before header is known {}", block.bitcoin_hash());
-    }
-
-    pub fn fetch_block_by_ref(&self, pref: PRef) -> Result<StoredBlock, SPVError> {
-        if let Some(ref heavy) = self.heavy {
-            let (_, stored) = heavy.get_decodable::<StoredBlock>(pref)?;
-            return Ok(stored)
-        }
-        panic!("Configuration error. No db to fetch block.");
     }
 
     pub fn cache_scripts(&mut self, block: &Block, height: u32) {
@@ -393,14 +331,12 @@ impl ChainDB {
             // iterate backward on blocks starting with the highest one not covered by the cache
             for header in self.iter_trunk_rev(Some(from)) {
                 // if filter is known for this block
-                if let Some(filter) = self.get_block_filter(&header.header.bitcoin_hash(), COIN_FILTER)? {
+                if let Some(filter) = self.get_block_filter(&header.header.bitcoin_hash(), COIN_FILTER) {
                     // check in a single pass read if any coins we search for might be in the filter for this block
                     let reader = BlockFilterReader::new(&header.bitcoin_hash())?;
                     if reader.match_any(&mut Cursor::new(filter.filter.unwrap()), &remains)? {
                         // do we have the block ?
-                        if let Some(block_ref) = header.block {
-                            // retrieve the block
-                            let block = self.fetch_block_by_ref(block_ref)?;
+                        if let Some(block) = self.fetch_block(&header.bitcoin_hash())? {
                             // for all transactions
                             for tx in &block.txdata {
                                 let txid = tx.txid();
@@ -454,13 +390,7 @@ pub struct StoredHeader {
     /// chain height
     pub height: u32,
     /// log2 of total work
-    pub log2work: f32,
-    /// pointer to block if known
-    pub block: Option<PRef>,
-    /// pointer to script filter if known
-    pub script_filter: Option<PRef>,
-    /// pointer to coin filter if known
-    pub coin_filter: Option<PRef>,
+    pub log2work: f32
 }
 
 // need to implement if put_hash_keyed and get_hash_keyed should be used
@@ -478,21 +408,6 @@ impl<S: Encoder> Encodable<S> for StoredHeader {
         let mut buf = [0u8; 4];
         BigEndian::write_f32(&mut buf, self.log2work);
         buf.consensus_encode(s)?;
-        if let Some(pref) = self.block {
-            pref.consensus_encode(s)?;
-        } else {
-            PRef::invalid().consensus_encode(s)?;
-        }
-        if let Some(pref) = self.script_filter {
-            pref.consensus_encode(s)?;
-        } else {
-            PRef::invalid().consensus_encode(s)?;
-        }
-        if let Some(pref) = self.coin_filter {
-            pref.consensus_encode(s)?;
-        } else {
-            PRef::invalid().consensus_encode(s)?;
-        }
         Ok(())
     }
 }
@@ -506,30 +421,6 @@ impl<D: Decoder> Decodable<D> for StoredHeader {
             log2work: {
                 let buf: [u8; 4] = Decodable::consensus_decode(d)?;
                 BigEndian::read_f32(&buf)
-            },
-            block: {
-                let pref: PRef = Decodable::consensus_decode(d)?;
-                if pref.is_valid() {
-                    Some(pref)
-                } else {
-                    None
-                }
-            },
-            script_filter: {
-                let pref: PRef = Decodable::consensus_decode(d)?;
-                if pref.is_valid() {
-                    Some(pref)
-                } else {
-                    None
-                }
-            },
-            coin_filter: {
-                let pref: PRef = Decodable::consensus_decode(d)?;
-                if pref.is_valid() {
-                    Some(pref)
-                } else {
-                    None
-                }
             }
         })
     }
@@ -552,12 +443,21 @@ pub struct StoredFilter {
     pub filter: Option<Vec<u8>>,
 }
 
-// need to implement if put_hash_keyed and get_hash_keyed should be used
-impl BitcoinHash for StoredFilter {
-    fn bitcoin_hash(&self) -> Sha256dHash {
+impl StoredFilter {
+    pub fn filter_id(&self) -> Sha256dHash {
         let mut id_data = [0u8; 64];
         id_data[0..32].copy_from_slice(&self.filter_hash.as_bytes()[..]);
         id_data[0..32].copy_from_slice(&self.previous.as_bytes()[..]);
+        Sha256dHash::from_data(&id_data)
+    }
+}
+
+// stored with a key derivable from block_id and filter type
+impl BitcoinHash for StoredFilter {
+    fn bitcoin_hash(&self) -> Sha256dHash {
+        let mut id_data = [0u8; 33];
+        id_data[0..32].copy_from_slice(&self.block_id.as_bytes()[..]);
+        id_data[32] = self.filter_type;
         Sha256dHash::from_data(&id_data)
     }
 }

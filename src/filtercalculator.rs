@@ -149,8 +149,13 @@ impl FilterCalculator {
                         let chaindb = self.chaindb.read().unwrap();
                         for header in chaindb.iter_trunk_rev(None) {
                             let id = header.bitcoin_hash();
-                            if header.block.is_none() {
+                            if chaindb.may_have_block(&id)? == false {
                                 missing.push(id);
+                            }
+                            else {
+                                if chaindb.fetch_block(&id)?.is_none () {
+                                    missing.push(id);
+                                }
                             }
                         }
                         debug!("missing {} blocks", missing.len());
@@ -197,8 +202,8 @@ impl FilterCalculator {
                     // cache output scripts for later calculation
                     chaindb.cache_scripts(block, header.height);
                     // if this is the next block for filter calculation
-                    if let Some(prev_script) = chaindb.get_block_filter_header(&block.header.prev_blockhash, SCRIPT_FILTER) {
-                        if let Some(prev_coin) = chaindb.get_block_filter_header(&block.header.prev_blockhash, COIN_FILTER) {
+                    if let Some(prev_script) = chaindb.get_block_filter(&block.header.prev_blockhash, SCRIPT_FILTER) {
+                        if let Some(prev_coin) = chaindb.get_block_filter(&block.header.prev_blockhash, COIN_FILTER) {
                             // store block
                             debug!("store block  {} {} peer={}", header.height, block_id, peer);
                             chaindb.store_block(block)?;

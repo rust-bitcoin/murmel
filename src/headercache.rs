@@ -62,29 +62,6 @@ impl HeaderCache {
         self.trunk.push(id);
     }
 
-    pub fn update_header_with_block(&mut self, id: &Sha256dHash, block_ref: PRef) -> Option<StoredHeader> {
-        if let Some(ref mut header) = self.headers.get_mut(id) {
-            header.block = Some(block_ref);
-            Some(header.clone())
-        } else {
-            None
-        }
-    }
-
-    pub fn update_header_with_filter(&mut self, block_id: &Sha256dHash, script_ref: PRef, coin_ref: PRef) -> Option<StoredHeader> {
-        if let Some(ref mut header) = self.headers.get_mut(block_id) {
-            if script_ref.is_valid() {
-                header.script_filter = Some(script_ref);
-            }
-            if coin_ref.is_valid() {
-                header.coin_filter = Some(coin_ref);
-            }
-            Some(header.clone())
-        } else {
-            None
-        }
-    }
-
     /// add a Bitcoin header
     pub fn add_header(&mut self, header: &BlockHeader) -> Result<Option<(StoredHeader, Option<Vec<Sha256dHash>>, Option<Vec<Sha256dHash>>)>, SPVError> {
         if self.headers.get(&header.bitcoin_hash()).is_some() {
@@ -108,10 +85,7 @@ impl HeaderCache {
             let stored = StoredHeader {
                 header: header.clone(),
                 height: 0,
-                log2work: Self::log2(header.work()),
-                block: None,
-                script_filter: None,
-                coin_filter: None
+                log2work: Self::log2(header.work())
             };
             self.trunk.push(new_tip.clone());
             self.headers.insert(new_tip.clone(), stored.clone());
@@ -212,10 +186,7 @@ impl HeaderCache {
         let stored = StoredHeader {
             header: next.clone(),
             height: prev.height + 1,
-            log2work: Self::log2(next.work() + Self::exp2(prev.log2work)),
-            block: None,
-            script_filter: None,
-            coin_filter: None
+            log2work: Self::log2(next.work() + Self::exp2(prev.log2work))
         };
         let next_hash = Arc::new(next.bitcoin_hash());
 
