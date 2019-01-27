@@ -175,8 +175,8 @@ impl ChainDB {
     }
 
 
-    pub fn update_header_with_filter(&mut self, id: &Sha256dHash, script_ref: PRef, coin_ref: PRef) -> Result<Option<PRef>, SPVError> {
-        if let Some(stored) = self.headercache.update_header_with_filter(id, script_ref, coin_ref) {
+    pub fn update_header_with_filter(&mut self, block_id: &Sha256dHash, script_ref: PRef, coin_ref: PRef) -> Result<Option<PRef>, SPVError> {
+        if let Some(stored) = self.headercache.update_header_with_filter(block_id, script_ref, coin_ref) {
             return Ok(Some(self.store_header(&stored)?));
         }
         Ok(None)
@@ -222,6 +222,22 @@ impl ChainDB {
         self.headercache.locator_hashes()
     }
 
+    pub fn add_filter_header (&mut self, filter: StoredFilter) -> Result<(), SPVError> {
+        let filter_pref = self.store_filter(&filter)?;
+        self.filtercache.add_filter_header(&filter);
+        if filter.filter_type == SCRIPT_FILTER {
+            self.update_header_with_filter(&filter.block_id, filter_pref, PRef::invalid())?;
+        }
+        if filter.filter_type == COIN_FILTER {
+            self.update_header_with_filter(&filter.block_id, PRef::invalid(),filter_pref)?;
+        }
+        Ok(())
+    }
+
+    pub fn get_filter_header(&self, filter_id: &Sha256dHash) -> Option<StoredFilter> {
+        self.filtercache.get_filter(filter_id)
+    }
+
     pub fn get_block_filter_header(&self, block_id: &Sha256dHash, filter_type: u8) -> Option<StoredFilter> {
         self.filtercache.get_block_filter(block_id, filter_type)
     }
@@ -243,34 +259,6 @@ impl ChainDB {
                         return Ok(Some(self.fetch_filter_by_ref(filter_ref)?));
                     }
                 }
-            }
-        }
-        Ok(None)
-    }
-
-    pub fn add_filter_chain(&mut self, prev_block_id: &Sha256dHash, prev_filter_id: &Sha256dHash, filter_type: u8, filter_hashes: Box<Iterator<Item=Sha256dHash>>) ->
-    Result<Option<(Sha256dHash, Sha256dHash)>, SPVError> {
-        if let Some(trunk_pos) = self.pos_on_trunk(prev_block_id) {
-            if let Some(prev_filter) = self.filtercache.get_block_filter(prev_block_id, filter_type) {
-                let mut previous = *prev_filter_id;
-                let mut p_block = *prev_block_id;
-                let id_pairs = self.headercache.iter_trunk(trunk_pos).map(|h|h.bitcoin_hash()).zip(filter_hashes).collect::<Vec<_>>();
-                for (block_id, filter_hash) in id_pairs {
-
-                    let mut buf = [0u8; 64];
-                    buf[0..32].copy_from_slice(&filter_hash.to_bytes()[..]);
-                    buf[32..].copy_from_slice(&previous.to_bytes()[..]);
-                    let filter_id = Sha256dHash::from_data(&buf);
-
-                    previous = filter_id;
-                    p_block = block_id;
-
-                    let filter = StoredFilter { block_id, previous, filter_hash, filter: None, filter_type };
-
-                    self.store_filter(&filter)?;
-                    self.filtercache.add_filter_header(&filter);
-                }
-                return Ok(Some((p_block, previous)));
             }
         }
         Ok(None)

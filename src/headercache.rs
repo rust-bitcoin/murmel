@@ -71,10 +71,14 @@ impl HeaderCache {
         }
     }
 
-    pub fn update_header_with_filter(&mut self, id: &Sha256dHash, script_ref: PRef, coin_ref: PRef) -> Option<StoredHeader> {
-        if let Some(ref mut header) = self.headers.get_mut(id) {
-            header.script_filter = Some(script_ref);
-            header.coin_filter = Some(coin_ref);
+    pub fn update_header_with_filter(&mut self, block_id: &Sha256dHash, script_ref: PRef, coin_ref: PRef) -> Option<StoredHeader> {
+        if let Some(ref mut header) = self.headers.get_mut(block_id) {
+            if script_ref.is_valid() {
+                header.script_filter = Some(script_ref);
+            }
+            if coin_ref.is_valid() {
+                header.coin_filter = Some(coin_ref);
+            }
             Some(header.clone())
         } else {
             None

@@ -29,6 +29,7 @@ use filterserver::FilterServer;
 use blockserver::BlockServer;
 use timeout::{Timeout, SharedTimeout};
 use ping::Ping;
+use filterdownload::FilterDownload;
 
 use bitcoin::{
     blockdata::{
@@ -67,6 +68,8 @@ pub struct Dispatcher {
     ping: PeerMessageSender,
     // peer timeout tracker
     timeout: SharedTimeout,
+    // filter downloader (client side)
+    filterdownload: PeerMessageSender,
     // lightning connector
     connector: Arc<LightningConnector>
 }
@@ -100,6 +103,12 @@ impl Dispatcher {
             PeerMessageSender::dummy()
         };
 
+        let filterdownload = if server == false {
+            FilterDownload::new(chaindb.clone(), p2p.clone(), timeout.clone())
+        }
+        else {
+            PeerMessageSender::dummy()
+        };
 
         let dispatcher = Arc::new(Dispatcher {
             p2p,
@@ -111,6 +120,7 @@ impl Dispatcher {
             block_server,
             ping,
             timeout,
+            filterdownload,
             connector
         });
 
@@ -153,6 +163,7 @@ impl Dispatcher {
     pub fn connected(&self, pm: PeerMessage) -> Result<(), SPVError> {
         debug!("connected peer={}", pm.peer_id());
         self.header_downloader.send (pm.clone());
+        self.filterdownload.send(pm.clone());
         self.filter_calculator.send(pm);
         Ok(())
     }
@@ -184,7 +195,8 @@ impl Dispatcher {
                 Ok(())
             },
             NetworkMessage::Inv(_) => {
-                self.header_downloader.send_network(peer, msg);
+                self.header_downloader.send_network(peer, msg.clone());
+                self.filterdownload.send_network(peer, msg);
                 Ok(())
             },
             NetworkMessage::Addr(ref v) => self.addr(v, peer),
@@ -212,6 +224,14 @@ impl Dispatcher {
             },
             NetworkMessage::GetCFCheckpt(_) => {
                 self.filter_server.send_network(peer, msg);
+                Ok(())
+            },
+            NetworkMessage::CFHeaders(_) => {
+                self.filterdownload.send_network(peer, msg);
+                Ok(())
+            },
+            NetworkMessage::CFHeaders(_) => {
+                self.filterdownload.send_network(peer, msg);
                 Ok(())
             }
             _ => { self.p2p.send(P2PControl::Ban(peer, 1)); Ok(()) }

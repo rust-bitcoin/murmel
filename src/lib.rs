@@ -40,6 +40,7 @@ extern crate lru_cache;
 extern crate futures;
 extern crate futures_timer;
 
+mod filterdownload;
 mod ping;
 mod timeout;
 mod blockserver;

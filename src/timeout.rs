@@ -34,7 +34,8 @@ const TIMEOUT:u64 = 30;
 pub enum ExpectedReply {
     Block,
     Headers,
-    Pong
+    Pong,
+    FilterHeader
 }
 
 pub struct Timeout {
