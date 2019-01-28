@@ -270,7 +270,7 @@ impl ChainDB {
         Ok(false)
     }
 
-    pub fn fetch_block (&self, block_id: &Sha256dHash) -> Result<Option<StoredBlock>, SPVError> {
+    pub fn fetch_stored_block(&self, block_id: &Sha256dHash) -> Result<Option<StoredBlock>, SPVError> {
         if let Some(ref heavy) = self.heavy {
             if let Some((_, block)) = heavy.get_hash_keyed::<StoredBlock>(block_id)? {
                 return Ok(Some(block));
@@ -280,11 +280,38 @@ impl ChainDB {
         panic!("configuration error: no block store");
     }
 
+    pub fn fetch_txdata(&self, block_id: &Sha256dHash) -> Result<Option<Vec<Transaction>>, SPVError> {
+        if let Some(ref heavy) = self.heavy {
+            let mut txdata = Vec::new();
+            if let Some((_, block)) = heavy.get_hash_keyed::<StoredBlock>(block_id)? {
+                for txref in block.txrefs {
+                    txdata.push(heavy.get_decodable::<Transaction>(txref)?.1);
+                }
+                return Ok(Some(txdata));
+            }
+            return Ok(None)
+        }
+        panic!("configuration error: no block store");
+    }
+
+    pub fn fetch_transaction (&self, txref: PRef) -> Result<Transaction, SPVError> {
+        if let Some(ref heavy) = self.heavy {
+            let (_, tx) = heavy.get_decodable::<Transaction>(txref)?;
+            return Ok(tx);
+        }
+        panic!("configuration error: no block store");
+    }
+
     pub fn store_block(&mut self, block: &Block) -> Result<PRef, SPVError> {
         if let Some(header) = self.headercache.get_header(&block.bitcoin_hash()) {
             let pref;
             if let Some(ref mut heavy) = self.heavy {
-                pref = heavy.put_hash_keyed(&StoredBlock { id: block.bitcoin_hash(), txdata: block.txdata.clone() })?;
+                let txids = block.txdata.iter().map(|tx| tx.txid()).collect::<Vec<_>>();
+                let mut txrefs = Vec::with_capacity(txids.len());
+                for tx in &block.txdata {
+                    txrefs.push(heavy.put_encodable(tx)?);
+                }
+                pref = heavy.put_hash_keyed(&StoredBlock { id: block.bitcoin_hash(), txids, txrefs })?;
             } else {
                 panic!("Configuration error. No db to store block.");
             }
@@ -336,15 +363,15 @@ impl ChainDB {
                     let reader = BlockFilterReader::new(&header.bitcoin_hash())?;
                     if reader.match_any(&mut Cursor::new(filter.filter.unwrap()), &remains)? {
                         // do we have the block ?
-                        if let Some(block) = self.fetch_block(&header.bitcoin_hash())? {
+                        if let Some(block) = self.fetch_stored_block(&header.bitcoin_hash())? {
                             // for all transactions
-                            for tx in &block.txdata {
-                                let txid = tx.txid();
+                            for (txpos, txid) in block.txids.iter().enumerate() {
                                 // check if any or many! outputs of this transaction are those we search for
                                 while let Ok(pos) = remains.binary_search_by(|r| r[0..32].cmp(txid.as_bytes())) {
                                     // a transaction that we are interested in
                                     let coin = OutPoint::consensus_decode(&mut Cursor::new(remains[pos].as_slice()))?;
                                     // get the script
+                                    let tx = self.fetch_transaction(block.txrefs[txpos])?;
                                     sofar.push(tx.output[coin.vout as usize].script_pubkey.clone());
                                     // one less to worry about
                                     remains.remove(pos);
@@ -502,7 +529,8 @@ impl<D: Decoder> Decodable<D> for StoredFilter {
 pub struct StoredBlock {
     pub id: Sha256dHash,
     // transactions
-    pub txdata: Vec<Transaction>,
+    pub txids: Vec<Sha256dHash>,
+    pub txrefs: Vec<PRef>
 }
 
 impl BitcoinHash for StoredBlock {
@@ -515,7 +543,8 @@ impl BitcoinHash for StoredBlock {
 impl<S: Encoder> Encodable<S> for StoredBlock {
     fn consensus_encode(&self, s: &mut S) -> Result<(), encode::Error> {
         self.id.consensus_encode(s)?;
-        self.txdata.consensus_encode(s)?;
+        self.txids.consensus_encode(s)?;
+        self.txrefs.consensus_encode(s)?;
         Ok(())
     }
 }
@@ -525,7 +554,8 @@ impl<D: Decoder> Decodable<D> for StoredBlock {
     fn consensus_decode(d: &mut D) -> Result<StoredBlock, encode::Error> {
         Ok(StoredBlock {
             id: Decodable::consensus_decode(d)?,
-            txdata: Decodable::consensus_decode(d)?,
+            txids: Decodable::consensus_decode(d)?,
+            txrefs: Decodable::consensus_decode(d)?
         })
     }
 }

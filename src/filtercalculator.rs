@@ -149,7 +149,7 @@ impl FilterCalculator {
                                 missing.push(id);
                             }
                             else {
-                                if chaindb.fetch_block(&id)?.is_none () {
+                                if chaindb.fetch_stored_block(&id)?.is_none () {
                                     missing.push(id);
                                 }
                             }

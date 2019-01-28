@@ -90,8 +90,8 @@ impl BlockServer {
         for locator in get.locator_hashes.iter () {
             if let Some(pos) = chaindb.pos_on_trunk(locator) {
                 for header in chaindb.iter_trunk(pos).take(500) {
-                    if let Some(block) = chaindb.fetch_block (&header.header.bitcoin_hash())? {
-                        self.p2p.send(P2PControl::Send(peer, NetworkMessage::Block(Block{header: header.header, txdata: block.txdata})));
+                    if let Some(txdata) = chaindb.fetch_txdata(&header.header.bitcoin_hash())? {
+                        self.p2p.send(P2PControl::Send(peer, NetworkMessage::Block(Block{header: header.header, txdata})));
                     }
                 }
                 break;
@@ -105,8 +105,8 @@ impl BlockServer {
         for inv in get {
             if inv.inv_type == InvType::WitnessBlock {
                 if let Some(header) = chaindb.get_header(&inv.hash) {
-                    if let Some(block) = chaindb.fetch_block (&header.header.bitcoin_hash())? {
-                        self.p2p.send(P2PControl::Send(peer, NetworkMessage::Block(Block{header: header.header, txdata: block.txdata})));
+                    if let Some(txdata) = chaindb.fetch_txdata(&header.header.bitcoin_hash())? {
+                        self.p2p.send(P2PControl::Send(peer, NetworkMessage::Block(Block{header: header.header, txdata})));
                     }
                 }
             }
