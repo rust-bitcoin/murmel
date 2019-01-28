@@ -34,9 +34,6 @@ use bitcoin::{
     blockdata::transaction::Transaction
 };
 
-use connector::LightningConnector;
-use lightning::chain::chaininterface::BroadcasterInterface;
-
 use std::{
     net::SocketAddr,
     path::Path,
@@ -53,18 +50,6 @@ use rand::{thread_rng, RngCore};
 
 const MAX_PROTOCOL_VERSION :u32 = 70001;
 
-/// a helper class to implement LightningConnector
-pub struct Broadcaster {
-    p2p: P2PControlSender
-}
-
-impl BroadcasterInterface for Broadcaster {
-    /// send a transaction to all connected peers
-    fn broadcast_transaction(&self, tx: &Transaction) {
-        self.p2p.send(P2PControl::Broadcast(NetworkMessage::Tx(tx.clone())))
-    }
-}
-
 /// The complete stack
 pub struct Constructor {
     network: Network,
@@ -73,8 +58,6 @@ pub struct Constructor {
     chaindb: SharedChainDB,
     listen: Vec<SocketAddr>,
     server: bool,
-    /// The Lightning Network connector
-    pub connector: Option<Arc<LightningConnector>>
 }
 
 impl Constructor {
@@ -89,7 +72,7 @@ impl Constructor {
         let configdb = Arc::new(Mutex::new(ConfigDB::new(path)?));
         let chaindb = Arc::new(RwLock::new(ChainDB::new(path, network,server, server)?));
         create_tables(configdb.clone())?;
-        Ok(Constructor { network, user_agent, configdb, chaindb, listen, server, connector: None })
+        Ok(Constructor { network, user_agent, configdb, chaindb, listen, server })
     }
 
     /// Initialize the stack and return a ChainWatchInterface
@@ -102,7 +85,7 @@ impl Constructor {
         let configdb = Arc::new(Mutex::new(ConfigDB::mem()?));
         let chaindb = Arc::new(RwLock::new(ChainDB::mem( network,server, server)?));
         create_tables(configdb.clone())?;
-        Ok(Constructor { network, user_agent, configdb, chaindb, listen, server, connector: None })
+        Ok(Constructor { network, user_agent, configdb, chaindb, listen, server })
     }
 
 	/// Run the stack. This should be called AFTER registering listener of the ChainWatchInterface,
@@ -123,11 +106,8 @@ impl Constructor {
         let (p2p, p2p_control) =
             P2P::new(self.user_agent.clone(), self.network, 0, MAX_PROTOCOL_VERSION, self.server, PeerMessageSender::new(to_dispatcher), back_pressure);
 
-        let lightning = Arc::new(LightningConnector::new(self.network, Arc::new(Broadcaster { p2p: p2p_control.clone() })));
-        self.connector = Some(lightning.clone());
-
         let dispatcher =
-            Dispatcher::new(self.network, self.configdb.clone(), self.chaindb.clone(), self.server, lightning, p2p_control.clone(), from_p2p);
+            Dispatcher::new(self.network, self.configdb.clone(), self.chaindb.clone(), self.server, p2p_control.clone(), from_p2p);
 
         dispatcher.init(self.server).unwrap();
 

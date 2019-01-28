@@ -18,7 +18,6 @@
 //!
 
 
-use connector::LightningConnector;
 use configdb::SharedConfigDB;
 use chaindb::SharedChainDB;
 use error::MurmelError;
@@ -69,14 +68,12 @@ pub struct Dispatcher {
     // peer timeout tracker
     timeout: SharedTimeout,
     // filter downloader (client side)
-    filterdownload: PeerMessageSender,
-    // lightning connector
-    connector: Arc<LightningConnector>
+    filterdownload: PeerMessageSender
 }
 
 impl Dispatcher {
     /// Create a new local node
-    pub fn new(network: Network, configdb: SharedConfigDB, chaindb: SharedChainDB, server: bool, connector: Arc<LightningConnector>, p2p: P2PControlSender, incoming: PeerMessageReceiver) -> Arc<Dispatcher> {
+    pub fn new(network: Network, configdb: SharedConfigDB, chaindb: SharedChainDB, server: bool, p2p: P2PControlSender, incoming: PeerMessageReceiver) -> Arc<Dispatcher> {
 
         let timeout = Arc::new(Mutex::new(Timeout::new(p2p.clone())));
 
@@ -120,8 +117,7 @@ impl Dispatcher {
             block_server,
             ping,
             timeout,
-            filterdownload,
-            connector
+            filterdownload
         });
 
         let d2 = dispatcher.clone();

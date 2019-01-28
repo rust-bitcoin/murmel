@@ -29,7 +29,6 @@
 extern crate rayon;
 extern crate mio;
 extern crate bitcoin;
-extern crate lightning;
 extern crate hammersbald;
 extern crate byteorder;
 #[macro_use]
@@ -53,7 +52,6 @@ mod filtercalculator;
 mod configdb;
 mod dispatcher;
 mod error;
-mod connector;
 mod blockfilter;
 mod p2p;
 mod dns;
