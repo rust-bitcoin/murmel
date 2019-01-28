@@ -42,6 +42,8 @@ use hammersbald::{
     transient,
 };
 
+use rayon::prelude::{ParallelIterator, ParallelSlice};
+
 use std::{
     collections::{HashMap, VecDeque},
     sync::{Arc, RwLock, Mutex},
@@ -353,33 +355,45 @@ impl ChainDB {
         }
         remains.sort();
         if remains.len() > 0 {
-            // check what remains in coin filters
             let from = self.scriptcache.lock().unwrap().complete_after();
-            // iterate backward on blocks starting with the highest one not covered by the cache
-            for header in self.iter_trunk_rev(Some(from)) {
-                // if filter is known for this block
-                if let Some(filter) = self.get_block_filter(&header.header.bitcoin_hash(), COIN_FILTER) {
-                    // check in a single pass read if any coins we search for might be in the filter for this block
-                    let reader = BlockFilterReader::new(&header.bitcoin_hash())?;
-                    if reader.match_any(&mut Cursor::new(filter.filter.unwrap()), &remains)? {
-                        // do we have the block ?
-                        if let Some(block) = self.fetch_stored_block(&header.bitcoin_hash())? {
-                            // for all transactions
-                            for (txpos, txid) in block.txids.iter().enumerate() {
-                                // check if any or many! outputs of this transaction are those we search for
-                                while let Ok(pos) = remains.binary_search_by(|r| r[0..32].cmp(txid.as_bytes())) {
-                                    // a transaction that we are interested in
-                                    let coin = OutPoint::consensus_decode(&mut Cursor::new(remains[pos].as_slice()))?;
-                                    // get the script
-                                    let tx = self.fetch_transaction(block.txrefs[txpos])?;
-                                    sofar.push(tx.output[coin.vout as usize].script_pubkey.clone());
-                                    // one less to worry about
-                                    remains.remove(pos);
-                                    // are we done?
-                                    if remains.len() == 0 {
-                                        break;
-                                    }
-                                }
+
+            let mapped = remains.par_chunks(100).map(|remains| {
+                let remains = remains.to_vec();
+                self.resolve_with_filters(from, remains)
+            }).flatten().collect::<Vec<_>>();
+            sofar.extend (mapped);
+        }
+        // are we done?
+        if remains.len () > sofar.len() {
+            let coins = remains.iter().map(|v| OutPoint::consensus_decode(&mut Cursor::new(v.as_slice())).unwrap())
+                .map(|o| format!("{} {}", o.txid, o.vout)).collect::<Vec<_>>();
+            error!("can not find coins {:?}", coins);
+            return Err(SPVError::UnknownUTXO);
+        }
+        Ok(sofar)
+    }
+
+    fn resolve_with_filters (&self, from: u32, mut remains: Vec<Vec<u8>>) -> Vec<Script> {
+        let mut sofar = Vec::new();
+        for header in self.iter_trunk_rev(Some(from)) {
+            // if filter is known for this block
+            if let Some(filter) = self.get_block_filter(&header.header.bitcoin_hash(), COIN_FILTER) {
+                // check in a single pass read if any coins we search for might be in the filter for this block
+                let reader = BlockFilterReader::new(&header.bitcoin_hash()).unwrap();
+                if reader.match_any(&mut Cursor::new(filter.filter.unwrap()), &remains).unwrap() {
+                    // do we have the block ?
+                    if let Some(block) = self.fetch_stored_block(&header.bitcoin_hash()).unwrap() {
+                        // for all transactions
+                        for (txpos, txid) in block.txids.iter().enumerate() {
+                            // check if any or many! outputs of this transaction are those we search for
+                            while let Ok(pos) = remains.binary_search_by(|r| r[0..32].cmp(txid.as_bytes())) {
+                                // a transaction that we are interested in
+                                let coin = OutPoint::consensus_decode(&mut Cursor::new(remains[pos].as_slice())).unwrap();
+                                // get the script
+                                let tx = self.fetch_transaction(block.txrefs[txpos]).unwrap();
+                                sofar.push(tx.output[coin.vout as usize].script_pubkey.clone());
+                                // one less to worry about
+                                remains.remove(pos);
                                 // are we done?
                                 if remains.len() == 0 {
                                     break;
@@ -390,18 +404,15 @@ impl ChainDB {
                                 break;
                             }
                         }
+                        // are we done?
+                        if remains.len() == 0 {
+                            break;
+                        }
                     }
                 }
             }
         }
-        // are we done?
-        if remains.len () > 0 {
-            let coins = remains.iter().map(|v| OutPoint::consensus_decode(&mut Cursor::new(v.as_slice())).unwrap())
-                .map(|o| format!("{} {}", o.txid, o.vout)).collect::<Vec<_>>();
-            error!("can not find coins {:?}", coins);
-            return Err(SPVError::UnknownUTXO);
-        }
-        Ok(sofar)
+        sofar
     }
 
     pub fn get_script_accessor<'a>(&'a self, block: &Block) -> DBScriptAccessor<'a> {

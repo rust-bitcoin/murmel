@@ -26,6 +26,7 @@
 #![deny(missing_docs)]
 #![deny(unused_must_use)]
 
+extern crate rayon;
 extern crate mio;
 extern crate bitcoin;
 extern crate lightning;
