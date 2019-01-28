@@ -15,8 +15,8 @@ name = "murmel"
 path = "src/lib.rs"
 
 [dependencies]
-bitcoin = { git= "https://github.com/tamasblummer/rust-bitcoin.git", branch = "open_prs_0.16", features = ["bitcoinconsensus"] }
-hammersbald = { git= "https://github.com/tamasblummer/hammersbald.git", branch = "1.5.1_patched_bitcoin", features=["bitcoin_support"]}
+bitcoin = { version="0.16", features = ["bitcoinconsensus"] }
+hammersbald = { version="1.5.1", features=["bitcoin_support"]}
 mio = "0.6"
 rand = "0.5"
 siphasher = "0.2"
@@ -32,3 +32,6 @@ futures-timer= { git= "https://github.com/tamasblummer/futures-timer.git", branc
 rustc-serialize = "0.3"
 hex = "0.3"
 tempfile = "3.0.2"
+
+[patch.crates-io]
+bitcoin = { git= "https://github.com/tamasblummer/rust-bitcoin.git", branch = "open_prs_0.16", features = ["bitcoinconsensus"] }
