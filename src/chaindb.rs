@@ -35,7 +35,6 @@ use error::SPVError;
 use filtercache::FilterCache;
 use headercache::{HeaderCache, HeaderIterator};
 use blockfilter::{BlockFilter, BlockFilterReader, COIN_FILTER, SCRIPT_FILTER};
-use scriptcache::ScriptCache;
 
 use hammersbald::{
     BitcoinAdaptor, HammersbaldAPI, persistent, PRef,
@@ -60,38 +59,35 @@ pub struct ChainDB {
     heavy: Option<BitcoinAdaptor>,
     headercache: HeaderCache,
     filtercache: FilterCache,
-    scriptcache: Mutex<ScriptCache>,
     network: Network,
 }
 
 impl ChainDB {
     /// Create an in-memory database instance
-    pub fn mem(network: Network, heavy: bool, server: bool, script_cache_size: usize) -> Result<ChainDB, SPVError> {
+    pub fn mem(network: Network, heavy: bool, server: bool) -> Result<ChainDB, SPVError> {
         info!("working with in memory chain db");
         let light = BitcoinAdaptor::new(transient(2)?);
         let headercache = HeaderCache::new(network);
         let filtercache = FilterCache::new(server);
-        let scriptcache = Mutex::new(ScriptCache::new(script_cache_size));
         if heavy {
             let heavy = Some(BitcoinAdaptor::new(transient(2)?));
-            Ok(ChainDB { light, heavy, network, headercache, filtercache, scriptcache })
+            Ok(ChainDB { light, heavy, network, headercache, filtercache })
         } else {
-            Ok(ChainDB { light, heavy: None, network, headercache, filtercache, scriptcache })
+            Ok(ChainDB { light, heavy: None, network, headercache, filtercache })
         }
     }
 
     /// Create or open a persistent database instance identified by the path
-    pub fn new(path: &Path, network: Network, heavy: bool, server: bool, script_cache_size: usize) -> Result<ChainDB, SPVError> {
+    pub fn new(path: &Path, network: Network, heavy: bool, server: bool) -> Result<ChainDB, SPVError> {
         let basename = path.to_str().unwrap().to_string();
         let light = BitcoinAdaptor::new(persistent((basename.clone() + ".h").as_str(), 100, 2)?);
         let headercache = HeaderCache::new(network);
         let filtercache = FilterCache::new(server);
-        let scriptcache = Mutex::new(ScriptCache::new(script_cache_size));
         if heavy {
             let heavy = Some(BitcoinAdaptor::new(persistent((basename + ".b").as_str(), 1000, 2)?));
-            Ok(ChainDB { light, heavy, network, headercache, filtercache, scriptcache })
+            Ok(ChainDB { light, heavy, network, headercache, filtercache })
         } else {
-            Ok(ChainDB { light, heavy: None, network, headercache, filtercache, scriptcache })
+            Ok(ChainDB { light, heavy: None, network, headercache, filtercache })
         }
     }
 
@@ -322,44 +318,17 @@ impl ChainDB {
         panic!("should not call store block before header is known {}", block.bitcoin_hash());
     }
 
-    pub fn cache_scripts(&mut self, block: &Block, height: u32) {
-        let block_id = Arc::new(block.bitcoin_hash());
-        let mut script_cache = self.scriptcache.lock().unwrap();
-        for (i, tx) in block.txdata.iter().enumerate() {
-            let tx_nr = i as u32;
-            let txid = tx.txid();
-            for (idx, output) in tx.output.iter().enumerate() {
-                let vout = idx as u32;
-                if !output.script_pubkey.is_provably_unspendable() {
-                    script_cache.insert(OutPoint{txid, vout}, output.script_pubkey.clone(), height);
-                }
-            }
-        }
-    }
-
-    pub fn get_scripts(&self, coins: Vec<OutPoint>, mut sofar: Vec<Script>) -> Result<Vec<Script>, SPVError> {
-        let mut remains = Vec::with_capacity(coins.len());
-        {
-            // check in script cache
-            let mut scriptcache = self.scriptcache.lock().unwrap();
-            for coin in coins {
-                if let Some(script) = scriptcache.remove(&coin) {
-                    sofar.push(script);
-                }
-                else {
-                    let mut buf = Vec::new();
-                    coin.consensus_encode(&mut buf)?;
-                    remains.push(buf);
-                }
-            }
-        }
+    pub fn get_scripts(&self, height: u32, coins: Vec<OutPoint>, mut sofar: Vec<Script>) -> Result<Vec<Script>, SPVError> {
+        let mut remains = coins.iter().map(|coin| {
+            let mut buf = Vec::new();
+            coin.consensus_encode(&mut buf).unwrap();
+            buf
+        }).collect::<Vec<_>>();
         remains.sort();
         if remains.len() > 0 {
-            let from = self.scriptcache.lock().unwrap().complete_after();
-
             let mapped = remains.par_chunks(100).map(|remains| {
                 let remains = remains.to_vec();
-                self.resolve_with_filters(from, remains)
+                self.resolve_with_filters(height, remains)
             }).flatten().collect::<Vec<_>>();
             sofar.extend (mapped);
         }
@@ -592,11 +561,11 @@ impl<'a> DBScriptAccessor<'a> {
 
 
 pub trait ScriptAccessor {
-    fn get_scripts(&self, coins: Vec<OutPoint>) -> Result<Vec<Script>, SPVError>;
+    fn get_scripts(&self, height: u32, coins: Vec<OutPoint>) -> Result<Vec<Script>, SPVError>;
 }
 
 impl<'a> ScriptAccessor for DBScriptAccessor<'a> {
-    fn get_scripts(&self, coins: Vec<OutPoint>) -> Result<Vec<Script>, SPVError> {
+    fn get_scripts(&self, height: u32, coins: Vec<OutPoint>) -> Result<Vec<Script>, SPVError> {
         let mut sofar = Vec::with_capacity(coins.len());
         let mut remains = Vec::with_capacity(coins.len());
         for coin in coins {
@@ -607,6 +576,6 @@ impl<'a> ScriptAccessor for DBScriptAccessor<'a> {
                 remains.push(coin);
             }
         }
-        self.db.get_scripts(remains, sofar)
+        self.db.get_scripts(height, remains, sofar)
     }
 }
