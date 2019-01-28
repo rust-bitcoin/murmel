@@ -28,7 +28,7 @@ use bitcoin::{
     util::hash::Sha256dHash,
 };
 use chaindb::SharedChainDB;
-use error::SPVError;
+use error::MurmelError;
 use p2p::{P2PControl, P2PControlSender, PeerId, PeerMessage, PeerMessageReceiver, PeerMessageSender, SERVICE_BLOCKS};
 use timeout::{ExpectedReply, SharedTimeout};
 use std::{
@@ -97,7 +97,7 @@ impl HeaderDownload {
     }
 
     // process an incoming inventory announcement
-    fn inv(&mut self, v: &Vec<Inventory>, peer: PeerId) -> Result<(), SPVError> {
+    fn inv(&mut self, v: &Vec<Inventory>, peer: PeerId) -> Result<(), MurmelError> {
         let mut ask_for_headers = false;
         for inventory in v {
             // only care for blocks
@@ -122,7 +122,7 @@ impl HeaderDownload {
     }
 
     /// get headers this peer is ahead of us
-    fn get_headers(&mut self, peer: PeerId) -> Result<(), SPVError> {
+    fn get_headers(&mut self, peer: PeerId) -> Result<(), MurmelError> {
         if self.timeout.lock().unwrap().is_busy_with(peer, ExpectedReply::Headers) {
             return Ok(());
         }
@@ -140,7 +140,7 @@ impl HeaderDownload {
         Ok(())
     }
 
-    fn headers(&mut self, headers: &Vec<LoneBlockHeader>, peer: PeerId) -> Result<(), SPVError> {
+    fn headers(&mut self, headers: &Vec<LoneBlockHeader>, peer: PeerId) -> Result<(), MurmelError> {
 
         self.timeout.lock().unwrap().received(peer, 1, ExpectedReply::Headers);
 
@@ -156,7 +156,7 @@ impl HeaderDownload {
                 if let Some(tip) = chaindb.header_tip() {
                     height = tip.height;
                 } else {
-                    return Err(SPVError::NoTip);
+                    return Err(MurmelError::NoTip);
                 }
             }
 
@@ -185,7 +185,7 @@ impl HeaderDownload {
                                 }
                             }
                             Ok(None) => {}
-                            Err(SPVError::SpvBadProofOfWork) => {
+                            Err(MurmelError::SpvBadProofOfWork) => {
                                 info!("Incorrect POW, banning peer={}", peer);
                                 self.ban(peer, 100);
                                 return Ok(());

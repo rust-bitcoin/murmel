@@ -1,17 +1,17 @@
 [package]
-name = "bitcoin-spv"
+name = "murmel"
 version = "0.1.0"
 authors = ["Tamas Blummer <tamas.blummer@gmail.com>"]
 license = "Apache-2.0"
-homepage = "https://github.com/rust-bitcoin/rust-bitcoin-spv/"
-repository = "https://github.com/rust-bitcoin/rust-bitcoin-spv/"
-documentation = "https://github.com/rust-bitcoin/rust-bitcoin-spv/"
-description = "SPV client for Bitcoin"
-keywords = [ "bitcoin", "SPV" ]
+homepage = "https://github.com/rust-bitcoin/murmel/"
+repository = "https://github.com/rust-bitcoin/murmel/"
+documentation = "https://github.com/rust-bitcoin/murmel/"
+description = "Murmel Bitcoin node"
+keywords = [ "bitcoin" ]
 readme = "README.md"
 
 [lib]
-name = "bitcoin_spv"
+name = "murmel"
 path = "src/lib.rs"
 
 [dependencies]

@@ -14,14 +14,14 @@
 // limitations under the License.
 //
 //!
-//! # Configuration Database layer for the Bitcoin SPV client
+//! # Configuration Database layer for the Murmel Bitcoin node
 //!
 //! Stores the wallet and various runtime and configuration data.
 //!
 
 
 use bitcoin::network::address::Address;
-use error::SPVError;
+use error::MurmelError;
 use rusqlite;
 use rusqlite::{Connection, Error, OpenFlags};
 
@@ -51,13 +51,13 @@ pub struct ConfigTX<'a> {
 
 impl ConfigDB {
     /// Create an in-memory database instance
-    pub fn mem() -> Result<ConfigDB, SPVError> {
+    pub fn mem() -> Result<ConfigDB, MurmelError> {
         info!("working with memory database");
         Ok(ConfigDB { conn: Connection::open_in_memory()?})
     }
 
     /// Create or open a persistent database instance identified by the path
-    pub fn new(path: &Path) -> Result<ConfigDB, SPVError> {
+    pub fn new(path: &Path) -> Result<ConfigDB, MurmelError> {
         let db = ConfigDB {
             conn: Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE |
                 OpenFlags::SQLITE_OPEN_CREATE | OpenFlags::SQLITE_OPEN_FULL_MUTEX)? };
@@ -66,7 +66,7 @@ impl ConfigDB {
     }
 
     /// Start a transaction. All operations must happen within the context of a transaction
-    pub fn transaction<'a>(&'a mut self) -> Result<ConfigTX<'a>, SPVError> {
+    pub fn transaction<'a>(&'a mut self) -> Result<ConfigTX<'a>, MurmelError> {
         trace!("starting transaction");
         Ok(ConfigTX { tx: self.conn.transaction()?, dirty: Cell::new(false) })
     }
@@ -74,7 +74,7 @@ impl ConfigDB {
 
 impl<'a> ConfigTX<'a> {
     /// commit the transaction
-    pub fn commit(self) -> Result<(), SPVError> {
+    pub fn commit(self) -> Result<(), MurmelError> {
         if self.dirty.get() {
             self.tx.commit()?;
             trace!("committed transaction");
@@ -84,7 +84,7 @@ impl<'a> ConfigTX<'a> {
 
     /// rollback the transaction
     #[allow(unused)]
-    pub fn rollback(self) -> Result<(), SPVError> {
+    pub fn rollback(self) -> Result<(), MurmelError> {
         self.tx.rollback()?;
         trace!("rolled back transaction");
         Ok(())
@@ -98,7 +98,7 @@ impl<'a> ConfigTX<'a> {
     ///   * tx - transactions
     ///   * blk_tx - n:m mapping of header to transactions to form a block.
     ///   * peers - list of known peers
-    pub fn create_tables(&mut self) -> Result<(), SPVError> {
+    pub fn create_tables(&mut self) -> Result<(), MurmelError> {
         trace!("creating tables...");
         self.dirty.set(true);
 
@@ -124,7 +124,7 @@ impl<'a> ConfigTX<'a> {
 
 
     #[allow(unused)]
-    pub fn get_birth(&self) -> Result<u32, SPVError> {
+    pub fn get_birth(&self) -> Result<u32, MurmelError> {
         Ok(self.tx.query_row("select inception from birth",
                              &[],
                              |row| {
@@ -136,7 +136,7 @@ impl<'a> ConfigTX<'a> {
     ///   * last_seen - in unix epoch seconds
     ///   * banned_until - in unix epoch seconds
     ///   * speed - in ms as measured with ping
-    pub fn store_peer (&mut self, address: &Address, last_seen: u32, banned_until: u32) -> Result<(), SPVError> {
+    pub fn store_peer (&mut self, address: &Address, last_seen: u32, banned_until: u32) -> Result<(), MurmelError> {
         self.dirty.set(true);
         let mut s = String::new();
         for d in address.address.iter() {
@@ -156,7 +156,7 @@ impl<'a> ConfigTX<'a> {
     }
 
     #[allow(unused)]
-    pub fn ban (&mut self, addr: &SocketAddr) -> Result<i32, SPVError> {
+    pub fn ban (&mut self, addr: &SocketAddr) -> Result<i32, MurmelError> {
         self.dirty.set(true);
         let address = Address::new (addr, 0);
         let mut s = String::new();
@@ -168,7 +168,7 @@ impl<'a> ConfigTX<'a> {
     }
 
     #[allow(unused)]
-    pub fn remove_peer (&mut self, addr: &SocketAddr) -> Result<i32, SPVError> {
+    pub fn remove_peer (&mut self, addr: &SocketAddr) -> Result<i32, MurmelError> {
         self.dirty.set(true);
         let address = Address::new (addr, 0);
         let mut s = String::new();
@@ -179,12 +179,12 @@ impl<'a> ConfigTX<'a> {
     }
 
     /// get a random stored peer
-    pub fn get_a_peer (&self, earlier: &HashSet<SocketAddr>) -> Result<Address, SPVError> {
+    pub fn get_a_peer (&self, earlier: &HashSet<SocketAddr>) -> Result<Address, MurmelError> {
         let n_peers: i64 = self.tx.query_row(
             "select count(*) from peers", &[], | row | { row.get(0) })?;
 
         if n_peers == 0 {
-            return Err(SPVError::NoPeers);
+            return Err(MurmelError::NoPeers);
         }
 
         let mut rng = rand::thread_rng();
@@ -214,6 +214,6 @@ impl<'a> ConfigTX<'a> {
                 }
             }
         }
-        Err(SPVError::NoPeers)
+        Err(MurmelError::NoPeers)
     }
 }

@@ -36,7 +36,7 @@ use std::{
     time::Duration,
 };
 use timeout::{ExpectedReply, SharedTimeout};
-use error::SPVError;
+use error::MurmelError;
 use blockfilter::SCRIPT_FILTER;
 use chaindb::StoredFilter;
 
@@ -94,7 +94,7 @@ impl FilterDownload {
         false
     }
 
-    fn get_filter_headers(&mut self, peer: PeerId, filter_type: u8) -> Result<(), SPVError> {
+    fn get_filter_headers(&mut self, peer: PeerId, filter_type: u8) -> Result<(), MurmelError> {
         if self.timeout.lock().unwrap().is_busy_with(peer, ExpectedReply::FilterHeader) {
             return Ok(());
         }
@@ -122,7 +122,7 @@ impl FilterDownload {
         Ok(())
     }
 
-    fn filter_headers(&mut self, headers: CFHeaders, peer: PeerId) -> Result<(), SPVError> {
+    fn filter_headers(&mut self, headers: CFHeaders, peer: PeerId) -> Result<(), MurmelError> {
 
         let previous_block_pos = if headers.previous_filter == Sha256dHash::default() {
             Some(0)
@@ -154,11 +154,11 @@ impl FilterDownload {
         Ok(())
     }
 
-    fn filter (&mut self, filter: CFilter, peer: PeerId) -> Result<(), SPVError> {
+    fn filter (&mut self, filter: CFilter, peer: PeerId) -> Result<(), MurmelError> {
         Ok(())
     }
 
-    fn inv(&mut self, v: Vec<Inventory>, peer: PeerId) -> Result<(), SPVError> {
+    fn inv(&mut self, v: Vec<Inventory>, peer: PeerId) -> Result<(), MurmelError> {
         let mut ask_for_headers = false;
         for inventory in v {
             // only care for blocks

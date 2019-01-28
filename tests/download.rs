@@ -1,6 +1,6 @@
 extern crate tempfile;
 extern crate bitcoin;
-extern crate bitcoin_spv;
+extern crate murmel;
 extern crate simple_logger;
 extern crate log;
 
@@ -12,7 +12,7 @@ use std::process::{Command, Stdio};
 use std::{thread, time};
 
 use bitcoin::network::constants::Network;
-use bitcoin_spv::constructor::Constructor;
+use murmel::constructor::Constructor;
 use log::Level;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 

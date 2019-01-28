@@ -21,7 +21,7 @@
 //! that minimizes filter size by using Golomb-Rice coding for compression.
 //!
 
-use error::SPVError;
+use error::MurmelError;
 use chaindb::ScriptAccessor;
 
 use bitcoin::{
@@ -59,7 +59,7 @@ pub struct BlockFilter {
 
 impl BlockFilter {
 
-    pub fn compute_script_filter(block: &Block, height: u32, script_accessor: impl ScriptAccessor) -> Result<BlockFilter, SPVError> {
+    pub fn compute_script_filter(block: &Block, height: u32, script_accessor: impl ScriptAccessor) -> Result<BlockFilter, MurmelError> {
         let mut bytes = Vec::new();
         let mut out = Cursor::new(&mut bytes);
         {
@@ -70,7 +70,7 @@ impl BlockFilter {
         Ok(BlockFilter{block: block.bitcoin_hash(), filter_type: SCRIPT_FILTER, content: out.into_inner().to_vec()})
     }
 
-    pub fn compute_coin_filter(block: &Block) -> Result<BlockFilter, SPVError> {
+    pub fn compute_coin_filter(block: &Block) -> Result<BlockFilter, MurmelError> {
         let mut bytes = Vec::new();
         let mut out = Cursor::new(&mut bytes);
         {
@@ -108,7 +108,7 @@ impl <'a> BlockFilterWriter<'a> {
     }
 
     /// Add consumed output scripts of a block to filter
-    fn add_consumed_scripts (&mut self, height: u32, tx_accessor: impl ScriptAccessor) -> Result<(), SPVError> {
+    fn add_consumed_scripts (&mut self, height: u32, tx_accessor: impl ScriptAccessor) -> Result<(), MurmelError> {
         let mut coins = Vec::new();
         for transaction in &self.block.txdata {
             if !transaction.is_coin_base() {
@@ -124,13 +124,13 @@ impl <'a> BlockFilterWriter<'a> {
     }
 
     /// compile a filter useful for wallets
-    pub fn script_filter(&mut self, height: u32, tx_accessor: impl ScriptAccessor) -> Result<(), SPVError> {
+    pub fn script_filter(&mut self, height: u32, tx_accessor: impl ScriptAccessor) -> Result<(), MurmelError> {
         self.add_output_scripts();
         self.add_consumed_scripts(height, tx_accessor)
     }
 
     /// compile a filter useful to find spent outputs
-    pub fn coin_filter(&mut self) -> Result<(), SPVError> {
+    pub fn coin_filter(&mut self) -> Result<(), MurmelError> {
         let mut buf = Vec::with_capacity(40);
         for tx in &self.block.txdata {
             let txid = tx.txid();
@@ -409,7 +409,7 @@ mod test {
     use bitcoin::blockdata::script::Script;
     use bitcoin::blockdata::transaction::OutPoint;
 
-    use error::SPVError;
+    use error::MurmelError;
     use blockfilter::test::rustc_serialize::json::Json;
     use rand;
     use rand::RngCore;
@@ -432,7 +432,7 @@ mod test {
     }
 
     impl ScriptAccessor for HashMap<OutPoint, Script> {
-        fn get_scripts(&self, _: u32, coins: Vec<OutPoint>) -> Result<Vec<Script>, SPVError> {
+        fn get_scripts(&self, _: u32, coins: Vec<OutPoint>) -> Result<Vec<Script>, MurmelError> {
             let mut result = Vec::new();
             for coin in coins {
                 if let Some(ux) = self.get(&coin) {

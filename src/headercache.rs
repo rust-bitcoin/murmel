@@ -27,7 +27,7 @@ use bitcoin::{
     },
 };
 use chaindb::StoredHeader;
-use error::SPVError;
+use error::MurmelError;
 use hammersbald::PRef;
 use std::{
     collections::HashMap,
@@ -63,7 +63,7 @@ impl HeaderCache {
     }
 
     /// add a Bitcoin header
-    pub fn add_header(&mut self, header: &BlockHeader) -> Result<Option<(StoredHeader, Option<Vec<Sha256dHash>>, Option<Vec<Sha256dHash>>)>, SPVError> {
+    pub fn add_header(&mut self, header: &BlockHeader) -> Result<Option<(StoredHeader, Option<Vec<Sha256dHash>>, Option<Vec<Sha256dHash>>)>, MurmelError> {
         if self.headers.get(&header.bitcoin_hash()).is_some() {
             // ignore already known header
             return Ok(None);
@@ -75,7 +75,7 @@ impl HeaderCache {
                 previous = prev.clone();
             } else {
                 // reject unconnected
-                return Err(SPVError::UnconnectedHeader);
+                return Err(MurmelError::UnconnectedHeader);
             }
             // add  to tree
             return Ok(Some(self.add_header_to_tree(&previous, header)?));
@@ -114,7 +114,7 @@ impl HeaderCache {
     }
 
     // add header to tree, return stored, optional list of unwinds, optional list of extensions
-    fn add_header_to_tree(&mut self, prev: &StoredHeader, next: &BlockHeader) -> Result<(StoredHeader, Option<Vec<Sha256dHash>>, Option<Vec<Sha256dHash>>), SPVError> {
+    fn add_header_to_tree(&mut self, prev: &StoredHeader, next: &BlockHeader) -> Result<(StoredHeader, Option<Vec<Sha256dHash>>, Option<Vec<Sha256dHash>>), MurmelError> {
         const DIFFCHANGE_INTERVAL: u32 = 2016;
         const DIFFCHANGE_TIMESPAN: u32 = 14 * 24 * 3600;
         const TARGET_BLOCK_SPACING: u32 = 600;
@@ -132,7 +132,7 @@ impl HeaderCache {
                             if let Some(header) = self.headers.get(&scan.header.prev_blockhash) {
                                 scan = header.clone();
                             } else {
-                                return Err(SPVError::UnconnectedHeader);
+                                return Err(MurmelError::UnconnectedHeader);
                             }
                         }
                     }
@@ -170,7 +170,7 @@ impl HeaderCache {
                         scan = header.clone();
                         height = header.height;
                     } else {
-                        return Err(SPVError::UnconnectedHeader);
+                        return Err(MurmelError::UnconnectedHeader);
                     }
                 }
                 scan.header.target()
@@ -180,7 +180,7 @@ impl HeaderCache {
             };
 
         if next.spv_validate(&required_work).is_err() {
-            return Err(SPVError::SpvBadProofOfWork);
+            return Err(MurmelError::SpvBadProofOfWork);
         }
         // POW is sufficient
         let stored = StoredHeader {
@@ -205,7 +205,7 @@ impl HeaderCache {
                         forks_at = h.header.prev_blockhash;
                         path_to_new_tip.push(forks_at);
                     } else {
-                        return Err(SPVError::UnconnectedHeader);
+                        return Err(MurmelError::UnconnectedHeader);
                     }
                 }
                 path_to_new_tip.reverse();
@@ -223,7 +223,7 @@ impl HeaderCache {
                             self.trunk.truncate(pos + 1);
                         }
                     } else {
-                        return Err(SPVError::UnconnectedHeader);
+                        return Err(MurmelError::UnconnectedHeader);
                     }
                     self.trunk.extend(path_to_new_tip.iter().map(|h| { Arc::new(*h) }));
 
@@ -237,7 +237,7 @@ impl HeaderCache {
                 return Ok((stored, None, None));
             }
         } else {
-            return Err(SPVError::NoTip);
+            return Err(MurmelError::NoTip);
         }
     }
 

@@ -21,7 +21,7 @@
 use connector::LightningConnector;
 use configdb::SharedConfigDB;
 use chaindb::SharedChainDB;
-use error::SPVError;
+use error::MurmelError;
 use p2p::{PeerId, PeerMessageSender, PeerMessageReceiver, P2PControlSender, P2PControl, PeerMessage};
 use filtercalculator::FilterCalculator;
 use headerdownload::HeaderDownload;
@@ -154,13 +154,13 @@ impl Dispatcher {
     }
 
     /// initialize node
-    pub fn init(&self, server: bool) -> Result<(), SPVError> {
+    pub fn init(&self, server: bool) -> Result<(), MurmelError> {
         self.chaindb.write().unwrap().init(server)?;
         Ok(())
     }
 
     /// called from dispatcher whenever a new peer is connected (after handshake is successful)
-    pub fn connected(&self, pm: PeerMessage) -> Result<(), SPVError> {
+    pub fn connected(&self, pm: PeerMessage) -> Result<(), MurmelError> {
         debug!("connected peer={}", pm.peer_id());
         self.header_downloader.send (pm.clone());
         self.filterdownload.send(pm.clone());
@@ -169,13 +169,13 @@ impl Dispatcher {
     }
 
     /// called from dispatcher whenever a peer is disconnected
-    pub fn disconnected(&self, pm: PeerMessage) -> Result<(), SPVError> {
+    pub fn disconnected(&self, pm: PeerMessage) -> Result<(), MurmelError> {
         self.filter_calculator.send(pm);
         Ok(())
     }
 
     /// Process incoming messages
-    pub fn process(&self, msg: NetworkMessage, peer: PeerId) -> Result<(), SPVError> {
+    pub fn process(&self, msg: NetworkMessage, peer: PeerId) -> Result<(), MurmelError> {
         Ok(match msg {
             NetworkMessage::Ping(nonce) => {
                 self.p2p.send_network(peer, NetworkMessage::Pong(nonce));
@@ -239,7 +239,7 @@ impl Dispatcher {
     }
 
     // process incoming addr messages
-    fn addr(&self, v: &Vec<(u32, Address)>, peer: PeerId) -> Result<(), SPVError> {
+    fn addr(&self, v: &Vec<(u32, Address)>, peer: PeerId) -> Result<(), MurmelError> {
         // store if interesting, that is ...
         let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as u32;
         let mut db = self.configdb.lock().unwrap();

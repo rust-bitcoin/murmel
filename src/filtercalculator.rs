@@ -33,7 +33,7 @@ use bitcoin::{
 use chaindb::SharedChainDB;
 use blockfilter::BlockFilter;
 use p2p::{P2PControl, P2PControlSender, PeerId, PeerMessage, PeerMessageReceiver, PeerMessageSender};
-use error::SPVError;
+use error::MurmelError;
 use blockfilter::{COIN_FILTER, SCRIPT_FILTER};
 use timeout::{ExpectedReply, SharedTimeout};
 
@@ -131,7 +131,7 @@ impl FilterCalculator {
         }
     }
 
-    fn download (&mut self) -> Result<(), SPVError> {
+    fn download (&mut self) -> Result<(), MurmelError> {
         let genesis = genesis_block(self.network);
         // can not work if no peer is connected
         if let Some(peer) = self.peer {
@@ -186,7 +186,7 @@ impl FilterCalculator {
         Ok(())
     }
 
-    fn block(&mut self, peer: PeerId, block: &Block) -> Result<(), SPVError> {
+    fn block(&mut self, peer: PeerId, block: &Block) -> Result<(), MurmelError> {
         if self.want.remove(&block.bitcoin_hash()) {
             let block_id = block.bitcoin_hash();
             let mut chaindb = self.chaindb.write().unwrap();

@@ -14,13 +14,13 @@
 // limitations under the License.
 //
 //!
-//! # SPV
+//! # Construct the Murmel stack
 //!
-//! Assembles modules of this library to a complete SPV service
+//! Assembles modules of this library to a complete service
 //!
 
 use configdb::{ConfigDB, SharedConfigDB};
-use error::SPVError;
+use error::MurmelError;
 use dispatcher::Dispatcher;
 use p2p::{P2P,PeerMessageSender, P2PControl, P2PControlSender, PeerSource, SERVICE_BLOCKS, SERVICE_WITNESS, SERVICE_FILTERS};
 use chaindb::{ChainDB, SharedChainDB};
@@ -85,7 +85,7 @@ impl Constructor {
     ///      db - file path to data
     /// The method will read previously stored headers from the database and sync up with the peers
     /// then serve the returned ChainWatchInterface
-    pub fn new(user_agent :String, network: Network, path: &Path, listen: Vec<SocketAddr>, server: bool) -> Result<Constructor, SPVError> {
+    pub fn new(user_agent :String, network: Network, path: &Path, listen: Vec<SocketAddr>, server: bool) -> Result<Constructor, MurmelError> {
         let configdb = Arc::new(Mutex::new(ConfigDB::new(path)?));
         let chaindb = Arc::new(RwLock::new(ChainDB::new(path, network,server, server)?));
         create_tables(configdb.clone())?;
@@ -98,19 +98,19 @@ impl Constructor {
     ///      bootstrap - peer adresses (only tested to work with one local node for now)
     /// The method will start with an empty in-memory database and sync up with the peers
     /// then serve the returned ChainWatchInterface
-    pub fn new_in_memory(user_agent :String, network: Network, listen: Vec<SocketAddr>, server: bool) -> Result<Constructor, SPVError> {
+    pub fn new_in_memory(user_agent :String, network: Network, listen: Vec<SocketAddr>, server: bool) -> Result<Constructor, MurmelError> {
         let configdb = Arc::new(Mutex::new(ConfigDB::mem()?));
         let chaindb = Arc::new(RwLock::new(ChainDB::mem( network,server, server)?));
         create_tables(configdb.clone())?;
         Ok(Constructor { network, user_agent, configdb, chaindb, listen, server, connector: None })
     }
 
-	/// Run the SPV stack. This should be called AFTER registering listener of the ChainWatchInterface,
-	/// so they are called as the SPV stack catches up with the blockchain
+	/// Run the stack. This should be called AFTER registering listener of the ChainWatchInterface,
+	/// so they are called as the stack catches up with the blockchain
 	/// * peers - connect to these peers at startup (might be empty)
 	/// * min_connections - keep connections with at least this number of peers. Peers will be randomly chosen
 	/// from those discovered in earlier runs
-    pub fn run(&mut self, peers: Vec<SocketAddr>, min_connections: usize, nodns: bool) -> Result<(), SPVError>{
+    pub fn run(&mut self, peers: Vec<SocketAddr>, min_connections: usize, nodns: bool) -> Result<(), MurmelError>{
 
         let back_pressure = if self.server {
             1000
@@ -170,7 +170,7 @@ impl Constructor {
 
         struct KeepConnected {
             min_connections: usize,
-            connections: Vec<Box<Future<Item=SocketAddr, Error=SPVError> + Send>>,
+            connections: Vec<Box<Future<Item=SocketAddr, Error=MurmelError> + Send>>,
             db: Arc<Mutex<ConfigDB>>,
             p2p: Arc<P2P>,
             dns: Vec<SocketAddr>,
@@ -266,7 +266,7 @@ impl Constructor {
 
 
 /// create tables (if not already there) in the database
-fn create_tables(db: Arc<Mutex<ConfigDB>>) -> Result<(), SPVError> {
+fn create_tables(db: Arc<Mutex<ConfigDB>>) -> Result<(), MurmelError> {
     let mut db = db.lock().unwrap();
     let mut tx = db.transaction()?;
     tx.create_tables()?;

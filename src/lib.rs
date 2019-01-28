@@ -14,9 +14,9 @@
 // limitations under the License.
 //
 //!
-//! # Bitcoin SPV client
+//! # Murmel Bitcoin node
 //!
-//! This library implements a Simplified Payment Verification (SPV) client for Bitcoin
+//! This library implements a Simplified Payment Verification (SPV) of Bitcoin
 //!
 
 #![deny(non_upper_case_globals)]

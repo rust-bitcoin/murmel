@@ -14,7 +14,7 @@
 // limitations under the License.
 //
 extern crate bitcoin;
-extern crate bitcoin_spv;
+extern crate murmel;
 extern crate log;
 extern crate rand;
 extern crate simple_logger;
@@ -22,15 +22,14 @@ extern crate simple_logger;
 use std::env::args;
 
 use bitcoin::network::constants::Network;
-use bitcoin_spv::constructor::Constructor;
+use murmel::constructor::Constructor;
 use log::Level;
 use std::net::{SocketAddr,SocketAddrV4,Ipv4Addr};
 use std::path::Path;
 
-/// simple test drive that connects to a local bitcoind
 pub fn main() {
     if find_opt("help") {
-        println!("BIP157 Filter Client");
+        println!("Murmel Client");
         println!("{} [--help] [--log trace|debug|info|warn|error] [--connections n] [--peer ip_address:port] [--db database_file] [--network main|test]", args().next().unwrap());
         println!("--log level: level is one of trace|debug|info|warn|error");
         println!("--connections n: maintain at least n connections");
@@ -85,7 +84,7 @@ pub fn main() {
     else {
         spv = Constructor::new("/https://github.com/rust-bitcoin/rust-bitcoin-spv/".to_string(), network, Path::new("client.db"), listen, false).unwrap();
     }
-    spv.run(peers, connections, true).expect("can not start SPV");
+    spv.run(peers, connections, true).expect("can not start node");
 }
 
 use std::str::FromStr;
