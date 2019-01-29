@@ -88,10 +88,10 @@ pub fn main() {
         listen.push(SocketAddr::from(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 8333)));
     }
     if let Some(path) = find_arg("db") {
-        spv = Constructor::new("/https://github.com/rust-bitcoin/rust-bitcoin-spv/".to_string(), network, Path::new(path.as_str()),  listen, true, cache).unwrap();
+        spv = Constructor::new("/Murmel:0.1.0/".to_string(), network, Path::new(path.as_str()),  listen, true, cache).unwrap();
     }
     else {
-        spv = Constructor::new("/https://github.com/rust-bitcoin/rust-bitcoin-spv/".to_string(), network, Path::new("server.db"), listen, true, cache).unwrap();
+        spv = Constructor::new("/Murmel:0.1.0/".to_string(), network, Path::new("server.db"), listen, true, cache).unwrap();
     }
     spv.run(peers, connections, find_opt("nodns")).expect("can not start node");
 }

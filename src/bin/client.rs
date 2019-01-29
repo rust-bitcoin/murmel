@@ -81,10 +81,10 @@ pub fn main() {
     let mut spv;
     let listen = get_listeners();
     if let Some(path) = find_arg("db") {
-        spv = Constructor::new("/https://github.com/rust-bitcoin/rust-bitcoin-spv/".to_string(), network, Path::new(path.as_str()),  listen, false,cache).unwrap();
+        spv = Constructor::new("/Murmel:0.1.0/".to_string(), network, Path::new(path.as_str()),  listen, false,cache).unwrap();
     }
     else {
-        spv = Constructor::new("/https://github.com/rust-bitcoin/rust-bitcoin-spv/".to_string(), network, Path::new("client.db"), listen, false,cache).unwrap();
+        spv = Constructor::new("/Murmel:0.1.0/".to_string(), network, Path::new("client.db"), listen, false,cache).unwrap();
     }
     spv.run(peers, connections, true).expect("can not start node");
 }
