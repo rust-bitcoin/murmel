@@ -59,12 +59,12 @@ pub struct BlockFilter {
 
 impl BlockFilter {
 
-    pub fn compute_script_filter(block: &Block, height: u32, script_accessor: impl ScriptAccessor) -> Result<BlockFilter, MurmelError> {
+    pub fn compute_script_filter(block: &Block, utxo: impl ScriptAccessor) -> Result<BlockFilter, MurmelError> {
         let mut bytes = Vec::new();
         let mut out = Cursor::new(&mut bytes);
         {
             let mut writer = BlockFilterWriter::new(&mut out, block);
-            writer.script_filter(height, script_accessor)?;
+            writer.script_filter(utxo)?;
             writer.finish()?;
         }
         Ok(BlockFilter{block: block.bitcoin_hash(), filter_type: SCRIPT_FILTER, content: out.into_inner().to_vec()})
@@ -108,7 +108,7 @@ impl <'a> BlockFilterWriter<'a> {
     }
 
     /// Add consumed output scripts of a block to filter
-    fn add_consumed_scripts (&mut self, height: u32, tx_accessor: impl ScriptAccessor) -> Result<(), MurmelError> {
+    fn add_consumed_scripts (&mut self, tx_accessor: impl ScriptAccessor) -> Result<(), MurmelError> {
         let mut coins = Vec::new();
         for transaction in &self.block.txdata {
             if !transaction.is_coin_base() {
@@ -117,16 +117,16 @@ impl <'a> BlockFilterWriter<'a> {
                 }
             }
         }
-        for script in tx_accessor.get_scripts(height, coins)? {
+        for script in tx_accessor.get_scripts(coins)? {
             self.writer.add_element(script.as_bytes());
         }
         Ok(())
     }
 
     /// compile a filter useful for wallets
-    pub fn script_filter(&mut self, height: u32, tx_accessor: impl ScriptAccessor) -> Result<(), MurmelError> {
+    pub fn script_filter(&mut self, tx_accessor: impl ScriptAccessor) -> Result<(), MurmelError> {
         self.add_output_scripts();
-        self.add_consumed_scripts(height, tx_accessor)
+        self.add_consumed_scripts(tx_accessor)
     }
 
     /// compile a filter useful to find spent outputs
@@ -432,7 +432,7 @@ mod test {
     }
 
     impl ScriptAccessor for HashMap<OutPoint, Script> {
-        fn get_scripts(&self, _: u32, coins: Vec<OutPoint>) -> Result<Vec<Script>, MurmelError> {
+        fn get_scripts(&self, coins: Vec<OutPoint>) -> Result<Vec<Script>, MurmelError> {
             let mut result = Vec::new();
             for coin in coins {
                 if let Some(ux) = self.get(&coin) {
@@ -483,7 +483,7 @@ mod test {
             let mut constructed_filter = Cursor::new(Vec::new());
             {
                 let mut writer = BlockFilterWriter::new(&mut constructed_filter, &block);
-                writer.script_filter(0, txmap).unwrap();
+                writer.script_filter(txmap).unwrap();
                 writer.finish().unwrap();
             }
 

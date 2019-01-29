@@ -36,6 +36,7 @@ extern crate log;
 extern crate rand;
 extern crate rusqlite;
 extern crate siphasher;
+extern crate lru_cache;
 extern crate futures;
 extern crate futures_timer;
 
@@ -43,6 +44,7 @@ mod filterdownload;
 mod ping;
 mod timeout;
 mod blockserver;
+mod scriptcache;
 mod filterserver;
 mod headerdownload;
 mod headercache;

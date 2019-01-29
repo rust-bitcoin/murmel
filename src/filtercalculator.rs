@@ -159,9 +159,10 @@ impl FilterCalculator {
                     if missing.last().is_some() && *missing.last().unwrap() == genesis.bitcoin_hash() {
                         let mut chaindb = self.chaindb.write().unwrap();
                         let block_ref = chaindb.store_block(&genesis)?;
-                        let script_filter = BlockFilter::compute_script_filter(&genesis, 0, chaindb.get_script_accessor(&genesis))?;
+                        let script_filter = BlockFilter::compute_script_filter(&genesis, chaindb.get_script_accessor(&genesis))?;
                         let coin_filter = BlockFilter::compute_coin_filter(&genesis)?;
                         chaindb.store_known_filter(&Sha256dHash::default(), &Sha256dHash::default(), &script_filter, &coin_filter)?;
+                        chaindb.cache_scripts(&genesis, 0);
                         chaindb.batch()?;
                         let len = missing.len();
                         missing.truncate(len - 1);
@@ -194,15 +195,17 @@ impl FilterCalculator {
             if let Some(header) = chaindb.get_header(&block_id) {
                 // do not store fake blocks
                 if block.check_merkle_root() && block.check_witness_commitment() {
+                    // cache output scripts for later calculation
+                    chaindb.cache_scripts(block, header.height);
                     // if this is the next block for filter calculation
                     if let Some(prev_script) = chaindb.get_block_filter(&block.header.prev_blockhash, SCRIPT_FILTER) {
                         if let Some(prev_coin) = chaindb.get_block_filter(&block.header.prev_blockhash, COIN_FILTER) {
-                            // calculate filters
-                            let script_filter = BlockFilter::compute_script_filter(&block, header.height, chaindb.get_script_accessor(block))?;
-                            let coin_filter = BlockFilter::compute_coin_filter(&block)?;
                             // store block
                             debug!("store block  {} {} peer={}", header.height, block_id, peer);
                             chaindb.store_block(block)?;
+                            // calculate filters
+                            let script_filter = BlockFilter::compute_script_filter(&block, chaindb.get_script_accessor(block))?;
+                            let coin_filter = BlockFilter::compute_coin_filter(&block)?;
                             debug!("store filter {} {} size: {} {} peer={}", header.height, block_id, script_filter.content.len(), coin_filter.content.len(), peer);
                             // store known filters into header
                             chaindb.store_known_filter(&prev_script.bitcoin_hash(), &prev_coin.bitcoin_hash(), &script_filter, &coin_filter)?;

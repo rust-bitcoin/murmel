@@ -57,7 +57,7 @@ pub struct Constructor {
     configdb: SharedConfigDB,
     chaindb: SharedChainDB,
     listen: Vec<SocketAddr>,
-    server: bool,
+    server: bool
 }
 
 impl Constructor {
@@ -68,9 +68,9 @@ impl Constructor {
     ///      db - file path to data
     /// The method will read previously stored headers from the database and sync up with the peers
     /// then serve the returned ChainWatchInterface
-    pub fn new(user_agent :String, network: Network, path: &Path, listen: Vec<SocketAddr>, server: bool) -> Result<Constructor, MurmelError> {
+    pub fn new(user_agent :String, network: Network, path: &Path, listen: Vec<SocketAddr>, server: bool, script_cache_size: usize) -> Result<Constructor, MurmelError> {
         let configdb = Arc::new(Mutex::new(ConfigDB::new(path)?));
-        let chaindb = Arc::new(RwLock::new(ChainDB::new(path, network,server, server)?));
+        let chaindb = Arc::new(RwLock::new(ChainDB::new(path, network,server, server, script_cache_size)?));
         create_tables(configdb.clone())?;
         Ok(Constructor { network, user_agent, configdb, chaindb, listen, server })
     }
@@ -81,9 +81,9 @@ impl Constructor {
     ///      bootstrap - peer adresses (only tested to work with one local node for now)
     /// The method will start with an empty in-memory database and sync up with the peers
     /// then serve the returned ChainWatchInterface
-    pub fn new_in_memory(user_agent :String, network: Network, listen: Vec<SocketAddr>, server: bool) -> Result<Constructor, MurmelError> {
+    pub fn new_in_memory(user_agent :String, network: Network, listen: Vec<SocketAddr>, server: bool, script_cache_size: usize) -> Result<Constructor, MurmelError> {
         let configdb = Arc::new(Mutex::new(ConfigDB::mem()?));
-        let chaindb = Arc::new(RwLock::new(ChainDB::mem( network,server, server)?));
+        let chaindb = Arc::new(RwLock::new(ChainDB::mem( network,server, server, script_cache_size)?));
         create_tables(configdb.clone())?;
         Ok(Constructor { network, user_agent, configdb, chaindb, listen, server })
     }

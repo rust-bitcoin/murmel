@@ -38,12 +38,14 @@ pub fn main() {
         println!("--network net: net is one of main|test for corresponding Bitcoin networks");
         println!("--listen ip_address:port : accept incoming connection requests");
         println!("--nodns : do not use dns seed");
+        println!("--cache : cache of utxo in millions - set it up to 60 if doing initial load and you have plenty of RAM");
         println!("defaults:");
         println!("--db server.db");
         println!("--log debug");
         println!("--listen 127.0.0.1:8333");
         println!("--connections 1");
         println!("--network main");
+        println!("--cache 1");
         println!("in memory database");
         return;
     }
@@ -70,6 +72,11 @@ pub fn main() {
         }
     }
 
+    let mut cache = 1024usize *1024usize;
+    if let Some(numstring) = find_arg("cache") {
+        cache *= numstring.parse::<usize>().unwrap() as usize;
+    }
+
     let peers = get_peers();
     let mut connections = 1;
     if let Some(numstring) = find_arg("connections") {
@@ -81,10 +88,10 @@ pub fn main() {
         listen.push(SocketAddr::from(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 8333)));
     }
     if let Some(path) = find_arg("db") {
-        spv = Constructor::new("/https://github.com/rust-bitcoin/rust-bitcoin-spv/".to_string(), network, Path::new(path.as_str()),  listen, true).unwrap();
+        spv = Constructor::new("/https://github.com/rust-bitcoin/rust-bitcoin-spv/".to_string(), network, Path::new(path.as_str()),  listen, true, cache).unwrap();
     }
     else {
-        spv = Constructor::new("/https://github.com/rust-bitcoin/rust-bitcoin-spv/".to_string(), network, Path::new("server.db"), listen, true).unwrap();
+        spv = Constructor::new("/https://github.com/rust-bitcoin/rust-bitcoin-spv/".to_string(), network, Path::new("server.db"), listen, true, cache).unwrap();
     }
     spv.run(peers, connections, find_opt("nodns")).expect("can not start node");
 }

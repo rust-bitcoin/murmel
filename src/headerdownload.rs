@@ -31,6 +31,7 @@ use chaindb::SharedChainDB;
 use error::MurmelError;
 use p2p::{P2PControl, P2PControlSender, PeerId, PeerMessage, PeerMessageReceiver, PeerMessageSender, SERVICE_BLOCKS};
 use timeout::{ExpectedReply, SharedTimeout};
+
 use std::{
     collections::{HashMap, VecDeque},
     sync::mpsc,

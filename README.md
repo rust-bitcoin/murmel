@@ -26,9 +26,21 @@ to re-compute anything on a re-org (switch of fork with most work) and optionall
 block reward. These additional checks to that required by SPV allows Murmel to have a security guarantee higher than
 any other light node, but certainly still sub-par to a Bitcoin Core node.
 
-
 ## Status
 Not yet for serious use. Marble is able to support it's own and Lightning Node development. 
+
+## How to run a filter server
+Murmel supports client development as a BIP157 filter server. For this it needs to build up a complete Bitcoin blockchain
+and compute filters. Run the server as follows:
+
+```$xslt
+cargo build --release
+target/release/server 
+```
+Execute server with --help option to get further hints. It is recommended to run the server at initial bootstrap with 
+at least --cache 20 and pointing with --peer to a bitcoin node you know will answer quickly. The cache is very
+useful if bootstrapping the blockchain from scratch. Its effect is marginal after a re-start.
+
 
 ## Uses
 Marble uses and supports below projects:
