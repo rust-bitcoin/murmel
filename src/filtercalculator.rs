@@ -152,6 +152,9 @@ impl FilterCalculator {
                                 if chaindb.fetch_stored_block(&id)?.is_none () {
                                     missing.push(id);
                                 }
+                                else {
+                                    break;
+                                }
                             }
                         }
                         debug!("missing {} blocks", missing.len());
