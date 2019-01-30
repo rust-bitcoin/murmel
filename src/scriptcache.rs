@@ -42,7 +42,9 @@ impl ScriptCache {
     }
 
     pub fn insert (&mut self, coin: OutPoint, script: Script, height: u32) {
-        self.complete_after = height;
+        if self.complete_after == 0 {
+            self.complete_after = height;
+        }
         if self.cache.len() == self.cache.capacity () {
             if let Some((_, (_, lru_height))) = self.cache.remove_lru() {
                 self.complete_after = max(self.complete_after, lru_height);
@@ -57,6 +59,8 @@ impl ScriptCache {
         }
         None
     }
+
+    pub fn len(&self) -> usize { self.cache.len() }
 
     pub fn complete_after(&self) -> u32 {
         self.complete_after

@@ -28,7 +28,7 @@ use std::{
 
 pub type SharedTimeout = Arc<Mutex<Timeout>>;
 
-const TIMEOUT:u64 = 30;
+const TIMEOUT:u64 = 60;
 
 #[derive(Eq, PartialEq, Hash, Debug)]
 pub enum ExpectedReply {

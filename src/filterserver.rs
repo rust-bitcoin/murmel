@@ -31,7 +31,8 @@ use p2p::{P2PControl, P2PControlSender, PeerId, PeerMessage, PeerMessageReceiver
 use std::{
     sync::{mpsc, RwLockReadGuard},
     thread,
-    iter
+    iter,
+    sync::Arc
 };
 
 pub struct FilterServer {
@@ -70,13 +71,13 @@ impl FilterServer {
         panic!("Filter server thread failed.");
     }
 
-    fn filter_headers<'a>(&self, chaindb: &'a RwLockReadGuard<ChainDB>, filter_type: u8, start: u32, stop_hash: Sha256dHash) -> Box<Iterator<Item=StoredFilter> + 'a> {
+    fn filter_headers<'a>(&self, chaindb: &'a RwLockReadGuard<ChainDB>, filter_type: u8, start: u32, stop_hash: Sha256dHash) -> Box<Iterator<Item=Arc<StoredFilter>> + 'a> {
         if let Some(pos) = chaindb.pos_on_trunk(&stop_hash) {
             if pos >= start {
                 return Box::new(chaindb.iter_trunk(start).take((pos - start) as usize).filter_map(move |h| chaindb.get_block_filter(&h.header.bitcoin_hash(), filter_type)))
             }
         }
-        Box::new(iter::empty::<StoredFilter>())
+        Box::new(iter::empty::<Arc<StoredFilter>>())
     }
 
     fn get_cfcheckpt(&self, peer: PeerId, get: GetCFCheckpt) -> Result<(), MurmelError> {
@@ -131,12 +132,12 @@ impl FilterServer {
         let filter_ids = self.filter_headers(&chaindb, get.filter_type, get.start_height, get.stop_hash).map(|f| f.bitcoin_hash()).collect::<Vec<_>>();
         for filter_id in &filter_ids {
             if let Some(filter) = chaindb.get_filter(filter_id) {
-                if let Some(content) = filter.filter {
+                if let Some(ref content) = filter.filter {
                     self.p2p.send(P2PControl::Send(peer, NetworkMessage::CFilter(
                         CFilter {
                             filter_type: get.filter_type,
                             block_hash: filter.block_id,
-                            filter: content
+                            filter: content.clone()
                         }
                     )));
                 }

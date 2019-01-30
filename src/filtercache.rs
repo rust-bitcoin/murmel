@@ -66,43 +66,11 @@ impl FilterCache {
     }
 
     /// Fetch a header by its id from cache
-    pub fn get_filter(&self, filter_id: &Sha256dHash) -> Option<StoredFilter> {
-        self.filters.get(filter_id).map(|b|{(**b).clone()})
+    pub fn get_filter(&self, filter_id: &Sha256dHash) -> Option<Arc<StoredFilter>> {
+        self.filters.get(filter_id).map(|b|{(*b).clone()})
     }
 
-    pub fn get_block_filter(&self, block_id: &Sha256dHash, filter_type: u8) -> Option<StoredFilter> {
-        self.by_block.get(&(*block_id, filter_type)).map(|b|{(**b).clone()})
-    }
-
-    /// iterate from id to genesis
-    pub fn iter_from<'a> (&'a self, id: &Sha256dHash) -> FilterIterator<'a> {
-        return FilterIterator::new(self, id)
-    }
-}
-
-pub struct FilterIterator<'a> {
-    current: Sha256dHash,
-    cache: &'a FilterCache
-}
-
-impl<'a> FilterIterator<'a> {
-    pub fn new (cache: &'a FilterCache, tip: &Sha256dHash) -> FilterIterator<'a> {
-        FilterIterator { current: *tip, cache }
-    }
-}
-
-impl<'a> Iterator for FilterIterator<'a> {
-    type Item = Sha256dHash;
-
-    fn next(&mut self) -> Option<<Self as Iterator>::Item> {
-        if self.current == Sha256dHash::default() {
-            return None;
-        }
-        if let Some (filter) = self.cache.filters.get(&self.current) {
-            let current = self.current;
-            self.current = filter.previous;
-            return Some(current)
-        }
-        return None;
+    pub fn get_block_filter(&self, block_id: &Sha256dHash, filter_type: u8) -> Option<Arc<StoredFilter>> {
+        self.by_block.get(&(*block_id, filter_type)).map(|b|{(*b).clone()})
     }
 }

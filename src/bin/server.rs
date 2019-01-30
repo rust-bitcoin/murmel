@@ -31,6 +31,7 @@ pub fn main() {
     if find_opt("help") {
         println!("Murmel Server");
         println!("{} [--help] [--log trace|debug|info|warn|error] [--connections n] [--peer ip_address:port] [--db database_file] [--network main|test]", args().next().unwrap());
+        println!("warning: due to a bug in args parsing options without args must be after options with args");
         println!("--log level: level is one of trace|debug|info|warn|error");
         println!("--connections n: maintain at least n connections");
         println!("--peer ip_address: connect to the given peer at start. You may use more than one --peer option.");
@@ -39,6 +40,7 @@ pub fn main() {
         println!("--listen ip_address:port : accept incoming connection requests");
         println!("--nodns : do not use dns seed");
         println!("--cache : cache of utxo in millions - set it up to 60 if doing initial load and you have plenty of RAM");
+        println!("--rebuild-cache : read all blocks and rebuild script cache. Takes time. Makes sense only if you re-start a partially bootstrapped process, so it continues");
         println!("defaults:");
         println!("--db server.db");
         println!("--log debug");
@@ -93,7 +95,7 @@ pub fn main() {
     else {
         spv = Constructor::new("/Murmel:0.1.0/".to_string(), network, Path::new("server.db"), listen, true, cache).unwrap();
     }
-    spv.run(peers, connections, find_opt("nodns")).expect("can not start node");
+    spv.run(peers, connections, find_opt("nodns"), find_opt("rebuildcache")).expect("can not start node");
 }
 
 use std::str::FromStr;

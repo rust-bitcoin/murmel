@@ -301,17 +301,17 @@ impl HeaderCache {
         return HeaderIterator::new(self, start_with);
     }
 
-    pub fn iter_trunk<'a> (&'a self, after: u32) -> Box<Iterator<Item=StoredHeader> +'a> {
-        Box::new(self.trunk.iter().skip(after as usize).map(move |a| self.headers.get(&*a).unwrap().clone()))
+    pub fn iter_trunk<'a> (&'a self, after: u32) -> Box<Iterator<Item=&'a StoredHeader> +'a> {
+        Box::new(self.trunk.iter().skip(after as usize).map(move |a| self.headers.get(&*a).unwrap()))
     }
 
-    pub fn iter_trunk_rev<'a> (&'a self, from: Option<u32>) -> Box<Iterator<Item=StoredHeader> +'a> {
+    pub fn iter_trunk_rev<'a> (&'a self, from: Option<u32>) -> Box<Iterator<Item=&'a StoredHeader> +'a> {
         let len = self.trunk.len();
         if let Some(from) = from {
-            Box::new(self.trunk.iter().rev().skip(len - from as usize).map(move |a| self.headers.get(&*a).unwrap().clone()))
+            Box::new(self.trunk.iter().rev().skip(len - from as usize).map(move |a| self.headers.get(&*a).unwrap()))
         }
         else {
-            Box::new(self.trunk.iter().rev().map(move |a| self.headers.get(&*a).unwrap().clone()))
+            Box::new(self.trunk.iter().rev().map(move |a| self.headers.get(&*a).unwrap()))
         }
     }
 

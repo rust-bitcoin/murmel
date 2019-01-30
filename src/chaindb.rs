@@ -95,8 +95,11 @@ impl ChainDB {
         }
     }
 
-    pub fn init(&mut self, server: bool) -> Result<(), MurmelError> {
+    pub fn init(&mut self, server: bool, rebuild_cache: bool) -> Result<(), MurmelError> {
         self.init_headers(server)?;
+        if rebuild_cache {
+            self.rebuild_cache()?;
+        }
         Ok(())
     }
 
@@ -156,6 +159,24 @@ impl ChainDB {
         Ok(())
     }
 
+    fn rebuild_cache(&mut self) -> Result<(), MurmelError> {
+        debug!("rebuilding cache ...");
+        let trunk = self.iter_trunk(0).cloned().collect::<Vec<_>>();
+        for header in trunk {
+            if let Some(txdata) = self.fetch_txdata(&header.header.bitcoin_hash())? {
+                self.cache_scripts(&Block { header: header.header.clone(), txdata }, header.height);
+                if header.height % 10000 == 0 {
+                    debug!("cached coins of {} blocks, cache size {} ...", header.height, self.scriptcache.lock().unwrap().len());
+                }
+            }
+            else {
+                break;
+            }
+        }
+        debug!("re-built coin cache.");
+        Ok(())
+    }
+
     pub fn add_header(&mut self, header: &BlockHeader) -> Result<Option<(StoredHeader, Option<Vec<Sha256dHash>>, Option<Vec<Sha256dHash>>)>, MurmelError> {
         if let Some((stored, unwinds, forward)) = self.headercache.add_header(header)? {
             self.store_header(&stored)?;
@@ -180,12 +201,12 @@ impl ChainDB {
     }
 
     // iterate trunk (after .. tip]
-    pub fn iter_trunk<'a> (&'a self, after: u32) -> impl Iterator<Item=StoredHeader> +'a {
+    pub fn iter_trunk<'a> (&'a self, after: u32) -> impl Iterator<Item=&'a StoredHeader> +'a {
         self.headercache.iter_trunk(after)
     }
 
     // iterate trunk [genesis .. from] in reverse order from is the tip if not specified
-    pub fn iter_trunk_rev<'a> (&'a self, from: Option<u32>) -> impl Iterator<Item=StoredHeader> +'a {
+    pub fn iter_trunk_rev<'a> (&'a self, from: Option<u32>) -> impl Iterator<Item=&'a StoredHeader> +'a {
         self.headercache.iter_trunk_rev(from)
     }
 
@@ -215,11 +236,11 @@ impl ChainDB {
         Ok(())
     }
 
-    pub fn get_filter(&self, filter_id: &Sha256dHash) -> Option<StoredFilter> {
+    pub fn get_filter(&self, filter_id: &Sha256dHash) -> Option<Arc<StoredFilter>> {
         self.filtercache.get_filter(filter_id)
     }
 
-    pub fn get_block_filter(&self, block_id: &Sha256dHash, filter_type: u8) -> Option<StoredFilter> {
+    pub fn get_block_filter(&self, block_id: &Sha256dHash, filter_type: u8) -> Option<Arc<StoredFilter>> {
         self.filtercache.get_block_filter(block_id, filter_type)
     }
 
@@ -342,8 +363,8 @@ impl ChainDB {
         {
             // check in script cache
             let mut scriptcache = self.scriptcache.lock().unwrap();
-            for coin in coins {
-                if let Some(script) = scriptcache.remove(&coin) {
+            for coin in &coins {
+                if let Some(script) = scriptcache.remove(coin) {
                     sofar.push(script);
                 } else {
                     let mut buf = Vec::new();
@@ -355,11 +376,20 @@ impl ChainDB {
         remains.sort();
         if remains.len() > 0 {
             let from = self.scriptcache.lock().unwrap().complete_after();
-            let mapped = remains.par_chunks(100).map(|remains| {
+            if coins.len () > 0 {
+                debug!("lookup {} input coins {} in cache {} % {} in filters before height {}", coins.len(), coins.len() - remains.len(), ((coins.len() - remains.len()) * 100) / coins.len(), remains.len(), from);
+            } else {
+                debug!("this block has only a coinbase transaction.");
+            }
+            let len = remains.len();
+            let mapped = remains.par_chunks(50).map(|remains| {
                 let remains = remains.to_vec();
                 self.resolve_with_filters(from, remains)
             }).flatten().collect::<Vec<_>>();
-            sofar.extend (mapped);
+            sofar.extend (mapped.iter().map(|(s, _)|s.clone()));
+            if let Some(first) = mapped.iter().map(|(_, h)|h).min() {
+                debug!("first block with filter match {}", first);
+            }
         }
         // are we done?
         if remains.len () > sofar.len() {
@@ -371,27 +401,34 @@ impl ChainDB {
         Ok(sofar)
     }
 
-    fn resolve_with_filters (&self, from: u32, mut remains: Vec<Vec<u8>>) -> Vec<Script> {
+    fn resolve_with_filters (&self, from: u32, mut remains: Vec<Vec<u8>>) -> (Vec<(Script, u32)>) {
         let mut sofar = Vec::new();
         for header in self.iter_trunk_rev(Some(from)) {
+            let block_id = header.header.bitcoin_hash();
             // if filter is known for this block
-            if let Some(filter) = self.get_block_filter(&header.header.bitcoin_hash(), COIN_FILTER) {
-                // check in a single pass read if any coins we search for might be in the filter for this block
-                let reader = BlockFilterReader::new(&header.bitcoin_hash()).unwrap();
-                if reader.match_any(&mut Cursor::new(filter.filter.unwrap()), &remains).unwrap() {
-                    // do we have the block ?
-                    if let Some(block) = self.fetch_stored_block(&header.bitcoin_hash()).unwrap() {
-                        // for all transactions
-                        for (txpos, txid) in block.txids.iter().enumerate() {
-                            // check if any or many! outputs of this transaction are those we search for
-                            while let Ok(pos) = remains.binary_search_by(|r| r[0..32].cmp(txid.as_bytes())) {
-                                // a transaction that we are interested in
-                                let coin = OutPoint::consensus_decode(&mut Cursor::new(remains[pos].as_slice())).unwrap();
-                                // get the script
-                                let tx = self.fetch_transaction(block.txrefs[txpos]).unwrap();
-                                sofar.push(tx.output[coin.vout as usize].script_pubkey.clone());
-                                // one less to worry about
-                                remains.remove(pos);
+            if let Some(filter) = self.get_block_filter(&block_id, COIN_FILTER) {
+                if let Some(ref filter) = filter.filter {
+                    // check in a single pass read if any coins we search for might be in the filter for this block
+                    let reader = BlockFilterReader::new(&block_id).unwrap();
+                    if reader.match_any(&mut Cursor::new(filter), &remains).unwrap() {
+                        // do we have the block ?
+                        if let Some(block) = self.fetch_stored_block(&block_id).unwrap() {
+                            // for all transactions
+                            for (txpos, txid) in block.txids.iter().enumerate() {
+                                // check if any or many! outputs of this transaction are those we search for
+                                while let Ok(pos) = remains.binary_search_by(|r| r[0..32].cmp(txid.as_bytes())) {
+                                    // a transaction that we are interested in
+                                    let coin = OutPoint::consensus_decode(&mut Cursor::new(remains[pos].as_slice())).unwrap();
+                                    // get the script
+                                    let tx = self.fetch_transaction(block.txrefs[txpos]).unwrap();
+                                    sofar.push((tx.output[coin.vout as usize].script_pubkey.clone(), header.height));
+                                    // one less to worry about
+                                    remains.remove(pos);
+                                    // are we done?
+                                    if remains.len() == 0 {
+                                        break;
+                                    }
+                                }
                                 // are we done?
                                 if remains.len() == 0 {
                                     break;
@@ -401,10 +438,6 @@ impl ChainDB {
                             if remains.len() == 0 {
                                 break;
                             }
-                        }
-                        // are we done?
-                        if remains.len() == 0 {
-                            break;
                         }
                     }
                 }

@@ -86,7 +86,7 @@ pub fn main() {
     else {
         spv = Constructor::new("/Murmel:0.1.0/".to_string(), network, Path::new("client.db"), listen, false,cache).unwrap();
     }
-    spv.run(peers, connections, true).expect("can not start node");
+    spv.run(peers, connections, true, false).expect("can not start node");
 }
 
 use std::str::FromStr;
