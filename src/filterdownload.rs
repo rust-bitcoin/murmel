@@ -103,7 +103,7 @@ impl FilterDownload {
         let chaindb = self.chaindb.read().unwrap();
         for header in chaindb.iter_trunk(0) {
             stop_hash = header.header.bitcoin_hash();
-            if chaindb.get_block_filter(&stop_hash, filter_type).is_none () {
+            if chaindb.get_block_filter_header(&stop_hash, filter_type).is_none () {
                 start_height = header.height;
                 break;
             }
@@ -129,7 +129,7 @@ impl FilterDownload {
         }
         else {
             let chaindb = self.chaindb.read().unwrap();
-            if let Some(filter) = chaindb.get_filter(&headers.previous_filter) {
+            if let Some(filter) = chaindb.get_filter_header(&headers.previous_filter) {
                 chaindb.pos_on_trunk(&filter.block_id)
             }
             else {
@@ -165,7 +165,7 @@ impl FilterDownload {
             if inventory.inv_type == InvType::Block {
                 let chaindb = self.chaindb.read().unwrap();
                 debug!("received inv for block {}", inventory.hash);
-                if chaindb.get_block_filter(&inventory.hash, SCRIPT_FILTER).is_none() {
+                if chaindb.get_block_filter_header(&inventory.hash, SCRIPT_FILTER).is_none() {
                     // ask for filter headers if observing a new block
                     ask_for_headers = true;
                 }

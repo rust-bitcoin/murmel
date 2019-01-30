@@ -201,8 +201,8 @@ impl FilterCalculator {
                     // cache output scripts for later calculation
                     chaindb.cache_scripts(block, header.height);
                     // if this is the next block for filter calculation
-                    if let Some(prev_script) = chaindb.get_block_filter(&block.header.prev_blockhash, SCRIPT_FILTER) {
-                        if let Some(prev_coin) = chaindb.get_block_filter(&block.header.prev_blockhash, COIN_FILTER) {
+                    if let Some(prev_script) = chaindb.get_block_filter_header(&block.header.prev_blockhash, SCRIPT_FILTER) {
+                        if let Some(prev_coin) = chaindb.get_block_filter_header(&block.header.prev_blockhash, COIN_FILTER) {
                             // store block
                             debug!("store block  {} {} peer={}", header.height, block_id, peer);
                             chaindb.store_block(block)?;

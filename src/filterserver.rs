@@ -74,7 +74,7 @@ impl FilterServer {
     fn filter_headers<'a>(&self, chaindb: &'a RwLockReadGuard<ChainDB>, filter_type: u8, start: u32, stop_hash: Sha256dHash) -> Box<Iterator<Item=Arc<StoredFilter>> + 'a> {
         if let Some(pos) = chaindb.pos_on_trunk(&stop_hash) {
             if pos >= start {
-                return Box::new(chaindb.iter_trunk(start).take((pos - start) as usize).filter_map(move |h| chaindb.get_block_filter(&h.header.bitcoin_hash(), filter_type)))
+                return Box::new(chaindb.iter_trunk(start).take((pos - start) as usize).filter_map(move |h| chaindb.get_block_filter_header(&h.header.bitcoin_hash(), filter_type)))
             }
         }
         Box::new(iter::empty::<Arc<StoredFilter>>())
@@ -111,7 +111,7 @@ impl FilterServer {
         }
         else {
             if let Some(header) = chaindb.get_header_for_height(get.start_height - 1) {
-                if let Some(previous_filter) = chaindb.get_block_filter(&header.header.bitcoin_hash(), get.filter_type) {
+                if let Some(previous_filter) = chaindb.get_block_filter_header(&header.header.bitcoin_hash(), get.filter_type) {
                     self.p2p.send(P2PControl::Send(peer, NetworkMessage::CFHeaders(
                         CFHeaders {
                             filter_type: get.filter_type,
@@ -131,7 +131,7 @@ impl FilterServer {
         let chaindb = self.chaindb.read().unwrap();
         let filter_ids = self.filter_headers(&chaindb, get.filter_type, get.start_height, get.stop_hash).map(|f| f.bitcoin_hash()).collect::<Vec<_>>();
         for filter_id in &filter_ids {
-            if let Some(filter) = chaindb.get_filter(filter_id) {
+            if let Some(filter) = chaindb.get_filter_header(filter_id) {
                 if let Some(ref content) = filter.filter {
                     self.p2p.send(P2PControl::Send(peer, NetworkMessage::CFilter(
                         CFilter {

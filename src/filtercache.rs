@@ -34,43 +34,36 @@ pub struct FilterCache {
     // filters by block_id
     by_block: HashMap<(Sha256dHash, u8), Arc<StoredFilter>>,
     // all known filters
-    filters: HashMap<Sha256dHash, Arc<StoredFilter>>,
-    server: bool
+    filters: HashMap<Sha256dHash, Arc<StoredFilter>>
 }
 
 const EXPECTED_CHAIN_LENGTH: usize = 600000;
 
 #[allow(unused)]
 impl FilterCache {
-    pub fn new(server: bool) -> FilterCache {
+    pub fn new() -> FilterCache {
         FilterCache { filters: HashMap::with_capacity(EXPECTED_CHAIN_LENGTH),
-            by_block: HashMap::with_capacity(EXPECTED_CHAIN_LENGTH), server }
+            by_block: HashMap::with_capacity(EXPECTED_CHAIN_LENGTH) }
     }
 
     pub fn len (&self) -> usize {
         self.filters.len()
     }
 
-    pub fn add_filter(&mut self, filter: &StoredFilter) {
-        if self.server {
-            let filter = Arc::new(filter.clone());
-            self.by_block.insert((filter.block_id, filter.filter_type), filter.clone());
-            self.filters.insert(filter.filter_id(), filter);
-        } else {
-            let mut stored = filter.clone();
-            stored.filter = None;
-            let filter = Arc::new(stored.clone());
-            self.by_block.insert((filter.block_id, stored.filter_type), filter.clone());
-            self.filters.insert(filter.filter_id(), filter);
-        }
+    pub fn add_filter_header(&mut self, filter: &StoredFilter) {
+        let mut stored = filter.clone();
+        stored.filter = None;
+        let filter = Arc::new(stored.clone());
+        self.by_block.insert((filter.block_id, stored.filter_type), filter.clone());
+        self.filters.insert(filter.filter_id(), filter);
     }
 
     /// Fetch a header by its id from cache
-    pub fn get_filter(&self, filter_id: &Sha256dHash) -> Option<Arc<StoredFilter>> {
+    pub fn get_filter_header(&self, filter_id: &Sha256dHash) -> Option<Arc<StoredFilter>> {
         self.filters.get(filter_id).map(|b|{(*b).clone()})
     }
 
-    pub fn get_block_filter(&self, block_id: &Sha256dHash, filter_type: u8) -> Option<Arc<StoredFilter>> {
+    pub fn get_block_filter_header(&self, block_id: &Sha256dHash, filter_type: u8) -> Option<Arc<StoredFilter>> {
         self.by_block.get(&(*block_id, filter_type)).map(|b|{(*b).clone()})
     }
 }

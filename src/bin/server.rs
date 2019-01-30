@@ -39,15 +39,13 @@ pub fn main() {
         println!("--network net: net is one of main|test for corresponding Bitcoin networks");
         println!("--listen ip_address:port : accept incoming connection requests");
         println!("--nodns : do not use dns seed");
-        println!("--cache : cache of utxo in millions - set it up to 60 if doing initial load and you have plenty of RAM");
-        println!("--rebuild-cache : read all blocks and rebuild script cache. Takes time. Makes sense only if you re-start a partially bootstrapped process, so it continues");
+        println!("--utxo-cache : cache of utxo in millions - set it up to 60 if doing initial load and you have plenty of RAM");
         println!("defaults:");
         println!("--db server.db");
         println!("--log debug");
         println!("--listen 127.0.0.1:8333");
         println!("--connections 1");
         println!("--network main");
-        println!("--cache 1");
         println!("in memory database");
         return;
     }
@@ -75,7 +73,7 @@ pub fn main() {
     }
 
     let mut cache = 1024usize *1024usize;
-    if let Some(numstring) = find_arg("cache") {
+    if let Some(numstring) = find_arg("utxo-cache") {
         cache *= numstring.parse::<usize>().unwrap() as usize;
     }
 
@@ -95,7 +93,7 @@ pub fn main() {
     else {
         spv = Constructor::new("/Murmel:0.1.0/".to_string(), network, Path::new("server.db"), listen, true, cache).unwrap();
     }
-    spv.run(peers, connections, find_opt("nodns"), find_opt("rebuildcache")).expect("can not start node");
+    spv.run(peers, connections, find_opt("nodns")).expect("can not start node");
 }
 
 use std::str::FromStr;

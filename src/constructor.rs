@@ -70,7 +70,7 @@ impl Constructor {
     /// then serve the returned ChainWatchInterface
     pub fn new(user_agent :String, network: Network, path: &Path, listen: Vec<SocketAddr>, server: bool, script_cache_size: usize) -> Result<Constructor, MurmelError> {
         let configdb = Arc::new(Mutex::new(ConfigDB::new(path)?));
-        let chaindb = Arc::new(RwLock::new(ChainDB::new(path, network,server, server, script_cache_size)?));
+        let chaindb = Arc::new(RwLock::new(ChainDB::new(path, network,server, script_cache_size)?));
         create_tables(configdb.clone())?;
         Ok(Constructor { network, user_agent, configdb, chaindb, listen, server })
     }
@@ -83,7 +83,7 @@ impl Constructor {
     /// then serve the returned ChainWatchInterface
     pub fn new_in_memory(user_agent :String, network: Network, listen: Vec<SocketAddr>, server: bool, script_cache_size: usize) -> Result<Constructor, MurmelError> {
         let configdb = Arc::new(Mutex::new(ConfigDB::mem()?));
-        let chaindb = Arc::new(RwLock::new(ChainDB::mem( network,server, server, script_cache_size)?));
+        let chaindb = Arc::new(RwLock::new(ChainDB::mem( network,server, script_cache_size)?));
         create_tables(configdb.clone())?;
         Ok(Constructor { network, user_agent, configdb, chaindb, listen, server })
     }
@@ -93,7 +93,7 @@ impl Constructor {
 	/// * peers - connect to these peers at startup (might be empty)
 	/// * min_connections - keep connections with at least this number of peers. Peers will be randomly chosen
 	/// from those discovered in earlier runs
-    pub fn run(&mut self, peers: Vec<SocketAddr>, min_connections: usize, nodns: bool, rebuild_cache: bool) -> Result<(), MurmelError>{
+    pub fn run(&mut self, peers: Vec<SocketAddr>, min_connections: usize, nodns: bool) -> Result<(), MurmelError>{
 
         let back_pressure = if self.server {
             1000
@@ -109,7 +109,7 @@ impl Constructor {
         let dispatcher =
             Dispatcher::new(self.network, self.configdb.clone(), self.chaindb.clone(), self.server, p2p_control.clone(), from_p2p);
 
-        dispatcher.init(self.server, rebuild_cache).unwrap();
+        dispatcher.init(self.server).unwrap();
 
         for addr in &self.listen {
             p2p_control.send(P2PControl::Bind(addr.clone()));

@@ -150,8 +150,8 @@ impl Dispatcher {
     }
 
     /// initialize node
-    pub fn init(&self, server: bool, rebuild_cache: bool) -> Result<(), MurmelError> {
-        self.chaindb.write().unwrap().init(server, rebuild_cache)?;
+    pub fn init(&self, server: bool) -> Result<(), MurmelError> {
+        self.chaindb.write().unwrap().init(server)?;
         Ok(())
     }
 

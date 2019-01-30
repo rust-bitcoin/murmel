@@ -66,11 +66,11 @@ pub struct ChainDB {
 
 impl ChainDB {
     /// Create an in-memory database instance
-    pub fn mem(network: Network, heavy: bool, server: bool, script_cache_size: usize) -> Result<ChainDB, MurmelError> {
+    pub fn mem(network: Network, heavy: bool, script_cache_size: usize) -> Result<ChainDB, MurmelError> {
         info!("working with in memory chain db");
         let light = BitcoinAdaptor::new(transient(2)?);
         let headercache = HeaderCache::new(network);
-        let filtercache = FilterCache::new(server);
+        let filtercache = FilterCache::new();
         let scriptcache = Mutex::new(ScriptCache::new(script_cache_size));
         if heavy {
             let heavy = Some(BitcoinAdaptor::new(transient(2)?));
@@ -81,11 +81,11 @@ impl ChainDB {
     }
 
     /// Create or open a persistent database instance identified by the path
-    pub fn new(path: &Path, network: Network, heavy: bool, server: bool, script_cache_size: usize) -> Result<ChainDB, MurmelError> {
+    pub fn new(path: &Path, network: Network, heavy: bool, script_cache_size: usize) -> Result<ChainDB, MurmelError> {
         let basename = path.to_str().unwrap().to_string();
         let light = BitcoinAdaptor::new(persistent((basename.clone() + ".h").as_str(), 100, 2)?);
         let headercache = HeaderCache::new(network);
-        let filtercache = FilterCache::new(server);
+        let filtercache = FilterCache::new();
         let scriptcache = Mutex::new(ScriptCache::new(script_cache_size));
         if heavy {
             let heavy = Some(BitcoinAdaptor::new(persistent((basename + ".b").as_str(), 1000, 2)?));
@@ -95,9 +95,9 @@ impl ChainDB {
         }
     }
 
-    pub fn init(&mut self, server: bool, rebuild_cache: bool) -> Result<(), MurmelError> {
+    pub fn init(&mut self, server: bool) -> Result<(), MurmelError> {
         self.init_headers(server)?;
-        if rebuild_cache {
+        if self.scriptcache.lock().unwrap().capacity() > 0 {
             self.rebuild_cache()?;
         }
         Ok(())
@@ -143,15 +143,16 @@ impl ChainDB {
                 self.store_header_tip(&stored.bitcoin_hash())?;
             }
         } else {
+            info!("Caching block headers and filter headers ...");
             self.headercache.clear();
             while let Some(stored) = sl.pop_front() {
                 self.headercache.add_header_unchecked(&stored);
                 let block_id = stored.header.bitcoin_hash();
                 if let Some(filter) = self.fetch_filter(&block_id, SCRIPT_FILTER)? {
-                    self.filtercache.add_filter(&filter);
+                    self.filtercache.add_filter_header(&filter);
                 }
                 if let Some(filter) = self.fetch_filter(&block_id, COIN_FILTER)? {
-                    self.filtercache.add_filter(&filter);
+                    self.filtercache.add_filter_header(&filter);
                 }
             }
             info!("read {} filter header", self.filtercache.len());
@@ -160,21 +161,39 @@ impl ChainDB {
     }
 
     fn rebuild_cache(&mut self) -> Result<(), MurmelError> {
-        debug!("rebuilding cache ...");
+        debug!("Rebuilding UTXO cache ...");
         let trunk = self.iter_trunk(0).cloned().collect::<Vec<_>>();
         for header in trunk {
             if let Some(txdata) = self.fetch_txdata(&header.header.bitcoin_hash())? {
-                self.cache_scripts(&Block { header: header.header.clone(), txdata }, header.height);
-                if header.height % 10000 == 0 {
-                    debug!("cached coins of {} blocks, cache size {} ...", header.height, self.scriptcache.lock().unwrap().len());
-                }
+                self.recache_block(&Block { header: header.header.clone(), txdata }, header.height);
             }
             else {
                 break;
             }
+            if header.height % 10000 == 0 {
+                debug!("cached UTXO of {} blocks, size={} ...", header.height, self.scriptcache.lock().unwrap().len());
+            }
         }
-        debug!("re-built coin cache.");
+        debug!("Re-built UTXO cache, size={}", self.scriptcache.lock().unwrap().len());
         Ok(())
+    }
+
+    fn recache_block (&mut self, block: &Block, height: u32) {
+        let block_id = Arc::new(block.bitcoin_hash());
+        let mut script_cache = self.scriptcache.lock().unwrap();
+        for (i, tx) in block.txdata.iter().enumerate() {
+            let tx_nr = i as u32;
+            let txid = tx.txid();
+            for input in tx.input.iter() {
+                script_cache.remove(&input.previous_output);
+            }
+            for (idx, output) in tx.output.iter().enumerate() {
+                let vout = idx as u32;
+                if !output.script_pubkey.is_provably_unspendable() {
+                    script_cache.insert(OutPoint { txid, vout }, output.script_pubkey.clone(), height);
+                }
+            }
+        }
     }
 
     pub fn add_header(&mut self, header: &BlockHeader) -> Result<Option<(StoredHeader, Option<Vec<Sha256dHash>>, Option<Vec<Sha256dHash>>)>, MurmelError> {
@@ -232,16 +251,16 @@ impl ChainDB {
 
     pub fn add_filter (&mut self, filter: StoredFilter) -> Result<(), MurmelError> {
         self.store_filter(&filter)?;
-        self.filtercache.add_filter(&filter);
+        self.filtercache.add_filter_header(&filter);
         Ok(())
     }
 
-    pub fn get_filter(&self, filter_id: &Sha256dHash) -> Option<Arc<StoredFilter>> {
-        self.filtercache.get_filter(filter_id)
+    pub fn get_filter_header(&self, filter_id: &Sha256dHash) -> Option<Arc<StoredFilter>> {
+        self.filtercache.get_filter_header(filter_id)
     }
 
-    pub fn get_block_filter(&self, block_id: &Sha256dHash, filter_type: u8) -> Option<Arc<StoredFilter>> {
-        self.filtercache.get_block_filter(block_id, filter_type)
+    pub fn get_block_filter_header(&self, block_id: &Sha256dHash, filter_type: u8) -> Option<Arc<StoredFilter>> {
+        self.filtercache.get_block_filter_header(block_id, filter_type)
     }
 
     pub fn store_header(&mut self, stored: &StoredHeader) -> Result<PRef, MurmelError> {
@@ -277,12 +296,12 @@ impl ChainDB {
         let stored_script_filter = StoredFilter{block_id: script_filter.block, previous: previous_script.clone(),
             filter_hash: Sha256dHash::from_data(script_filter.content.as_slice()), filter: Some(script_filter.content.clone()), filter_type: script_filter.filter_type };
         self.store_filter(&stored_script_filter)?;
-        self.filtercache.add_filter(&stored_script_filter);
+        self.filtercache.add_filter_header(&stored_script_filter);
 
         let stored_coin_filter = StoredFilter{block_id: coin_filter.block, previous: previous_coin.clone(),
             filter_hash: Sha256dHash::from_data(coin_filter.content.as_slice()), filter: Some(coin_filter.content.clone()), filter_type: coin_filter.filter_type };
         self.store_filter(&stored_coin_filter)?;
-        self.filtercache.add_filter(&stored_coin_filter);
+        self.filtercache.add_filter_header(&stored_coin_filter);
         Ok(())
     }
 
@@ -356,6 +375,9 @@ impl ChainDB {
                 }
             }
         }
+        if height % 10000 == 0 {
+            debug!("UTXO cache at height {} size={}", height, script_cache.len());
+        }
     }
 
     pub fn get_scripts(&self, coins: Vec<OutPoint>, mut sofar: Vec<Script>) -> Result<Vec<Script>, MurmelError> {
@@ -401,29 +423,35 @@ impl ChainDB {
         Ok(sofar)
     }
 
-    fn resolve_with_filters (&self, from: u32, mut remains: Vec<Vec<u8>>) -> (Vec<(Script, u32)>) {
+    fn resolve_with_filters (&self, from: u32, mut remains: Vec<Vec<u8>>) -> Vec<(Script, u32)> {
         let mut sofar = Vec::new();
         for header in self.iter_trunk_rev(Some(from)) {
             let block_id = header.header.bitcoin_hash();
             // if filter is known for this block
-            if let Some(filter) = self.get_block_filter(&block_id, COIN_FILTER) {
-                if let Some(ref filter) = filter.filter {
-                    // check in a single pass read if any coins we search for might be in the filter for this block
-                    let reader = BlockFilterReader::new(&block_id).unwrap();
-                    if reader.match_any(&mut Cursor::new(filter), &remains).unwrap() {
-                        // do we have the block ?
-                        if let Some(block) = self.fetch_stored_block(&block_id).unwrap() {
-                            // for all transactions
-                            for (txpos, txid) in block.txids.iter().enumerate() {
-                                // check if any or many! outputs of this transaction are those we search for
-                                while let Ok(pos) = remains.binary_search_by(|r| r[0..32].cmp(txid.as_bytes())) {
-                                    // a transaction that we are interested in
-                                    let coin = OutPoint::consensus_decode(&mut Cursor::new(remains[pos].as_slice())).unwrap();
-                                    // get the script
-                                    let tx = self.fetch_transaction(block.txrefs[txpos]).unwrap();
-                                    sofar.push((tx.output[coin.vout as usize].script_pubkey.clone(), header.height));
-                                    // one less to worry about
-                                    remains.remove(pos);
+            if let Some(filter) = self.get_block_filter_header(&block_id, COIN_FILTER) {
+                if let Some(ref filter) = self.fetch_filter(&block_id, COIN_FILTER).unwrap() {
+                    if let Some(ref filter) = filter.filter {
+                        // check in a single pass read if any coins we search for might be in the filter for this block
+                        let reader = BlockFilterReader::new(&block_id).unwrap();
+                        if reader.match_any(&mut Cursor::new(filter.as_slice()), &remains).unwrap() {
+                            // do we have the block ?
+                            if let Some(block) = self.fetch_stored_block(&block_id).unwrap() {
+                                // for all transactions
+                                for (txpos, txid) in block.txids.iter().enumerate() {
+                                    // check if any or many! outputs of this transaction are those we search for
+                                    while let Ok(pos) = remains.binary_search_by(|r| r[0..32].cmp(txid.as_bytes())) {
+                                        // a transaction that we are interested in
+                                        let coin = OutPoint::consensus_decode(&mut Cursor::new(remains[pos].as_slice())).unwrap();
+                                        // get the script
+                                        let tx = self.fetch_transaction(block.txrefs[txpos]).unwrap();
+                                        sofar.push((tx.output[coin.vout as usize].script_pubkey.clone(), header.height));
+                                        // one less to worry about
+                                        remains.remove(pos);
+                                        // are we done?
+                                        if remains.len() == 0 {
+                                            break;
+                                        }
+                                    }
                                     // are we done?
                                     if remains.len() == 0 {
                                         break;
@@ -433,10 +461,6 @@ impl ChainDB {
                                 if remains.len() == 0 {
                                     break;
                                 }
-                            }
-                            // are we done?
-                            if remains.len() == 0 {
-                                break;
                             }
                         }
                     }

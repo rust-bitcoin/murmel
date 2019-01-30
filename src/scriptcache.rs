@@ -62,6 +62,8 @@ impl ScriptCache {
 
     pub fn len(&self) -> usize { self.cache.len() }
 
+    pub fn capacity(&self) -> usize { self.cache.capacity() }
+
     pub fn complete_after(&self) -> u32 {
         self.complete_after
     }
