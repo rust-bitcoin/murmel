@@ -210,7 +210,7 @@ impl GCSFilterReader {
                         data += self.filter.golomb_rice_decode(&mut reader)?;
                         remaining -= 1;
                     } else {
-                        break;
+                        return Ok(false);
                     }
                 } else {
                     break;
