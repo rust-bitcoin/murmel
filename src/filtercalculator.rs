@@ -58,7 +58,7 @@ pub struct FilterCalculator {
 
 
 // pollfrequency in millisecs
-const POLL: u64 = 100;
+const POLL: u64 = 1000;
 // a block should arrive within this timeout in seconds
 const BLOCK_TIMEOUT: u64 = 300;
 
@@ -76,7 +76,7 @@ impl FilterCalculator {
     fn run(&mut self, receiver: PeerMessageReceiver) {
         let mut re_check = true;
         loop {
-            self.timeout.lock().unwrap().check();
+            self.timeout.lock().unwrap().check(vec!(ExpectedReply::Block));
             // wait some time for incoming block messages, process them if available
             while let Ok(msg) = receiver.recv_timeout(Duration::from_millis(POLL)) {
                 match msg {
@@ -109,7 +109,6 @@ impl FilterCalculator {
                             NetworkMessage::Block(block) => {
                                 re_check = true;
                                 self.timeout.lock().unwrap().received(pid, 1, ExpectedReply::Block);
-                                thread::yield_now();
                                 self.block(pid, &block).expect("block store failed");
                             },
                             NetworkMessage::Ping(_) => {
@@ -203,12 +202,12 @@ impl FilterCalculator {
                     // if this is the next block for filter calculation
                     if let Some(prev_script) = chaindb.get_block_filter_header(&block.header.prev_blockhash, SCRIPT_FILTER) {
                         if let Some(prev_coin) = chaindb.get_block_filter_header(&block.header.prev_blockhash, COIN_FILTER) {
-                            // store block
-                            debug!("store block  {} {} peer={}", header.height, block_id, peer);
-                            chaindb.store_block(block)?;
                             // calculate filters
                             let script_filter = BlockFilter::compute_script_filter(&block, chaindb.get_script_accessor(block))?;
                             let coin_filter = BlockFilter::compute_coin_filter(&block)?;
+                            // store block
+                            debug!("store block  {} {} peer={}", header.height, block_id, peer);
+                            chaindb.store_block(block)?;
                             debug!("store filter {} {} size: {} {} peer={}", header.height, block_id, script_filter.content.len(), coin_filter.content.len(), peer);
                             // store known filters into header
                             chaindb.store_known_filter(&prev_script.bitcoin_hash(), &prev_coin.bitcoin_hash(), &script_filter, &coin_filter)?;

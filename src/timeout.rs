@@ -94,13 +94,15 @@ impl Timeout {
     }
 
 
-    pub fn check (&mut self) {
+    pub fn check (&mut self, expected: Vec<ExpectedReply>) {
         let mut banned = Vec::new();
         for (peer, timeout) in &self.timeouts {
             if *timeout < Self::now () {
-                debug!("too slow answering requests {:?}, banning peer={}", self.expected.get(peer), *peer);
-                self.p2p.send(P2PControl::Ban(*peer, 100));
-                banned.push (*peer);
+                if expected.iter().any(|expected| if let Some(e) = self.expected.get(peer) { if let Some(n) = e.get(expected) { *n>0 } else { false } } else { false }) {
+                    debug!("too slow answering requests {:?}, banning peer={}", self.expected.get(peer), *peer);
+                    self.p2p.send(P2PControl::Ban(*peer, 100));
+                    banned.push(*peer);
+                }
             }
         }
         for peer in &banned {

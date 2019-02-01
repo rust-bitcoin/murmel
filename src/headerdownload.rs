@@ -86,7 +86,7 @@ impl HeaderDownload {
                     error!("Error processing headers: {}", e);
                 }
             }
-            self.timeout.lock().unwrap().check();
+            self.timeout.lock().unwrap().check(vec!(ExpectedReply::Headers));
         }
     }
 

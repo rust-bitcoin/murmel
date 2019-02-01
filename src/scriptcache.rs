@@ -42,7 +42,7 @@ impl ScriptCache {
     }
 
     pub fn insert (&mut self, coin: OutPoint, script: Script, height: u32) {
-        if self.complete_after == 0 {
+        if self.complete_after == 0 || self.cache.capacity() == 0 {
             self.complete_after = height;
         }
         if self.cache.len() == self.cache.capacity () {

@@ -72,9 +72,9 @@ pub fn main() {
         }
     }
 
-    let mut cache = 1024usize *1024usize;
+    let mut cache = 0;
     if let Some(numstring) = find_arg("utxo-cache") {
-        cache *= numstring.parse::<usize>().unwrap() as usize;
+        cache = 1024usize *1024usize * numstring.parse::<usize>().unwrap() as usize;
     }
 
     let peers = get_peers();

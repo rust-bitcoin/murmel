@@ -47,6 +47,7 @@ use rayon::prelude::{ParallelIterator, ParallelSlice};
 use std::{
     collections::{HashMap, VecDeque},
     sync::{Arc, RwLock, Mutex},
+    cmp::max
 };
 use std::{
     path::Path,
@@ -322,6 +323,16 @@ impl ChainDB {
         panic!("configuration error: no block store");
     }
 
+    pub fn forget_block(&mut self, block_id: &Sha256dHash) -> Result<(), MurmelError> {
+        if self.fetch_stored_block(block_id)?.is_some() {
+            if let Some(ref mut heavy) = self.heavy {
+                return Ok(heavy.forget(&block_id.as_bytes()[..])?);
+            }
+            panic!("configuration error: no block store");
+        }
+        Ok(())
+    }
+
     pub fn fetch_txdata(&self, block_id: &Sha256dHash) -> Result<Option<Vec<Transaction>>, MurmelError> {
         if let Some(ref heavy) = self.heavy {
             let mut txdata = Vec::new();
@@ -404,7 +415,7 @@ impl ChainDB {
                 debug!("this block has only a coinbase transaction.");
             }
             let len = remains.len();
-            let mapped = remains.par_chunks(50).map(|remains| {
+            let mapped = remains.par_chunks(max(50, remains.len()/8)).map(|remains| {
                 let remains = remains.to_vec();
                 self.resolve_with_filters(from, remains)
             }).flatten().collect::<Vec<_>>();

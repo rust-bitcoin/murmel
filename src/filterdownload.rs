@@ -83,7 +83,7 @@ impl FilterDownload {
                     error!("Error processing filters: {}", e);
                 }
             }
-            self.timeout.lock().unwrap().check();
+            self.timeout.lock().unwrap().check(vec!(ExpectedReply::FilterHeader));
         }
     }
 

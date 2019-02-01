@@ -35,11 +35,12 @@ and compute filters. Run the server as follows:
 
 ```$xslt
 cargo build --release
-target/release/server 
+target/release/server --cache 75 
 ```
-Execute server with --help option to get further hints. It is recommended to run the server at initial bootstrap with 
-at least --cache 20 and pointing with --peer to a bitcoin node you know will answer quickly. The cache is very
-useful if bootstrapping the blockchain from scratch. Its effect is marginal after a re-start.
+Execute server with --help option to get further hints. It is recommended to point with --peer to a bitcoin node 
+that will answer quickly. Bootstrap will require about 12GB of RAM, for the UTXO cache and finish within hours. 
+A lower cache setting is not recommended for bootstrap as finding UTXO via filters is magnitudes slower, is however 
+fast enough to keep up with the chain. The server's RAM requirement will drop to about 0.7 GB without cache.
 
 
 ## Uses
