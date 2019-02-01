@@ -27,7 +27,7 @@ block reward. These additional checks to that required by SPV allows Murmel to h
 any other light node, but certainly still sub-par to a Bitcoin Core node.
 
 ## Status
-Not yet for serious use. Marble is able to support it's own and Lightning Node development. 
+Not yet for serious use. Murmel is able to support it's own and Lightning Node development. 
 
 ## How to run a filter server
 Murmel supports client development as a BIP157 filter server. For this it needs to build up a complete Bitcoin blockchain
@@ -39,12 +39,13 @@ target/release/server --cache 75
 ```
 Execute server with --help option to get further hints. It is recommended to point with --peer to a bitcoin node 
 that will answer quickly. Bootstrap will require about 12GB of RAM, for the UTXO cache and finish within hours. 
-A lower cache setting is not recommended for bootstrap as finding UTXO via filters is magnitudes slower, is however 
-fast enough to keep up with the chain. The server's RAM requirement will drop to about 0.7 GB without cache.
+A lower cache setting is not recommended for bootstrap as finding UTXO via filters is magnitudes slower, but 
+fast enough to keep up with the chain once bootstrapped. Cache is not needed after bootstrap, the RAM requirement 
+is 0.7 GB without cache.
 
 
 ## Uses
-Marble uses and supports below projects:
+Murmel uses and supports below projects:
 
 * [Rust language bindings for Bitcoin secp256k1 library.](https://github.com/rust-bitcoin/rust-secp256k1)
 * [Rust Bitcoin library](https://github.com/rust-bitcoin/rust-bitcoin)
