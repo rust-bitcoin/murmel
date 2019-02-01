@@ -99,7 +99,7 @@ impl Timeout {
         for (peer, timeout) in &self.timeouts {
             if *timeout < Self::now () {
                 if expected.iter().any(|expected| if let Some(e) = self.expected.get(peer) { if let Some(n) = e.get(expected) { *n>0 } else { false } } else { false }) {
-                    debug!("too slow answering requests {:?}, banning peer={}", self.expected.get(peer), *peer);
+                    debug!("too slow answering {:?} requests {:?}, banning peer={}", expected, self.expected.get(peer), *peer);
                     self.p2p.send(P2PControl::Ban(*peer, 100));
                     banned.push(*peer);
                 }
