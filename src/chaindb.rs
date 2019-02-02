@@ -282,7 +282,17 @@ impl ChainDB {
     }
 
     pub fn store_filter(&mut self, filter: &StoredFilter) -> Result<PRef, MurmelError> {
+        debug!("store filter {} for {} id: {} len: {}", filter.filter_type, filter.block_id, filter.filter_id(), if let Some(ref filter) = filter.filter { filter.len() } else { 0 });
         Ok(self.light.put_hash_keyed(filter)?)
+    }
+
+    pub fn store_calculated_filter (&mut self, previous: &Sha256dHash, filter: &BlockFilter) -> Result<(), MurmelError> {
+        let stored_filter = StoredFilter{block_id: filter.block, previous: previous.clone(),
+            filter_hash: Sha256dHash::from_data(filter.content.as_slice()), filter: Some(filter.content.clone()), filter_type: filter.filter_type };
+        if self.filtercache.add_filter_header(&stored_filter).is_none() {
+            self.store_filter(&stored_filter)?;
+        }
+        Ok(())
     }
 
     pub fn fetch_filter(&self, block_id: &Sha256dHash, filter_type: u8) -> Result<Option<StoredFilter>, MurmelError> {
@@ -291,19 +301,6 @@ impl ChainDB {
         id_data[32] = filter_type;
         let key = Sha256dHash::from_data(&id_data);
         Ok(self.light.get_hash_keyed::<StoredFilter>(&key)?.map(|(_, filter)| filter))
-    }
-
-    pub fn store_known_filter (&mut self, previous_script: &Sha256dHash, previous_coin: &Sha256dHash, script_filter: &BlockFilter, coin_filter: &BlockFilter) -> Result<(), MurmelError> {
-        let stored_script_filter = StoredFilter{block_id: script_filter.block, previous: previous_script.clone(),
-            filter_hash: Sha256dHash::from_data(script_filter.content.as_slice()), filter: Some(script_filter.content.clone()), filter_type: script_filter.filter_type };
-        self.store_filter(&stored_script_filter)?;
-        self.filtercache.add_filter_header(&stored_script_filter);
-
-        let stored_coin_filter = StoredFilter{block_id: coin_filter.block, previous: previous_coin.clone(),
-            filter_hash: Sha256dHash::from_data(coin_filter.content.as_slice()), filter: Some(coin_filter.content.clone()), filter_type: coin_filter.filter_type };
-        self.store_filter(&stored_coin_filter)?;
-        self.filtercache.add_filter_header(&stored_coin_filter);
-        Ok(())
     }
 
     pub fn may_have_block (&self, block_id: &Sha256dHash) -> Result<bool, MurmelError> {
@@ -359,6 +356,7 @@ impl ChainDB {
         if let Some(header) = self.headercache.get_header(&block.bitcoin_hash()) {
             let pref;
             if let Some(ref mut heavy) = self.heavy {
+                debug!("store block  {:6} {} tx: {}", header.height, header.header.bitcoin_hash(), block.txdata.len());
                 let txids = block.txdata.iter().map(|tx| tx.txid()).collect::<Vec<_>>();
                 let mut txrefs = Vec::with_capacity(txids.len());
                 for tx in &block.txdata {
@@ -391,29 +389,11 @@ impl ChainDB {
         }
     }
 
-    pub fn get_scripts(&self, coins: Vec<OutPoint>, mut sofar: Vec<Script>) -> Result<Vec<Script>, MurmelError> {
-        let mut remains = Vec::with_capacity(coins.len());
-        {
-            // check in script cache
-            let mut scriptcache = self.scriptcache.lock().unwrap();
-            for coin in &coins {
-                if let Some(script) = scriptcache.remove(coin) {
-                    sofar.push(script);
-                } else {
-                    let mut buf = Vec::new();
-                    coin.consensus_encode(&mut buf)?;
-                    remains.push(buf);
-                }
-            }
-        }
+    pub fn get_scripts(&self, mut remains: Vec<Vec<u8>>, mut sofar: Vec<Script>) -> Result<Vec<Script>, MurmelError> {
         remains.sort();
         if remains.len() > 0 {
             let from = self.scriptcache.lock().unwrap().complete_after();
-            if coins.len () > 0 {
-                debug!("lookup {} input coins {} in cache {} % {} in filters before height {}", coins.len(), coins.len() - remains.len(), ((coins.len() - remains.len()) * 100) / coins.len(), remains.len(), from);
-            } else {
-                debug!("this block has only a coinbase transaction.");
-            }
+            debug!("lookup {} input coins in filters before height {} ... ", remains.len(), from);
             let len = remains.len();
             let mapped = remains.par_chunks(max(50, remains.len()/8)).map(|remains| {
                 let remains = remains.to_vec();
@@ -421,7 +401,7 @@ impl ChainDB {
             }).flatten().collect::<Vec<_>>();
             sofar.extend (mapped.iter().map(|(s, _)|s.clone()));
             if let Some(first) = mapped.iter().map(|(_, h)|h).min() {
-                debug!("first block with filter match {}", first);
+                debug!("... highest block with filter match {}", first);
             }
         }
         // are we done?
@@ -533,7 +513,7 @@ impl<D: Decoder> Decodable<D> for StoredHeader {
 const HEADER_TIP_KEY: &[u8] = &[0u8; 1];
 
 /// Filter stored
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct StoredFilter {
     /// filter type
     pub filter_type: u8,
@@ -551,7 +531,7 @@ impl StoredFilter {
     pub fn filter_id(&self) -> Sha256dHash {
         let mut id_data = [0u8; 64];
         id_data[0..32].copy_from_slice(&self.filter_hash.as_bytes()[..]);
-        id_data[0..32].copy_from_slice(&self.previous.as_bytes()[..]);
+        id_data[32..].copy_from_slice(&self.previous.as_bytes()[..]);
         Sha256dHash::from_data(&id_data)
     }
 }
@@ -665,12 +645,21 @@ impl<'a> ScriptAccessor for DBScriptAccessor<'a> {
     fn get_scripts(&self, coins: Vec<OutPoint>) -> Result<Vec<Script>, MurmelError> {
         let mut sofar = Vec::with_capacity(coins.len());
         let mut remains = Vec::with_capacity(coins.len());
-        for coin in coins {
-            if let Some(r) = self.same_block_scripts.get(&coin) {
-                sofar.push(r.clone());
-            }
-            else {
-                remains.push(coin);
+        {
+            let mut scriptcache = self.db.scriptcache.lock().unwrap();
+            for coin in coins {
+                if let Some(r) = self.same_block_scripts.get(&coin) {
+                    sofar.push(r.clone());
+                    scriptcache.remove(&coin);
+                } else {
+                    if let Some(script) = scriptcache.remove(&coin) {
+                        sofar.push(script);
+                    } else {
+                        let mut buf = Vec::new();
+                        coin.consensus_encode(&mut buf)?;
+                        remains.push(buf);
+                    }
+                }
             }
         }
         self.db.get_scripts(remains, sofar)

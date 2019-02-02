@@ -50,12 +50,12 @@ impl FilterCache {
         self.filters.len()
     }
 
-    pub fn add_filter_header(&mut self, filter: &StoredFilter) {
+    pub fn add_filter_header(&mut self, filter: &StoredFilter) -> Option<Arc<StoredFilter>> {
         let mut stored = filter.clone();
         stored.filter = None;
-        let filter = Arc::new(stored.clone());
-        self.by_block.insert((filter.block_id, stored.filter_type), filter.clone());
-        self.filters.insert(filter.filter_id(), filter);
+        let filter = Arc::new(stored);
+        self.by_block.insert((filter.block_id, filter.filter_type), filter.clone());
+        self.filters.insert(filter.filter_id(), filter)
     }
 
     /// Fetch a header by its id from cache

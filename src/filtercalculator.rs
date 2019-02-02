@@ -163,7 +163,8 @@ impl FilterCalculator {
                         let block_ref = chaindb.store_block(&genesis)?;
                         let script_filter = BlockFilter::compute_script_filter(&genesis, chaindb.get_script_accessor(&genesis))?;
                         let coin_filter = BlockFilter::compute_coin_filter(&genesis)?;
-                        chaindb.store_known_filter(&Sha256dHash::default(), &Sha256dHash::default(), &script_filter, &coin_filter)?;
+                        chaindb.store_calculated_filter(&Sha256dHash::default(), &script_filter)?;
+                        chaindb.store_calculated_filter(&Sha256dHash::default(), &coin_filter)?;
                         chaindb.cache_scripts(&genesis, 0);
                         chaindb.batch()?;
                         let len = missing.len();
@@ -201,20 +202,15 @@ impl FilterCalculator {
                     chaindb.cache_scripts(block, header.height);
                     // if this is the next block for filter calculation
                     if let Some(prev_script) = chaindb.get_block_filter_header(&block.header.prev_blockhash, SCRIPT_FILTER) {
-                        if let Some(prev_coin) = chaindb.get_block_filter_header(&block.header.prev_blockhash, COIN_FILTER) {
-                            // calculate filters
-                            let script_filter = BlockFilter::compute_script_filter(&block, chaindb.get_script_accessor(block))?;
-                            let coin_filter = BlockFilter::compute_coin_filter(&block)?;
-                            // store block
-                            debug!("store block  {} {} peer={}", header.height, block_id, peer);
-                            chaindb.store_block(block)?;
-                            debug!("store filter {} {} size: {} {} peer={}", header.height, block_id, script_filter.content.len(), coin_filter.content.len(), peer);
-                            // store known filters into header
-                            chaindb.store_known_filter(&prev_script.filter_id(), &prev_coin.filter_id(), &script_filter, &coin_filter)?;
-                            // let client know we have a new block
-                            self.p2p.send(P2PControl::Broadcast(NetworkMessage::Inv(vec!(Inventory{inv_type: InvType::Block, hash:block_id}))));
-                        }
+                        let script_filter = BlockFilter::compute_script_filter(&block, chaindb.get_script_accessor(block))?;
+                        chaindb.store_calculated_filter(&prev_script.filter_id(), &script_filter)?;
                     }
+                    if let Some(prev_coin) = chaindb.get_block_filter_header(&block.header.prev_blockhash, COIN_FILTER) {
+                        let coin_filter = BlockFilter::compute_coin_filter(&block)?;
+                        chaindb.store_calculated_filter(&prev_coin.filter_id(), &coin_filter)?;
+                    }
+                    chaindb.store_block(block)?;
+                    self.p2p.send(P2PControl::Broadcast(NetworkMessage::Inv(vec!(Inventory{inv_type: InvType::Block, hash:block_id}))));
                 }
                 else {
                     debug!("received tampered block, banning peer={}", peer);
