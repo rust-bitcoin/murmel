@@ -301,8 +301,8 @@ impl HeaderCache {
         return HeaderIterator::new(self, start_with);
     }
 
-    pub fn iter_trunk<'a> (&'a self, after: u32) -> Box<Iterator<Item=&'a StoredHeader> +'a> {
-        Box::new(self.trunk.iter().skip(after as usize).map(move |a| self.headers.get(&*a).unwrap()))
+    pub fn iter_trunk<'a> (&'a self, from: u32) -> Box<Iterator<Item=&'a StoredHeader> +'a> {
+        Box::new(self.trunk.iter().skip(from as usize).map(move |a| self.headers.get(&*a).unwrap()))
     }
 
     pub fn iter_trunk_rev<'a> (&'a self, from: Option<u32>) -> Box<Iterator<Item=&'a StoredHeader> +'a> {

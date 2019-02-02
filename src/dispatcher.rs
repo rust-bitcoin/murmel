@@ -166,6 +166,7 @@ impl Dispatcher {
 
     /// called from dispatcher whenever a peer is disconnected
     pub fn disconnected(&self, pm: PeerMessage) -> Result<(), MurmelError> {
+        self.timeout.lock().unwrap().forget(pm.peer_id());
         self.filter_calculator.send(pm);
         Ok(())
     }
@@ -184,6 +185,7 @@ impl Dispatcher {
             NetworkMessage::Headers(_) => {
                 self.header_downloader.send_network(peer, msg);
                 self.filter_calculator.send_network(peer, NetworkMessage::Ping(0));
+                self.filterdownload.send_network(peer, NetworkMessage::Ping(0));
                 Ok(())
             },
             NetworkMessage::Block(_) => {

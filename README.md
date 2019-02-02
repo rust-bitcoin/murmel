@@ -35,7 +35,7 @@ and compute filters. Run the server as follows:
 
 ```$xslt
 cargo build --release
-target/release/server --cache 75 
+target/release/server --utxo-cache 75 
 ```
 Execute server with --help option to get further hints. It is recommended to point with --peer to a bitcoin node 
 that will answer quickly. Bootstrap will require about 12GB of RAM, for the UTXO cache and finish within hours. 

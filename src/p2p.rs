@@ -80,7 +80,7 @@ impl fmt::Display for PeerId {
         Ok(())
     }
 }
-pub type PeerMap = HashMap<PeerId, Mutex<Peer>>;
+type PeerMap = HashMap<PeerId, Mutex<Peer>>;
 
 #[derive(Clone)]
 pub enum PeerMessage {

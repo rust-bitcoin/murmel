@@ -220,9 +220,9 @@ impl ChainDB {
         self.headercache.pos_on_trunk(hash)
     }
 
-    // iterate trunk (after .. tip]
-    pub fn iter_trunk<'a> (&'a self, after: u32) -> impl Iterator<Item=&'a StoredHeader> +'a {
-        self.headercache.iter_trunk(after)
+    // iterate trunk [from .. tip]
+    pub fn iter_trunk<'a> (&'a self, from: u32) -> impl Iterator<Item=&'a StoredHeader> +'a {
+        self.headercache.iter_trunk(from)
     }
 
     // iterate trunk [genesis .. from] in reverse order from is the tip if not specified

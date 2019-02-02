@@ -73,6 +73,7 @@ impl FilterDownload {
                     }
                     PeerMessage::Message(pid, msg) => {
                         match msg {
+                            NetworkMessage::Ping(_) => if self.is_serving_filters(pid) { self.get_filter_headers(pid, SCRIPT_FILTER) } else { Ok(()) },
                             NetworkMessage::CFHeaders(headers) => if self.is_serving_filters(pid) { self.filter_headers(headers, pid) } else { Ok(()) },
                             NetworkMessage::CFilter(filter) => if self.is_serving_filters(pid) { self.filter(filter, pid) } else { Ok(()) },
                             NetworkMessage::Inv(inv) => if self.is_serving_filters(pid) { self.inv(inv, pid) } else { Ok(()) },
@@ -117,39 +118,53 @@ impl FilterDownload {
             stop_hash = id.header.bitcoin_hash();
         }
         self.timeout.lock().unwrap().expect(peer, 1, ExpectedReply::FilterHeader);
-        debug!("asking for {} {} filter headers after height {} peer={}", n, if filter_type == SCRIPT_FILTER {"script"} else {"coin"}, start_height, peer);
+        debug!("asking for {} filter headers start height {} stop block {} peer={}", if filter_type == SCRIPT_FILTER {"script"} else {"coin"}, start_height, stop_hash, peer);
         self.p2p.send_network(peer, NetworkMessage::GetCFHeaders(GetCFHeaders{filter_type: SCRIPT_FILTER, start_height, stop_hash}));
         Ok(())
     }
 
     fn filter_headers(&mut self, headers: CFHeaders, peer: PeerId) -> Result<(), MurmelError> {
-
-        let previous_block_pos = if headers.previous_filter == Sha256dHash::default() {
+        let next_block_pos = if headers.previous_filter == Sha256dHash::default() {
             Some(0)
         }
         else {
             let chaindb = self.chaindb.read().unwrap();
             if let Some(filter) = chaindb.get_filter_header(&headers.previous_filter) {
-                chaindb.pos_on_trunk(&filter.block_id)
+                if let Some(pos) = chaindb.pos_on_trunk(&filter.block_id) {
+                    Some(pos+1)
+                }
+                else {
+                    None
+                }
             }
             else {
+                debug!("unknown previous filter {} peer={}", headers.previous_filter, peer);
                 None
             }
         };
-        if let Some(trunk_pos) = previous_block_pos {
+        let mut stored = 0;
+        if let Some(trunk_pos) = next_block_pos {
+            debug!("received filters from {} to {} peer={}", trunk_pos, headers.stop_hash, peer);
             self.timeout.lock().unwrap().received(peer, 1, ExpectedReply::FilterHeader);
 
             let mut chaindb = self.chaindb.write().unwrap();
             let mut previous = headers.previous_filter;
-            let id_pairs = chaindb.iter_trunk(trunk_pos).map(|h|h.bitcoin_hash()).zip(headers.filter_hashes.iter().cloned()).collect::<Vec<_>>();
+            let id_pairs = chaindb.iter_trunk(trunk_pos).map(|h|h.header.bitcoin_hash()).zip(headers.filter_hashes.iter().cloned()).collect::<Vec<_>>();
             for (block_id, filter_hash) in  id_pairs {
 
                 let filter = StoredFilter { block_id, previous, filter_hash, filter: None, filter_type: headers.filter_type };
-                previous = filter.bitcoin_hash();
+                previous = filter.filter_id();
 
-                debug!("store {} filter header {} peer={}", if filter.filter_type == SCRIPT_FILTER {"script"} else {"coin"}, filter.block_id, peer);
-                chaindb.add_filter(filter)?;
+                if chaindb.get_filter_header(&filter.filter_id()).is_none() {
+                    stored += 1;
+                    chaindb.add_filter(filter)?;
+                }
+
             }
+        }
+        if stored > 0 {
+            debug!("stored {} filters peer={}", stored, peer);
+            self.get_filter_headers(peer, SCRIPT_FILTER)?;
         }
         Ok(())
     }

@@ -72,9 +72,10 @@ impl FilterServer {
     }
 
     fn filter_headers<'a>(&self, chaindb: &'a RwLockReadGuard<ChainDB>, filter_type: u8, start: u32, stop_hash: Sha256dHash) -> Box<Iterator<Item=Arc<StoredFilter>> + 'a> {
+        debug!("received request for filter headers {} {}", start, stop_hash);
         if let Some(pos) = chaindb.pos_on_trunk(&stop_hash) {
             if pos >= start {
-                return Box::new(chaindb.iter_trunk(start).take((pos - start) as usize).filter_map(move |h| chaindb.get_block_filter_header(&h.header.bitcoin_hash(), filter_type)))
+                return Box::new(chaindb.iter_trunk(start).take((pos - start + 1) as usize).filter_map(move |h| chaindb.get_block_filter_header(&h.header.bitcoin_hash(), filter_type)))
             }
         }
         Box::new(iter::empty::<Arc<StoredFilter>>())
@@ -83,7 +84,7 @@ impl FilterServer {
     fn get_cfcheckpt(&self, peer: PeerId, get: GetCFCheckpt) -> Result<(), MurmelError> {
         let chaindb = self.chaindb.read().unwrap();
         let headers = self.filter_headers(&chaindb, get.filter_type, 0, get.stop_hash).enumerate()
-            .filter_map(|(i, h)| if i % 1000 == 0 { Some(h.bitcoin_hash())} else { None }).collect::<Vec<_>>();
+            .filter_map(|(i, h)| if i % 1000 == 0 { Some(h.filter_id())} else { None }).collect::<Vec<_>>();
         if headers.len () > 0 {
             self.p2p.send(P2PControl::Send(peer, NetworkMessage::CFCheckpt(
                 CFCheckpt {
@@ -116,7 +117,7 @@ impl FilterServer {
                         CFHeaders {
                             filter_type: get.filter_type,
                             stop_hash: get.stop_hash,
-                            previous_filter: previous_filter.bitcoin_hash(),
+                            previous_filter: previous_filter.filter_id(),
                             filter_hashes
                         }
                     )));
@@ -129,7 +130,7 @@ impl FilterServer {
 
     fn get_cfilters(&self, peer: PeerId, get: GetCFilters) -> Result<(), MurmelError> {
         let chaindb = self.chaindb.read().unwrap();
-        let filter_ids = self.filter_headers(&chaindb, get.filter_type, get.start_height, get.stop_hash).map(|f| f.bitcoin_hash()).collect::<Vec<_>>();
+        let filter_ids = self.filter_headers(&chaindb, get.filter_type, get.start_height, get.stop_hash).map(|f| f.filter_id()).collect::<Vec<_>>();
         for filter_id in &filter_ids {
             if let Some(filter) = chaindb.get_filter_header(filter_id) {
                 if let Some(ref content) = filter.filter {
