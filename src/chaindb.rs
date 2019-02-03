@@ -59,11 +59,12 @@ pub struct ChainDB {
     filtercache: FilterCache,
     scriptcache: Mutex<ScriptCache>,
     network: Network,
+    birth: u64
 }
 
 impl ChainDB {
     /// Create an in-memory database instance
-    pub fn mem(network: Network, heavy: bool, script_cache_size: usize) -> Result<ChainDB, MurmelError> {
+    pub fn mem(network: Network, heavy: bool, script_cache_size: usize, birth: u64) -> Result<ChainDB, MurmelError> {
         info!("working with in memory chain db");
         let light = BitcoinAdaptor::new(transient(2)?);
         let headercache = HeaderCache::new(network);
@@ -71,14 +72,14 @@ impl ChainDB {
         let scriptcache = Mutex::new(ScriptCache::new(script_cache_size));
         if heavy {
             let heavy = Some(BitcoinAdaptor::new(transient(2)?));
-            Ok(ChainDB { light, heavy, network, headercache, filtercache, scriptcache })
+            Ok(ChainDB { light, heavy, network, headercache, filtercache, scriptcache, birth})
         } else {
-            Ok(ChainDB { light, heavy: None, network, headercache, filtercache, scriptcache })
+            Ok(ChainDB { light, heavy: None, network, headercache, filtercache, scriptcache, birth })
         }
     }
 
     /// Create or open a persistent database instance identified by the path
-    pub fn new(path: &Path, network: Network, heavy: bool, script_cache_size: usize) -> Result<ChainDB, MurmelError> {
+    pub fn new(path: &Path, network: Network, heavy: bool, script_cache_size: usize, birth: u64) -> Result<ChainDB, MurmelError> {
         let basename = path.to_str().unwrap().to_string();
         let light = BitcoinAdaptor::new(persistent((basename.clone() + ".h").as_str(), 100, 2)?);
         let headercache = HeaderCache::new(network);
@@ -86,9 +87,9 @@ impl ChainDB {
         let scriptcache = Mutex::new(ScriptCache::new(script_cache_size));
         if heavy {
             let heavy = Some(BitcoinAdaptor::new(persistent((basename + ".b").as_str(), 1000, 2)?));
-            Ok(ChainDB { light, heavy, network, headercache, filtercache, scriptcache })
+            Ok(ChainDB { light, heavy, network, headercache, filtercache, scriptcache, birth})
         } else {
-            Ok(ChainDB { light, heavy: None, network, headercache, filtercache, scriptcache })
+            Ok(ChainDB { light, heavy: None, network, headercache, filtercache, scriptcache, birth})
         }
     }
 
@@ -106,6 +107,15 @@ impl ChainDB {
             heavy.batch()?;
         }
         Ok(())
+    }
+
+    pub fn birth_header(&self) -> Option<&StoredHeader> {
+        for header in self.iter_trunk(0) {
+            if header.header.time as u64 >= self.birth {
+                return Some (header)
+            }
+        }
+        None
     }
 
     fn init_headers(&mut self, server: bool) -> Result<(), MurmelError> {

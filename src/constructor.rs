@@ -63,10 +63,10 @@ impl Constructor {
     ///      db - file path to data
     /// The method will read previously stored headers from the database and sync up with the peers
     /// then serve the returned ChainWatchInterface
-    pub fn new(user_agent :String, network: Network, path: &Path, listen: Vec<SocketAddr>, server: bool, script_cache_size: usize) -> Result<Constructor, MurmelError> {
+    pub fn new(user_agent :String, network: Network, path: &Path, listen: Vec<SocketAddr>, server: bool, script_cache_size: usize, birth: u64) -> Result<Constructor, MurmelError> {
         let configdb = Arc::new(Mutex::new(ConfigDB::new(path)?));
-        let chaindb = Arc::new(RwLock::new(ChainDB::new(path, network,server, script_cache_size)?));
         create_tables(configdb.clone())?;
+        let chaindb = Arc::new(RwLock::new(ChainDB::new(path, network,server, script_cache_size, birth)?));
         Ok(Constructor { network, user_agent, configdb, chaindb, listen, server })
     }
 
@@ -76,9 +76,9 @@ impl Constructor {
     ///      bootstrap - peer adresses (only tested to work with one local node for now)
     /// The method will start with an empty in-memory database and sync up with the peers
     /// then serve the returned ChainWatchInterface
-    pub fn new_in_memory(user_agent :String, network: Network, listen: Vec<SocketAddr>, server: bool, script_cache_size: usize) -> Result<Constructor, MurmelError> {
+    pub fn new_in_memory(user_agent :String, network: Network, listen: Vec<SocketAddr>, server: bool, script_cache_size: usize, birth: u64) -> Result<Constructor, MurmelError> {
         let configdb = Arc::new(Mutex::new(ConfigDB::mem()?));
-        let chaindb = Arc::new(RwLock::new(ChainDB::mem( network,server, script_cache_size)?));
+        let chaindb = Arc::new(RwLock::new(ChainDB::mem( network,server, script_cache_size, birth)?));
         create_tables(configdb.clone())?;
         Ok(Constructor { network, user_agent, configdb, chaindb, listen, server })
     }
@@ -88,7 +88,7 @@ impl Constructor {
 	/// * peers - connect to these peers at startup (might be empty)
 	/// * min_connections - keep connections with at least this number of peers. Peers will be randomly chosen
 	/// from those discovered in earlier runs
-    pub fn run(&mut self, peers: Vec<SocketAddr>, min_connections: usize, nodns: bool) -> Result<(), MurmelError>{
+    pub fn run(&mut self, peers: Vec<SocketAddr>, min_connections: usize, nodns: bool, birth: u64) -> Result<(), MurmelError>{
 
         let back_pressure = if self.server {
             1000
@@ -100,6 +100,13 @@ impl Constructor {
 
         let (p2p, p2p_control) =
             P2P::new(self.user_agent.clone(), self.network, 0, MAX_PROTOCOL_VERSION, self.server, PeerMessageSender::new(to_dispatcher), back_pressure);
+
+        {
+            let mut db = self.configdb.lock().unwrap();
+            let mut tx = db.transaction()?;
+            tx.set_birth(birth)?;
+            tx.commit()?;
+        }
 
         let dispatcher =
             Dispatcher::new(self.network, self.configdb.clone(), self.chaindb.clone(), self.server, p2p_control.clone(), from_p2p);

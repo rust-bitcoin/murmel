@@ -107,16 +107,26 @@ impl<'a> ConfigTX<'a> {
 
 
     #[allow(unused)]
-    pub fn get_birth(&self) -> Result<u64, MurmelError> {
-        Ok(self.tx.query_row::<i64, _>("select inception from birth",
+    pub fn get_birth(&self) -> Result<Option<u64>, MurmelError> {
+        if let Ok(time) = self.tx.query_row::<i64, _>("select inception from birth",
                              &[],
                              |row| {
                                  row.get(0)
-                             })? as u64)
+                             }) {
+            Ok(Some(time as u64))
+        }
+        else {
+            Ok(None)
+        }
     }
 
     pub fn set_birth(&mut self, birth: u64) -> Result<(), MurmelError> {
-        self.tx.execute("insert into birth (inception) values (?)", &[&(birth as i64)])?;
+        if self.get_birth()?.is_none() {
+            self.tx.execute("insert into birth (inception) values (?)", &[&(birth as i64)])?;
+        }
+        else {
+            info!("Ignoring request to set birth time point, birth is already set to {}", self.get_birth()?.unwrap());
+        }
         Ok(())
     }
 

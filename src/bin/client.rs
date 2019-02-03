@@ -26,6 +26,7 @@ use std::env::args;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::Path;
 use std::str::FromStr;
+use std::time::SystemTime;
 
 pub fn main() {
     if find_opt("help") {
@@ -37,6 +38,7 @@ pub fn main() {
         println!("--db file: store data in the given sqlite database file. Created if does not exist.");
         println!("--network net: net is one of main|test for corresponding Bitcoin networks");
         println!("--nodns : do not use dns seed");
+        println!("--birth unixtime : blocks will be downloaded if matching filters after this time stamp");
         println!("defaults:");
         println!("--peer 127.0.0.1:8333");
         println!("--db client.db");
@@ -80,13 +82,20 @@ pub fn main() {
     }
     let mut spv;
     let listen = get_listeners();
-    if let Some(path) = find_arg("db") {
-        spv = Constructor::new("/Murmel:0.1.0/".to_string(), network, Path::new(path.as_str()),  listen, false,cache).unwrap();
+    let birth = if let Some(timestamp) = find_arg("birth") {
+        timestamp.parse::<u64>().unwrap()
     }
     else {
-        spv = Constructor::new("/Murmel:0.1.0/".to_string(), network, Path::new("client.db"), listen, false,cache).unwrap();
+        SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs()
+    };
+
+    if let Some(path) = find_arg("db") {
+        spv = Constructor::new("/Murmel:0.1.0/".to_string(), network, Path::new(path.as_str()),  listen, false,cache, birth).unwrap();
     }
-    spv.run(peers, connections, true).expect("can not start node");
+    else {
+        spv = Constructor::new("/Murmel:0.1.0/".to_string(), network, Path::new("client.db"), listen, false,cache, birth).unwrap();
+    }
+    spv.run(peers, connections, true, birth).expect("can not start node");
 }
 
 fn get_peers() -> Vec<SocketAddr> {

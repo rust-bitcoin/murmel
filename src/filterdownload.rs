@@ -23,7 +23,7 @@ use bitcoin::{
         message::NetworkMessage,
         message_blockdata::{Inventory, InvType},
         message_filter::{
-            CFCheckpt, CFHeaders, CFilter, GetCFCheckpt, GetCFHeaders
+            CFCheckpt, CFHeaders, CFilter, GetCFCheckpt, GetCFHeaders, GetCFilters
         },
     },
     util::hash::Sha256dHash
@@ -195,10 +195,10 @@ impl FilterDownload {
 
             let mut chaindb = self.chaindb.write().unwrap();
             let mut previous = headers.previous_filter;
-            let id_pairs = chaindb.iter_trunk(trunk_pos).map(|h|h.header.bitcoin_hash()).zip(headers.filter_hashes.iter().cloned()).collect::<Vec<_>>();
-            for (block_id, filter_hash) in  id_pairs {
+            let id_pairs = chaindb.iter_trunk(trunk_pos).map(|h|h.header).zip(headers.filter_hashes.iter().cloned()).collect::<Vec<_>>();
+            for (header, filter_hash) in  id_pairs {
 
-                let filter = StoredFilter { block_id, previous, filter_hash, filter: None, filter_type: headers.filter_type };
+                let filter = StoredFilter { block_id: header.bitcoin_hash(), previous, filter_hash, filter: None, filter_type: headers.filter_type };
                 previous = filter.filter_id();
 
                 if chaindb.get_filter_header(&filter.filter_id()).is_none() {
