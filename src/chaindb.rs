@@ -282,7 +282,6 @@ impl ChainDB {
     }
 
     pub fn store_filter(&mut self, filter: &StoredFilter) -> Result<PRef, MurmelError> {
-        debug!("store filter {} for {} id: {} len: {}", filter.filter_type, filter.block_id, filter.filter_id(), if let Some(ref filter) = filter.filter { filter.len() } else { 0 });
         Ok(self.light.put_hash_keyed(filter)?)
     }
 

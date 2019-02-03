@@ -109,17 +109,19 @@ impl FilterDownload {
                 break;
             }
         }
-        let mut n = 0;
-        for (i, id) in chaindb.iter_trunk(start_height).enumerate() {
-            if i == 1000 {
-                break;
+        if stop_hash != Sha256dHash::default() {
+            let mut n = 0;
+            for (i, id) in chaindb.iter_trunk(start_height).enumerate() {
+                if i == 1999 {
+                    break;
+                }
+                n += 1;
+                stop_hash = id.header.bitcoin_hash();
             }
-            n += 1;
-            stop_hash = id.header.bitcoin_hash();
+            self.timeout.lock().unwrap().expect(peer, 1, ExpectedReply::FilterHeader);
+            debug!("asking for {} filter headers start height {} stop block {} peer={}", if filter_type == SCRIPT_FILTER { "script" } else { "coin" }, start_height, stop_hash, peer);
+            self.p2p.send_network(peer, NetworkMessage::GetCFHeaders(GetCFHeaders { filter_type: SCRIPT_FILTER, start_height, stop_hash }));
         }
-        self.timeout.lock().unwrap().expect(peer, 1, ExpectedReply::FilterHeader);
-        debug!("asking for {} filter headers start height {} stop block {} peer={}", if filter_type == SCRIPT_FILTER {"script"} else {"coin"}, start_height, stop_hash, peer);
-        self.p2p.send_network(peer, NetworkMessage::GetCFHeaders(GetCFHeaders{filter_type: SCRIPT_FILTER, start_height, stop_hash}));
         Ok(())
     }
 
@@ -144,7 +146,6 @@ impl FilterDownload {
         };
         let mut stored = 0;
         if let Some(trunk_pos) = next_block_pos {
-            debug!("received filters from {} to {} peer={}", trunk_pos, headers.stop_hash, peer);
             self.timeout.lock().unwrap().received(peer, 1, ExpectedReply::FilterHeader);
 
             let mut chaindb = self.chaindb.write().unwrap();
