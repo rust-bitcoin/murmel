@@ -23,7 +23,7 @@ use bitcoin::{
         message::NetworkMessage,
         message_blockdata::{InvType, Inventory},
         message_filter::{
-            CFHeaders, CFilter, GetCFHeaders, GetCFilters
+            CFHeaders, CFilter, GetCFHeaders, GetCFilters, GetCFCheckpt, CFCheckpt
         },
     },
     util::hash::Sha256dHash
@@ -37,7 +37,7 @@ use std::{
 };
 use timeout::{ExpectedReply, SharedTimeout};
 use error::MurmelError;
-use blockfilter::SCRIPT_FILTER;
+use blockfilter::{SCRIPT_FILTER, COIN_FILTER};
 use chaindb::StoredFilter;
 
 pub struct FilterDownload {
@@ -63,7 +63,7 @@ impl FilterDownload {
                 if let Err(e) = match msg {
                     PeerMessage::Connected(pid) => {
                         if self.is_serving_filters(pid) {
-                            self.get_filter_headers(pid, SCRIPT_FILTER)
+                            self.get_filter_checkpoints(pid, SCRIPT_FILTER)
                         } else {
                             Ok(())
                         }
@@ -72,19 +72,25 @@ impl FilterDownload {
                         Ok(())
                     }
                     PeerMessage::Message(pid, msg) => {
-                        match msg {
-                            NetworkMessage::Ping(_) => if self.is_serving_filters(pid) { self.get_filter_headers(pid, SCRIPT_FILTER) } else { Ok(()) },
-                            NetworkMessage::CFHeaders(headers) => if self.is_serving_filters(pid) { self.filter_headers(headers, pid) } else { Ok(()) },
-                            NetworkMessage::CFilter(filter) => if self.is_serving_filters(pid) { self.filter(filter, pid) } else { Ok(()) },
-                            NetworkMessage::Inv(inv) => if self.is_serving_filters(pid) { self.inv(inv, pid) } else { Ok(()) },
-                            _ => { Ok(()) }
+                        if self.is_serving_filters(pid) {
+                            match msg {
+                                NetworkMessage::Ping(_) => self.get_filter_headers(pid, SCRIPT_FILTER),
+                                NetworkMessage::CFHeaders(headers) => self.filter_headers(headers, pid),
+                                NetworkMessage::CFilter(filter) => self.filter(filter, pid),
+                                NetworkMessage::CFCheckpt(c) => self.checkpoint(c, pid),
+                                NetworkMessage::Inv(inv) => self.inv(inv, pid),
+                                _ => { Ok(()) }
+                            }
+                        }
+                        else {
+                            Ok(())
                         }
                     }
                 } {
                     error!("Error processing filters: {}", e);
                 }
             }
-            self.timeout.lock().unwrap().check(vec!(ExpectedReply::FilterHeader));
+            self.timeout.lock().unwrap().check(vec!(ExpectedReply::FilterHeader, ExpectedReply::FilterCheckpoints));
         }
     }
 
@@ -95,32 +101,73 @@ impl FilterDownload {
         false
     }
 
+    fn get_filter_checkpoints(&mut self, peer: PeerId, filter_type: u8) -> Result<(), MurmelError> {
+        if self.timeout.lock().unwrap().is_busy_with(peer, ExpectedReply::FilterCheckpoints) {
+            return Ok(());
+        }
+        if let Some(tip) = self.chaindb.read().unwrap().header_tip() {
+            self.p2p.send_network(peer, NetworkMessage::GetCFCheckpt(GetCFCheckpt { filter_type, stop_hash: tip.header.bitcoin_hash() }));
+            self.timeout.lock().unwrap().expect(peer, 1, ExpectedReply::FilterCheckpoints);
+        }
+        Ok(())
+    }
+
+    fn checkpoint (&mut self, checkpoints: CFCheckpt, peer: PeerId) -> Result<(), MurmelError> {
+        let mut ok = true;
+        {
+            self.timeout.lock().unwrap().received(peer, 1, ExpectedReply::FilterCheckpoints);
+            let chaindb = self.chaindb.read().unwrap();
+            for header in chaindb.iter_trunk(0) {
+                if header.height as usize == checkpoints.filter_headers.len() {
+                    break;
+                }
+                if header.height % 1000 == 0 {
+                    if let Some(filter) = chaindb.get_block_filter_header(&header.header.bitcoin_hash(), checkpoints.filter_type) {
+                        if filter.filter_id() != checkpoints.filter_headers[header.height as usize / 1000] {
+                            debug!("filter {} checkpoint mismatch at height {} with peer={}", checkpoints.filter_type, header.height, peer);
+                            ok = false;
+                        }
+                    }
+                }
+            }
+            debug!("filter {} checkpoints match with peer={}", checkpoints.filter_type, peer);
+        }
+        if ok {
+            self.get_filter_headers(peer, checkpoints.filter_type)?;
+        }
+        Ok(())
+    }
+
     fn get_filter_headers(&mut self, peer: PeerId, filter_type: u8) -> Result<(), MurmelError> {
         if self.timeout.lock().unwrap().is_busy_with(peer, ExpectedReply::FilterHeader) {
             return Ok(());
         }
-        let mut start_height = 0;
-        let mut stop_hash = Sha256dHash::default();
-        let chaindb = self.chaindb.read().unwrap();
-        for header in chaindb.iter_trunk(0) {
-            stop_hash = header.header.bitcoin_hash();
-            if chaindb.get_block_filter_header(&stop_hash, filter_type).is_none () {
-                start_height = header.height;
-                break;
-            }
+        if self.timeout.lock().unwrap().is_busy_with(peer, ExpectedReply::FilterCheckpoints) {
+            return Ok(());
         }
-        if stop_hash != Sha256dHash::default() {
-            let mut n = 0;
-            for (i, id) in chaindb.iter_trunk(start_height).enumerate() {
-                if i == 1999 {
+        let chaindb = self.chaindb.read().unwrap();
+        if let Some(tip) = chaindb.header_tip() {
+            let mut start_height = 0;
+            let mut stop_hash = tip.bitcoin_hash();
+            for header in chaindb.iter_trunk_rev(None) {
+                if chaindb.get_block_filter_header(&header.header.bitcoin_hash(), filter_type).is_some () {
+                    start_height = header.height + 1;
                     break;
                 }
-                n += 1;
-                stop_hash = id.header.bitcoin_hash();
             }
-            self.timeout.lock().unwrap().expect(peer, 1, ExpectedReply::FilterHeader);
-            debug!("asking for {} filter headers start height {} stop block {} peer={}", if filter_type == SCRIPT_FILTER { "script" } else { "coin" }, start_height, stop_hash, peer);
-            self.p2p.send_network(peer, NetworkMessage::GetCFHeaders(GetCFHeaders { filter_type: SCRIPT_FILTER, start_height, stop_hash }));
+            if start_height <= tip.height {
+                let mut n = 0;
+                for (i, sh) in chaindb.iter_trunk(start_height).enumerate() {
+                    if i == 2000 {
+                        break;
+                    }
+                    n += 1;
+                    stop_hash = sh.header.bitcoin_hash();
+                }
+                self.timeout.lock().unwrap().expect(peer, 1, ExpectedReply::FilterHeader);
+                debug!("asking for {} filter headers start height {} stop block {} peer={}", if filter_type == SCRIPT_FILTER { "script" } else { "coin" }, start_height, stop_hash, peer);
+                self.p2p.send_network(peer, NetworkMessage::GetCFHeaders(GetCFHeaders { filter_type: SCRIPT_FILTER, start_height, stop_hash }));
+            }
         }
         Ok(())
     }
@@ -165,7 +212,7 @@ impl FilterDownload {
         }
         if stored > 0 {
             debug!("stored {} filters peer={}", stored, peer);
-            self.get_filter_headers(peer, SCRIPT_FILTER)?;
+            self.get_filter_headers(peer, headers.filter_type)?;
         }
         Ok(())
     }
@@ -184,11 +231,18 @@ impl FilterDownload {
                 if chaindb.get_block_filter_header(&inventory.hash, SCRIPT_FILTER).is_none() {
                     // ask for filter headers if observing a new block
                     ask_for_headers = true;
+                    break;
+                }
+                if chaindb.get_block_filter_header(&inventory.hash, COIN_FILTER).is_none() {
+                    // ask for filter headers if observing a new block
+                    ask_for_headers = true;
+                    break;
                 }
             }
         }
         if ask_for_headers {
             self.get_filter_headers(peer, SCRIPT_FILTER)?;
+            self.get_filter_headers(peer, COIN_FILTER)?;
         }
         Ok(())
     }

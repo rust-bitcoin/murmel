@@ -72,7 +72,6 @@ impl FilterServer {
     }
 
     fn filter_headers<'a>(&self, chaindb: &'a RwLockReadGuard<ChainDB>, filter_type: u8, start: u32, stop_hash: Sha256dHash) -> Box<Iterator<Item=Arc<StoredFilter>> + 'a> {
-        debug!("received request for filter headers {} {}", start, stop_hash);
         if let Some(pos) = chaindb.pos_on_trunk(&stop_hash) {
             if pos >= start {
                 return Box::new(chaindb.iter_trunk(start).take((pos - start + 1) as usize).filter_map(move |h| chaindb.get_block_filter_header(&h.header.bitcoin_hash(), filter_type)))
@@ -82,6 +81,7 @@ impl FilterServer {
     }
 
     fn get_cfcheckpt(&self, peer: PeerId, get: GetCFCheckpt) -> Result<(), MurmelError> {
+        debug!("received request for filter {} checkpoints up to {} peer={}", get.filter_type, get.stop_hash, peer);
         let chaindb = self.chaindb.read().unwrap();
         let headers = self.filter_headers(&chaindb, get.filter_type, 0, get.stop_hash).enumerate()
             .filter_map(|(i, h)| if i % 1000 == 0 { Some(h.filter_id())} else { None }).collect::<Vec<_>>();
@@ -98,6 +98,7 @@ impl FilterServer {
     }
 
     fn get_cfheaders(&self, peer: PeerId, get: GetCFHeaders) -> Result<(), MurmelError> {
+        debug!("received request for filter {} headers {} .. {} peer={}", get.filter_type, get.start_height, get.stop_hash, peer);
         let chaindb = self.chaindb.read().unwrap();
         let filter_hashes = self.filter_headers(&chaindb, get.filter_type, get.start_height, get.stop_hash).take(2000).map(|f| f.filter_hash).collect::<Vec<_>>();
         if get.start_height == 0 {

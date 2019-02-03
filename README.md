@@ -51,8 +51,8 @@ Murmel does not do anything useful yet, but demonstrates how a client would load
 cargo buld --release
 target/release/client
 ```
-Above assumes that a filter server is running locally. Murmel will download block and script filter headers within 
-4 Minutes and build a [Hammersbald]((https://github.com/rust-bitcoin/hammersbald)) dabase of 250MB. Its memory 
+Above assumes that a filter server is running locally. Murmel will download block and filter headers within 
+6 Minutes and build a [Hammersbald]((https://github.com/rust-bitcoin/hammersbald)) dabase of 250MB. Its memory 
 footprint is around 400MB
 
 ## Uses

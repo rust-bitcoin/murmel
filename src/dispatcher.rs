@@ -231,6 +231,10 @@ impl Dispatcher {
             NetworkMessage::CFHeaders(_) => {
                 self.filterdownload.send_network(peer, msg);
                 Ok(())
+            },
+            NetworkMessage::CFCheckpt(_) => {
+                self.filterdownload.send_network(peer, msg);
+                Ok(())
             }
             _ => { self.p2p.send(P2PControl::Ban(peer, 1)); Ok(()) }
         }?)
