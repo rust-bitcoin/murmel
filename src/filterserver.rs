@@ -132,15 +132,17 @@ impl FilterServer {
         let chaindb = self.chaindb.read().unwrap();
         let filter_ids = self.filter_headers(&chaindb, get.filter_type, get.start_height, get.stop_hash).map(|f| f.filter_id()).collect::<Vec<_>>();
         for filter_id in &filter_ids {
-            if let Some(filter) = chaindb.get_filter_header(filter_id) {
-                if let Some(ref content) = filter.filter {
-                    self.p2p.send(P2PControl::Send(peer, NetworkMessage::CFilter(
-                        CFilter {
-                            filter_type: get.filter_type,
-                            block_hash: filter.block_id,
-                            filter: content.clone()
-                        }
-                    )));
+            if let Some(filter_header) = chaindb.get_filter_header(filter_id) {
+                if let Some(filter) = chaindb.fetch_filter(&filter_header.block_id, get.filter_type)? {
+                    if let Some(ref content) = filter.filter {
+                        self.p2p.send(P2PControl::Send(peer, NetworkMessage::CFilter(
+                            CFilter {
+                                filter_type: get.filter_type,
+                                block_hash: filter.block_id,
+                                filter: content.clone()
+                            }
+                        )));
+                    }
                 }
             }
         }
