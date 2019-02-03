@@ -25,6 +25,7 @@ use bitcoin::{
         message::NetworkMessage
     },
 };
+use connector::SharedLightningConnector;
 use blockserver::BlockServer;
 use chaindb::SharedChainDB;
 use configdb::SharedConfigDB;
@@ -62,16 +63,18 @@ pub struct Dispatcher {
     // peer timeout tracker
     timeout: SharedTimeout,
     // filter downloader (client side)
-    filtered_download: PeerMessageSender
+    filtered_download: PeerMessageSender,
+    // connector to lightning
+    lightning: SharedLightningConnector
 }
 
 impl Dispatcher {
     /// Create a new local node
-    pub fn new(network: Network, configdb: SharedConfigDB, chaindb: SharedChainDB, server: bool, p2p: P2PControlSender, incoming: PeerMessageReceiver) -> Arc<Dispatcher> {
+    pub fn new(network: Network, configdb: SharedConfigDB, chaindb: SharedChainDB, server: bool, p2p: P2PControlSender, incoming: PeerMessageReceiver, lightning: SharedLightningConnector) -> Arc<Dispatcher> {
 
         let timeout = Arc::new(Mutex::new(Timeout::new(p2p.clone())));
 
-        let header_downloader = HeaderDownload::new(chaindb.clone(), p2p.clone(), timeout.clone());
+        let header_downloader = HeaderDownload::new(chaindb.clone(), p2p.clone(), timeout.clone(), lightning.clone());
 
         let ping = Ping::new(p2p.clone(), timeout.clone());
 
@@ -94,8 +97,8 @@ impl Dispatcher {
             PeerMessageSender::dummy()
         };
 
-        let filterdownload = if server == false {
-            Filtered::new(chaindb.clone(), p2p.clone(), timeout.clone())
+        let filtered_download = if server == false {
+            Filtered::new(chaindb.clone(), p2p.clone(), timeout.clone(), lightning.clone())
         }
         else {
             PeerMessageSender::dummy()
@@ -111,7 +114,8 @@ impl Dispatcher {
             block_server,
             ping,
             timeout,
-            filtered_download: filterdownload
+            filtered_download,
+            lightning
         });
 
         let d2 = dispatcher.clone();

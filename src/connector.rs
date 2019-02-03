@@ -19,15 +19,26 @@
 //! This implements an interface to higher level applications
 //!
 
-use bitcoin::blockdata::block::{Block, BlockHeader};
-use bitcoin::blockdata::script::Script;
-use bitcoin::network::constants::Network;
-use bitcoin::util::hash::Sha256dHash;
-use constructor::Broadcaster;
+use bitcoin::{
+    blockdata::{
+        block::{Block, BlockHeader},
+        transaction::Transaction,
+        script::Script,
+    },
+    network::{
+        message::NetworkMessage,
+        constants::Network
+    },
+    util::hash::Sha256dHash
+};
+
 use lightning::chain::chaininterface::{ChainListener, ChainWatchInterface, ChainWatchInterfaceUtil};
 use lightning::chain::chaininterface::ChainError;
 use lightning::util::logger::{Level, Logger, Record};
-use std::sync::{Arc, Weak};
+
+use p2p::P2PControlSender;
+
+use std::sync::{Arc, Weak, Mutex};
 
 struct LightningLogger{
     level: Level
@@ -36,23 +47,24 @@ struct LightningLogger{
 impl Logger for LightningLogger {
     fn log(&self, record: &Record) {
         if self.level >= record.level {
-            println!("{:<5} [{} : {}, {}] {}", record.level.to_string(), record.module_path, record.file, record.line, record.args);
+            debug!("{:<5} [{} : {}, {}] {}", record.level.to_string(), record.module_path, record.file, record.line, record.args);
         }
     }
 }
 
+pub type SharedLightningConnector = Arc<Mutex<LightningConnector>>;
+
 /// connector to lightning network
 pub struct LightningConnector {
     util: ChainWatchInterfaceUtil,
-    broadcaster: Arc<Broadcaster>
+    p2p: P2PControlSender
 }
 
 impl LightningConnector {
     /// create a connector
-    pub fn new (network: Network, broadcaster: Arc<Broadcaster>) -> LightningConnector {
+    pub fn new (network: Network, p2p: P2PControlSender) -> LightningConnector {
         LightningConnector {
-            util: ChainWatchInterfaceUtil::new(network, Arc::new(LightningLogger{level: Level::Info})),
-            broadcaster
+            util: ChainWatchInterfaceUtil::new(network, Arc::new(LightningLogger{level: Level::Info})), p2p
         }
     }
 
@@ -68,9 +80,9 @@ impl LightningConnector {
         self.util.block_disconnected(header)
     }
 
-    /// return the broadcaster that is able to send to all connected peers
-    pub fn get_broadcaster (&self) -> Arc<Broadcaster> {
-        return self.broadcaster.clone();
+    /// broadcast transaction to all connected peers
+    pub fn broadcast (&self, tx: Transaction) {
+        self.p2p.broadcast(NetworkMessage::Tx(tx))
     }
 }
 

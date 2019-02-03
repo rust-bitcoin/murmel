@@ -125,6 +125,10 @@ impl P2PControlSender {
         self.send(P2PControl::Send(peer, msg))
     }
 
+    pub fn broadcast (&self, msg: NetworkMessage) {
+        self.send(P2PControl::Broadcast(msg))
+    }
+
     pub fn ban(&self, peer: PeerId, increment: u32) {
         self.send(P2PControl::Ban(peer, increment))
     }

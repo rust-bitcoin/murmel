@@ -15,6 +15,7 @@ name = "murmel"
 path = "src/lib.rs"
 
 [dependencies]
+lightning = "0.0.8"
 bitcoin = { version="0.16", features = ["bitcoinconsensus"] }
 hammersbald = { version="1.5.1", features=["bitcoin_support"]}
 mio = "0.6"

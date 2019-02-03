@@ -27,6 +27,7 @@
 #![deny(unused_must_use)]
 
 extern crate bitcoin;
+extern crate lightning;
 extern crate byteorder;
 extern crate futures;
 extern crate futures_timer;
@@ -40,6 +41,7 @@ extern crate rayon;
 extern crate rusqlite;
 extern crate siphasher;
 
+mod connector;
 mod filtered;
 mod ping;
 mod timeout;

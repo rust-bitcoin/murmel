@@ -27,6 +27,7 @@ use bitcoin::{
     },
     util::hash::Sha256dHash,
 };
+use connector::SharedLightningConnector;
 use chaindb::SharedChainDB;
 use error::MurmelError;
 use p2p::{P2PControl, P2PControlSender, PeerId, PeerMessage, PeerMessageReceiver, PeerMessageSender, SERVICE_BLOCKS};
@@ -42,13 +43,14 @@ pub struct HeaderDownload {
     p2p: P2PControlSender,
     chaindb: SharedChainDB,
     timeout: SharedTimeout,
+    lightning: SharedLightningConnector
 }
 
 impl HeaderDownload {
-    pub fn new(chaindb: SharedChainDB, p2p: P2PControlSender, timeout: SharedTimeout) -> PeerMessageSender {
+    pub fn new(chaindb: SharedChainDB, p2p: P2PControlSender, timeout: SharedTimeout, lightning: SharedLightningConnector) -> PeerMessageSender {
         let (sender, receiver) = mpsc::sync_channel(p2p.back_pressure);
 
-        let mut headerdownload = HeaderDownload { chaindb, p2p, timeout };
+        let mut headerdownload = HeaderDownload { chaindb, p2p, timeout, lightning };
 
         thread::spawn(move || { headerdownload.run(receiver) });
 
@@ -194,7 +196,9 @@ impl HeaderDownload {
                     chaindb.batch()?;
                 }
 
-                // TODO notify lightning connector of disconnected blocks
+                for header in &disconnected_headers {
+                    self.lightning.lock().unwrap().block_disconnected(header);
+                }
             }
 
             if some_new {

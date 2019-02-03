@@ -24,6 +24,7 @@ use bitcoin::{
         constants::Network
     }
 };
+use connector::{SharedLightningConnector, LightningConnector};
 use chaindb::{ChainDB, SharedChainDB};
 use configdb::{ConfigDB, SharedConfigDB};
 use dispatcher::Dispatcher;
@@ -34,7 +35,7 @@ use futures::{
     future,
     prelude::*
 };
-use p2p::{P2P, P2PControl, PeerMessageSender, PeerSource, SERVICE_BLOCKS, SERVICE_FILTERS};
+use p2p::{P2P, P2PControl, PeerMessageSender, PeerMessageReceiver, PeerSource, SERVICE_BLOCKS, SERVICE_FILTERS};
 use rand::{RngCore, thread_rng};
 use std::{
     collections::HashSet,
@@ -47,11 +48,11 @@ const MAX_PROTOCOL_VERSION :u32 = 70001;
 
 /// The complete stack
 pub struct Constructor {
-    network: Network,
-    user_agent: String,
+    p2p: Arc<P2P>,
     configdb: SharedConfigDB,
-    chaindb: SharedChainDB,
-    listen: Vec<SocketAddr>,
+    dispatcher: Arc<Dispatcher>,
+    /// this should be accessed by Lightning
+    pub lightning: SharedLightningConnector,
     server: bool
 }
 
@@ -67,7 +68,29 @@ impl Constructor {
         let configdb = Arc::new(Mutex::new(ConfigDB::new(path)?));
         create_tables(configdb.clone(), birth)?;
         let chaindb = Arc::new(RwLock::new(ChainDB::new(path, network,server, script_cache_size, birth)?));
-        Ok(Constructor { network, user_agent, configdb, chaindb, listen, server })
+
+        let back_pressure = if server {
+            1000
+        } else {
+            10
+        };
+
+        let (to_dispatcher, from_p2p) = mpsc::sync_channel(back_pressure);
+
+        let (p2p, p2p_control) =
+            P2P::new(user_agent.clone(), network, 0, MAX_PROTOCOL_VERSION, server,
+                     PeerMessageSender::new(to_dispatcher), back_pressure);
+
+        let lightning = Arc::new(Mutex::new(LightningConnector::new(network, p2p_control.clone())));
+
+        let dispatcher =
+            Dispatcher::new(network, configdb.clone(), chaindb.clone(), server, p2p_control.clone(), from_p2p, lightning.clone());
+
+        for addr in &listen {
+            p2p_control.send(P2PControl::Bind(addr.clone()));
+        }
+
+        Ok(Constructor { p2p, dispatcher, configdb, server, lightning })
     }
 
     /// Initialize the stack and return a ChainWatchInterface
@@ -80,7 +103,28 @@ impl Constructor {
         let configdb = Arc::new(Mutex::new(ConfigDB::mem()?));
         let chaindb = Arc::new(RwLock::new(ChainDB::mem( network,server, script_cache_size, birth)?));
         create_tables(configdb.clone(), birth)?;
-        Ok(Constructor { network, user_agent, configdb, chaindb, listen, server })
+        let back_pressure = if server {
+            1000
+        } else {
+            10
+        };
+
+        let (to_dispatcher, from_p2p) = mpsc::sync_channel(back_pressure);
+
+        let (p2p, p2p_control) =
+            P2P::new(user_agent.clone(), network, 0, MAX_PROTOCOL_VERSION, server,
+                     PeerMessageSender::new(to_dispatcher), back_pressure);
+
+        let lightning = Arc::new(Mutex::new(LightningConnector::new(network, p2p_control.clone())));
+
+        let dispatcher =
+            Dispatcher::new(network, configdb.clone(), chaindb.clone(), server, p2p_control.clone(), from_p2p, lightning.clone());
+
+        for addr in &listen {
+            p2p_control.send(P2PControl::Bind(addr.clone()));
+        }
+
+        Ok(Constructor { p2p, dispatcher, configdb, server, lightning })
     }
 
 	/// Run the stack. This should be called AFTER registering listener of the ChainWatchInterface,
@@ -90,25 +134,7 @@ impl Constructor {
 	/// from those discovered in earlier runs
     pub fn run(&mut self, peers: Vec<SocketAddr>, min_connections: usize, nodns: bool) -> Result<(), MurmelError>{
 
-        let back_pressure = if self.server {
-            1000
-        } else {
-            10
-        };
-
-        let (to_dispatcher, from_p2p) = mpsc::sync_channel(back_pressure);
-
-        let (p2p, p2p_control) =
-            P2P::new(self.user_agent.clone(), self.network, 0, MAX_PROTOCOL_VERSION, self.server, PeerMessageSender::new(to_dispatcher), back_pressure);
-
-        let dispatcher =
-            Dispatcher::new(self.network, self.configdb.clone(), self.chaindb.clone(), self.server, p2p_control.clone(), from_p2p);
-
-        dispatcher.init(self.server).unwrap();
-
-        for addr in &self.listen {
-            p2p_control.send(P2PControl::Bind(addr.clone()));
-        }
+        self.dispatcher.init(self.server).unwrap();
 
         let needed_services = if self.server {
             0
@@ -116,7 +142,7 @@ impl Constructor {
             SERVICE_BLOCKS + SERVICE_FILTERS
         };
 
-        let p2p2 = p2p.clone();
+        let p2p2 = self.p2p.clone();
         let p2p_task = Box::new(future::poll_fn (move |ctx| {
             p2p2.run(needed_services, ctx).unwrap();
             Ok(Async::Ready(()))
@@ -129,7 +155,7 @@ impl Constructor {
 
         // the task that keeps us connected
         // note that this call does not return
-        thread_pool.run(self.keep_connected(p2p, peers, min_connections, nodns)).unwrap();
+        thread_pool.run(self.keep_connected(self.p2p.clone(), peers, min_connections, nodns)).unwrap();
         Ok(())
     }
 

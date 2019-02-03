@@ -29,6 +29,8 @@ use bitcoin::{
     },
     util::hash::Sha256dHash
 };
+
+use connector::SharedLightningConnector;
 use blockfilter::{SCRIPT_FILTER, BlockFilterReader};
 use chaindb::SharedChainDB;
 use chaindb::StoredFilter;
@@ -46,13 +48,14 @@ pub struct Filtered {
     p2p: P2PControlSender,
     chaindb: SharedChainDB,
     timeout: SharedTimeout,
+    lightning: SharedLightningConnector
 }
 
 impl Filtered {
-    pub fn new(chaindb: SharedChainDB, p2p: P2PControlSender, timeout: SharedTimeout) -> PeerMessageSender {
+    pub fn new(chaindb: SharedChainDB, p2p: P2PControlSender, timeout: SharedTimeout, lightning: SharedLightningConnector) -> PeerMessageSender {
         let (sender, receiver) = mpsc::sync_channel(p2p.back_pressure);
 
-        let mut filterdownload = Filtered { chaindb, p2p, timeout };
+        let mut filterdownload = Filtered { chaindb, p2p, timeout, lightning };
 
         thread::spawn(move || { filterdownload.run(receiver) });
 
@@ -173,10 +176,11 @@ impl Filtered {
                     let filter_reader = BlockFilterReader::new(&block.bitcoin_hash())?;
                     if filter_reader.match_all(&mut Cursor::new(content), &query)? == false {
                         debug!("block {} does not match previous filter assumption peer={}", block.bitcoin_hash(), peer);
-                        // TODO forget previously stored filter chain
+                        // TODO this gets messy: forget previously stored filter chain
                     } else {
                         // everything checks out, store
                         chaindb.store_block(&block)?;
+                        chaindb.batch()?;
                     }
                 }
             }
@@ -285,7 +289,8 @@ impl Filtered {
                 let mut stored_filter = (*filter_header).clone();
                 stored_filter.filter = Some(filter.filter);
                 chaindb.store_filter(&stored_filter)?;
-                // TODO match here to decide if we need the block
+
+                // TODO match here to decide if we need the block need ling to lightning's watches
             }
             else {
                 // Does not check out with previously stored header, get the block
