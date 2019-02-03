@@ -125,6 +125,10 @@ impl P2PControlSender {
         self.send(P2PControl::Send(peer, msg))
     }
 
+    pub fn ban(&self, peer: PeerId, increment: u32) {
+        self.send(P2PControl::Ban(peer, increment))
+    }
+
     pub fn peer_version (&self, peer: PeerId) -> Option<VersionMessage> {
         if let Some(peer) = self.peers.read().unwrap().get(&peer) {
             let locked_peer = peer.lock().unwrap();

@@ -35,7 +35,8 @@ pub enum ExpectedReply {
     Headers,
     Pong,
     FilterHeader,
-    FilterCheckpoints
+    FilterCheckpoints,
+    Filter
 }
 
 pub struct Timeout {

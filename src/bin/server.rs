@@ -93,7 +93,7 @@ pub fn main() {
     else {
         spv = Constructor::new("/Murmel:0.1.0/".to_string(), network, Path::new("server.db"), listen, true, cache, 0).unwrap();
     }
-    spv.run(peers, connections, find_opt("nodns"), 0).expect("can not start node");
+    spv.run(peers, connections, find_opt("nodns")).expect("can not start node");
 }
 
 fn get_peers() -> Vec<SocketAddr> {

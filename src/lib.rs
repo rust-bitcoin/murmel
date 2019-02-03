@@ -40,7 +40,7 @@ extern crate rayon;
 extern crate rusqlite;
 extern crate siphasher;
 
-mod filterdownload;
+mod filtered;
 mod ping;
 mod timeout;
 mod blockserver;

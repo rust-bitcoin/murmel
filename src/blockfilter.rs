@@ -165,9 +165,14 @@ impl BlockFilterReader {
         })
     }
 
-    /// match any previously added query pattern
+    /// match any query pattern
     pub fn match_any (&self, reader: &mut io::Read, query: &Vec<Vec<u8>>) -> Result<bool, io::Error> {
         self.reader.match_any(reader, query)
+    }
+
+    /// match all query pattern
+    pub fn match_all (&self, reader: &mut io::Read, query: &Vec<Vec<u8>>) -> Result<bool, io::Error> {
+        self.reader.match_all(reader, query)
     }
 }
 
@@ -216,6 +221,43 @@ impl GCSFilterReader {
             }
         }
         Ok(false)
+    }
+
+    fn match_all (&self, reader: &mut io::Read, query: &Vec<Vec<u8>>) -> Result<bool, io::Error> {
+        let mut decoder = reader;
+        let n_elements: VarInt = Decodable::consensus_decode(&mut decoder)
+            .map_err(|_| io::Error::new(io::ErrorKind::UnexpectedEof, "unexpected EOF"))?;
+        let ref mut reader = decoder;
+        if n_elements.0 == 0 {
+            return Ok(false)
+        }
+        // map hashes to [0, n_elements << grp]
+        let nm = n_elements.0 * M;
+        let mut mapped = query.iter().map(|e| map_to_range(self.filter.hash(e.as_slice()), nm)).collect::<Vec<_>>();
+        // sort
+        mapped.sort();
+
+        // figure if all mapped are there in one read pass
+        let mut reader = BitStreamReader::new(reader);
+        let mut data = self.filter.golomb_rice_decode(&mut reader)?;
+        let mut remaining = n_elements.0 - 1;
+        for p in mapped {
+            loop {
+                if data == p {
+                    break;
+                } else if data < p {
+                    if remaining > 0 {
+                        data += self.filter.golomb_rice_decode(&mut reader)?;
+                        remaining -= 1;
+                    } else {
+                        return Ok(false);
+                    }
+                } else {
+                    return Ok(false);
+                }
+            }
+        }
+        Ok(true)
     }
 }
 

@@ -109,10 +109,10 @@ impl ChainDB {
         Ok(())
     }
 
-    pub fn birth_header(&self) -> Option<&StoredHeader> {
+    pub fn birth_height(&self) -> Option<u32> {
         for header in self.iter_trunk(0) {
             if header.header.time as u64 >= self.birth {
-                return Some (header)
+                return Some (header.height)
             }
         }
         None
@@ -321,16 +321,6 @@ impl ChainDB {
             return Ok(None)
         }
         panic!("configuration error: no block store");
-    }
-
-    pub fn forget_block(&mut self, block_id: &Sha256dHash) -> Result<(), MurmelError> {
-        if self.fetch_stored_block(block_id)?.is_some() {
-            if let Some(ref mut heavy) = self.heavy {
-                return Ok(heavy.forget(&block_id.as_bytes()[..])?);
-            }
-            panic!("configuration error: no block store");
-        }
-        Ok(())
     }
 
     pub fn fetch_txdata(&self, block_id: &Sha256dHash) -> Result<Option<Vec<Transaction>>, MurmelError> {
