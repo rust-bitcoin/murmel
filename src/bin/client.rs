@@ -14,18 +14,18 @@
 // limitations under the License.
 //
 extern crate bitcoin;
-extern crate murmel;
 extern crate log;
+extern crate murmel;
 extern crate rand;
 extern crate simple_logger;
 
-use std::env::args;
-
 use bitcoin::network::constants::Network;
-use murmel::constructor::Constructor;
 use log::Level;
-use std::net::{SocketAddr,SocketAddrV4,Ipv4Addr};
+use murmel::constructor::Constructor;
+use std::env::args;
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::Path;
+use std::str::FromStr;
 
 pub fn main() {
     if find_opt("help") {
@@ -88,8 +88,6 @@ pub fn main() {
     }
     spv.run(peers, connections, true).expect("can not start node");
 }
-
-use std::str::FromStr;
 
 fn get_peers() -> Vec<SocketAddr> {
     find_args("peer").iter().map(|s| SocketAddr::from_str(s).unwrap()).collect()

@@ -28,11 +28,9 @@ use bitcoin::{
 };
 use chaindb::StoredHeader;
 use error::MurmelError;
-use hammersbald::PRef;
 use std::{
     collections::HashMap,
-    sync::Arc,
-    iter
+    sync::Arc
 };
 
 pub struct HeaderCache {

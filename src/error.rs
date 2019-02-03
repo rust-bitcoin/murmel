@@ -19,15 +19,14 @@
 //! All modules of this library use this error class to indicate problems.
 //!
 
-use hammersbald::HammersbaldError;
-
-use rusqlite;
+use bitcoin::consensus::encode;
 use bitcoin::util;
+use hammersbald::HammersbaldError;
+use rusqlite;
 use std::convert;
 use std::error::Error;
 use std::fmt;
 use std::io;
-use bitcoin::consensus::encode;
 
 /// An error class to offer a unified error interface upstream
 pub enum MurmelError {

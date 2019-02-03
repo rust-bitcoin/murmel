@@ -16,26 +16,23 @@
 //!
 //! # Configuration Database layer for the Murmel Bitcoin node
 //!
-//! Stores the wallet and various runtime and configuration data.
+//! Stores configuration data.
 //!
 
 
 use bitcoin::network::address::Address;
 use error::MurmelError;
-use rusqlite;
-use rusqlite::{Connection, Error, OpenFlags};
-
-use std::{
-    net::SocketAddr,
-    path::Path,
-    time::{SystemTime, UNIX_EPOCH},
-    collections::HashSet,
-    cell::Cell
-};
-
 use rand;
 use rand::RngCore;
-
+use rusqlite;
+use rusqlite::{Connection, Error, OpenFlags};
+use std::{
+    cell::Cell,
+    collections::HashSet,
+    net::SocketAddr,
+    path::Path,
+    time::{SystemTime, UNIX_EPOCH}
+};
 use std::sync::{Arc, Mutex};
 
 pub type SharedConfigDB = Arc<Mutex<ConfigDB>>;
@@ -90,14 +87,7 @@ impl<'a> ConfigTX<'a> {
         Ok(())
     }
 
-    /// Create tables suitable for blockchain storage
-    /// Tables:
-    ///   * ids - maps hashes to integers for better performance, all other tables use integers mapped here for hashes
-    ///   * tip - hold the highest hash on trunk (the chain with the most work)
-    ///   * header - block header
-    ///   * tx - transactions
-    ///   * blk_tx - n:m mapping of header to transactions to form a block.
-    ///   * peers - list of known peers
+    /// Create tables for configuration data
     pub fn create_tables(&mut self) -> Result<(), MurmelError> {
         trace!("creating tables...");
         self.dirty.set(true);
@@ -111,25 +101,23 @@ impl<'a> ConfigTX<'a> {
 
 
         self.tx.execute("create table if not exists birth (inception integer)", &[])?;
-
-        let stored_birth = self.get_birth ();
-        if stored_birth.is_err() {
-            let birth = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as u32;
-
-            self.tx.execute("insert into birth (inception) values (?)", &[&birth])?;
-        }
         trace!("created tables");
         Ok(())
     }
 
 
     #[allow(unused)]
-    pub fn get_birth(&self) -> Result<u32, MurmelError> {
-        Ok(self.tx.query_row("select inception from birth",
+    pub fn get_birth(&self) -> Result<u64, MurmelError> {
+        Ok(self.tx.query_row::<i64, _>("select inception from birth",
                              &[],
                              |row| {
                                  row.get(0)
-                             })?)
+                             })? as u64)
+    }
+
+    pub fn set_birth(&mut self, birth: u64) -> Result<(), MurmelError> {
+        self.tx.execute("insert into birth (inception) values (?)", &[&(birth as i64)])?;
+        Ok(())
     }
 
     /// store a peer

@@ -18,35 +18,29 @@
 //!
 
 
-use configdb::SharedConfigDB;
-use chaindb::SharedChainDB;
-use error::MurmelError;
-use p2p::{PeerId, PeerMessageSender, PeerMessageReceiver, P2PControlSender, P2PControl, PeerMessage};
-use filtercalculator::FilterCalculator;
-use headerdownload::HeaderDownload;
-use filterserver::FilterServer;
-use blockserver::BlockServer;
-use timeout::{Timeout, SharedTimeout};
-use ping::Ping;
-use filterdownload::FilterDownload;
-
 use bitcoin::{
-    blockdata::{
-        block::{Block, LoneBlockHeader}
-    },
     network::{
         address::Address,
         constants::Network,
-        message::NetworkMessage,
-        message_blockdata::*,
+        message::NetworkMessage
     },
 };
-
+use blockserver::BlockServer;
+use chaindb::SharedChainDB;
+use configdb::SharedConfigDB;
+use error::MurmelError;
+use filtercalculator::FilterCalculator;
+use filterdownload::FilterDownload;
+use filterserver::FilterServer;
+use headerdownload::HeaderDownload;
+use p2p::{P2PControl, P2PControlSender, PeerId, PeerMessage, PeerMessageReceiver, PeerMessageSender};
+use ping::Ping;
 use std::{
-    thread,
     sync::{Arc, Mutex},
+    thread,
     time::{SystemTime, UNIX_EPOCH}
 };
+use timeout::{SharedTimeout, Timeout};
 
 
 /// The local node processing incoming messages
@@ -222,10 +216,6 @@ impl Dispatcher {
             },
             NetworkMessage::GetCFCheckpt(_) => {
                 self.filter_server.send_network(peer, msg);
-                Ok(())
-            },
-            NetworkMessage::CFHeaders(_) => {
-                self.filterdownload.send_network(peer, msg);
                 Ok(())
             },
             NetworkMessage::CFHeaders(_) => {

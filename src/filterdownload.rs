@@ -21,24 +21,24 @@ use bitcoin::{
     BitcoinHash,
     network::{
         message::NetworkMessage,
-        message_blockdata::{InvType, Inventory},
+        message_blockdata::{Inventory, InvType},
         message_filter::{
-            CFHeaders, CFilter, GetCFHeaders, GetCFilters, GetCFCheckpt, CFCheckpt
+            CFCheckpt, CFHeaders, CFilter, GetCFCheckpt, GetCFHeaders
         },
     },
     util::hash::Sha256dHash
 };
+use blockfilter::{COIN_FILTER, SCRIPT_FILTER};
 use chaindb::SharedChainDB;
-use p2p::{P2PControlSender, PeerMessage, PeerMessageReceiver, PeerMessageSender, PeerId, SERVICE_FILTERS};
+use chaindb::StoredFilter;
+use error::MurmelError;
+use p2p::{P2PControlSender, PeerId, PeerMessage, PeerMessageReceiver, PeerMessageSender, SERVICE_FILTERS};
 use std::{
     sync::mpsc,
     thread,
     time::Duration,
 };
 use timeout::{ExpectedReply, SharedTimeout};
-use error::MurmelError;
-use blockfilter::{SCRIPT_FILTER, COIN_FILTER};
-use chaindb::StoredFilter;
 
 pub struct FilterDownload {
     p2p: P2PControlSender,
@@ -156,12 +156,10 @@ impl FilterDownload {
                 }
             }
             if start_height <= tip.height {
-                let mut n = 0;
                 for (i, sh) in chaindb.iter_trunk(start_height).enumerate() {
                     if i == 2000 {
                         break;
                     }
-                    n += 1;
                     stop_hash = sh.header.bitcoin_hash();
                 }
                 self.timeout.lock().unwrap().expect(peer, 1, ExpectedReply::FilterHeader);

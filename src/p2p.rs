@@ -18,12 +18,10 @@
 //!
 //! This module establishes network connections and routes messages between the P2P network and this node
 //!
-use error::MurmelError;
 
 use bitcoin::{
     consensus::{Decodable, Encodable, encode}
 };
-
 use bitcoin::network::{
     address::Address,
     constants::Network,
@@ -31,31 +29,29 @@ use bitcoin::network::{
     message_network::VersionMessage
 };
 
+use error::MurmelError;
 use futures::{
-    Async, Future, FutureExt, future,
+    Async, Future, future, FutureExt,
     task::{Context, Waker}
 };
-
 use mio::{
-    Token, Poll, PollOpt, Ready, Events, Event,
-    net::{TcpListener, TcpStream},
+    Event, Events, net::{TcpListener, TcpStream}, Poll, PollOpt, Ready,
+    Token,
     unix::UnixReady
 };
-
 use rand::{RngCore, thread_rng};
-
 use std::{
     cmp::{max, min},
     collections::{HashMap, VecDeque},
     fmt,
     io,
     io::{Read, Write},
-    net::{SocketAddr, Shutdown},
-    sync::{Arc, mpsc, Mutex, RwLock,
-           atomic::{AtomicBool, AtomicUsize, Ordering}
+    net::{Shutdown, SocketAddr},
+    sync::{Arc, atomic::{AtomicBool, AtomicUsize, Ordering}, mpsc, Mutex,
+           RwLock
     },
-    time::{SystemTime, Duration, UNIX_EPOCH},
-    thread
+    thread,
+    time::{Duration, SystemTime, UNIX_EPOCH}
 };
 
 

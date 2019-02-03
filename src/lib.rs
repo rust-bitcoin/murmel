@@ -26,19 +26,19 @@
 #![deny(missing_docs)]
 #![deny(unused_must_use)]
 
-extern crate rayon;
-extern crate mio;
 extern crate bitcoin;
-extern crate hammersbald;
 extern crate byteorder;
-#[macro_use]
-extern crate log;
-extern crate rand;
-extern crate rusqlite;
-extern crate siphasher;
-extern crate lru_cache;
 extern crate futures;
 extern crate futures_timer;
+extern crate hammersbald;
+#[macro_use]
+extern crate log;
+extern crate lru_cache;
+extern crate mio;
+extern crate rand;
+extern crate rayon;
+extern crate rusqlite;
+extern crate siphasher;
 
 mod filterdownload;
 mod ping;

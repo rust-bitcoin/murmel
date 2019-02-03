@@ -17,24 +17,21 @@
 //! # regularly ping peers
 //!
 
+use bitcoin::network::message::NetworkMessage;
+use p2p::{
+    P2PControlSender, PeerId, PeerMessage, PeerMessageReceiver, PeerMessageSender
+};
+use rand::{RngCore, thread_rng};
+use std::{
+    collections::HashMap,
+    sync::mpsc,
+    thread,
+    time::Duration
+};
+use timeout::{ExpectedReply, SharedTimeout};
+
 // ping peers every SECS seconds if not asked anything else in the meanwhile
 const SECS: u64 = 60;
-
-use p2p::{
-    P2PControlSender, PeerMessageSender, PeerId, PeerMessageReceiver, PeerMessage
-};
-use timeout::{SharedTimeout, ExpectedReply};
-
-use bitcoin::network::message::NetworkMessage;
-
-use std::{
-    thread,
-    time::Duration,
-    collections::HashMap,
-    sync::mpsc
-};
-
-use rand::{RngCore, thread_rng};
 
 pub struct Ping {
     p2p: P2PControlSender,

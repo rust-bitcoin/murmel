@@ -19,15 +19,12 @@
 
 use bitcoin::{
     BitcoinHash,
-    network::message::NetworkMessage,
-    network::message_blockdata::{GetHeadersMessage,GetBlocksMessage, InvType, Inventory},
     blockdata::block::{Block, LoneBlockHeader},
-    util::hash::Sha256dHash,
-    consensus::encode::VarInt
+    consensus::encode::VarInt,
+    network::message::NetworkMessage,
+    network::message_blockdata::{GetBlocksMessage, GetHeadersMessage, Inventory, InvType}
 };
-use blockfilter::{COIN_FILTER, SCRIPT_FILTER};
 use chaindb::SharedChainDB;
-use chaindb::StoredFilter;
 use error::MurmelError;
 use p2p::{P2PControl, P2PControlSender, PeerId, PeerMessage, PeerMessageReceiver, PeerMessageSender};
 use std::{

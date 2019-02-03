@@ -19,20 +19,19 @@
 
 use bitcoin::{
     BitcoinHash,
-    util::hash::Sha256dHash,
     network::message::NetworkMessage,
-    network::message_filter::{GetCFHeaders, GetCFilters, GetCFCheckpt, CFCheckpt, CFHeaders, CFilter}
+    network::message_filter::{CFCheckpt, CFHeaders, CFilter, GetCFCheckpt, GetCFHeaders, GetCFilters},
+    util::hash::Sha256dHash
 };
-use chaindb::{SharedChainDB, ChainDB};
-use blockfilter::{COIN_FILTER, SCRIPT_FILTER};
+use chaindb::{ChainDB, SharedChainDB};
 use chaindb::StoredFilter;
 use error::MurmelError;
 use p2p::{P2PControl, P2PControlSender, PeerId, PeerMessage, PeerMessageReceiver, PeerMessageSender};
 use std::{
-    sync::{mpsc, RwLockReadGuard},
-    thread,
     iter,
-    sync::Arc
+    sync::{mpsc, RwLockReadGuard},
+    sync::Arc,
+    thread
 };
 
 pub struct FilterServer {

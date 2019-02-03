@@ -19,16 +19,12 @@
 
 
 use bitcoin::{
-    blockdata::transaction::OutPoint,
     blockdata::script::Script,
-    util::hash::Sha256dHash
+    blockdata::transaction::OutPoint
 };
-
 use lru_cache::LruCache;
-
 use std::{
-    cmp::max,
-    sync::{Arc, Mutex}
+    cmp::max
 };
 
 pub struct ScriptCache {
@@ -54,7 +50,7 @@ impl ScriptCache {
     }
 
     pub fn remove(&mut self, coin: &OutPoint) -> Option<Script> {
-        if let Some((s, b)) = self.cache.remove(coin) {
+        if let Some((s, _)) = self.cache.remove(coin) {
             return Some(s);
         }
         None

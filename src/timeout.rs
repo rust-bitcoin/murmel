@@ -17,13 +17,12 @@
 //! # Keep track of peer timeouts
 //!
 
-use p2p::{P2PControlSender, P2PControl, PeerId};
-
+use p2p::{P2PControl, P2PControlSender, PeerId};
 use std::{
+    cmp::min,
     collections::HashMap,
-    time::{SystemTime, UNIX_EPOCH, Duration},
-    sync::{Mutex, Arc},
-    cmp::min
+    sync::{Arc, Mutex},
+    time::{SystemTime, UNIX_EPOCH}
 };
 
 pub type SharedTimeout = Arc<Mutex<Timeout>>;
@@ -116,6 +115,6 @@ impl Timeout {
     }
 
     fn now() -> u64 {
-        SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs()
+        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
     }
 }

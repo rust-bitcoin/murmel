@@ -19,34 +19,29 @@
 //! Assembles modules of this library to a complete service
 //!
 
-use configdb::{ConfigDB, SharedConfigDB};
-use error::MurmelError;
-use dispatcher::Dispatcher;
-use p2p::{P2P,PeerMessageSender, P2PControl, P2PControlSender, PeerSource, SERVICE_BLOCKS, SERVICE_WITNESS, SERVICE_FILTERS};
-use chaindb::{ChainDB, SharedChainDB};
-use dns::dns_seed;
-
 use bitcoin::{
     network::{
-        message::NetworkMessage,
         constants::Network
-    },
-    blockdata::transaction::Transaction
+    }
 };
-
+use chaindb::{ChainDB, SharedChainDB};
+use configdb::{ConfigDB, SharedConfigDB};
+use dispatcher::Dispatcher;
+use dns::dns_seed;
+use error::MurmelError;
+use futures::{
+    executor::ThreadPool,
+    future,
+    prelude::*
+};
+use p2p::{P2P, P2PControl, PeerMessageSender, PeerSource, SERVICE_BLOCKS, SERVICE_FILTERS};
+use rand::{RngCore, thread_rng};
 use std::{
+    collections::HashSet,
     net::SocketAddr,
     path::Path,
-    sync::{Arc, Mutex, RwLock, mpsc},
-    collections::HashSet
+    sync::{Arc, mpsc, Mutex, RwLock}
 };
-
-use futures::{
-    future,
-    prelude::*,
-    executor::ThreadPool
-};
-use rand::{thread_rng, RngCore};
 
 const MAX_PROTOCOL_VERSION :u32 = 70001;
 

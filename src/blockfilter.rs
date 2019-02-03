@@ -21,9 +21,6 @@
 //! that minimizes filter size by using Golomb-Rice coding for compression.
 //!
 
-use error::MurmelError;
-use chaindb::ScriptAccessor;
-
 use bitcoin::{
     blockdata::{
         transaction::OutPoint,
@@ -31,10 +28,11 @@ use bitcoin::{
     }
 };
 use bitcoin::{
-    consensus::{encode::VarInt, Decodable, Encodable},
+    consensus::{Decodable, Encodable, encode::VarInt},
     util::hash::{BitcoinHash, Sha256dHash}
 };
-
+use chaindb::ScriptAccessor;
+use error::MurmelError;
 use siphasher::sip::SipHasher;
 use std::{
     cmp,
@@ -408,16 +406,15 @@ impl<'a> BitStreamWriter<'a> {
 mod test {
     use bitcoin::blockdata::script::Script;
     use bitcoin::blockdata::transaction::OutPoint;
-
-    use error::MurmelError;
     use blockfilter::test::rustc_serialize::json::Json;
+    use error::MurmelError;
     use rand;
     use rand::RngCore;
+    use std::collections::HashMap;
     use std::fs::File;
     use std::io::Cursor;
     use std::io::Read;
     use std::path::PathBuf;
-    use std::collections::{VecDeque, HashMap};
     use super::*;
 
     extern crate rustc_serialize;

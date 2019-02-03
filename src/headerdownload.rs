@@ -30,23 +30,19 @@ use bitcoin::{
 use chaindb::SharedChainDB;
 use error::MurmelError;
 use p2p::{P2PControl, P2PControlSender, PeerId, PeerMessage, PeerMessageReceiver, PeerMessageSender, SERVICE_BLOCKS};
-use timeout::{ExpectedReply, SharedTimeout};
-
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::VecDeque,
     sync::mpsc,
     thread,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
+use timeout::{ExpectedReply, SharedTimeout};
 
 pub struct HeaderDownload {
     p2p: P2PControlSender,
     chaindb: SharedChainDB,
-    timeout: SharedTimeout
+    timeout: SharedTimeout,
 }
-
-// peer timout secs
-const PEER_TIMEOUT: u64 = 120;
 
 impl HeaderDownload {
     pub fn new(chaindb: SharedChainDB, p2p: P2PControlSender, timeout: SharedTimeout) -> PeerMessageSender {
@@ -66,18 +62,17 @@ impl HeaderDownload {
                     PeerMessage::Connected(pid) => {
                         if self.is_serving_blocks(pid) {
                             self.get_headers(pid)
-                        }
-                        else {
+                        } else {
                             Ok(())
                         }
-                    },
+                    }
                     PeerMessage::Disconnected(_) => {
                         Ok(())
-                    },
+                    }
                     PeerMessage::Message(pid, msg) => {
                         match msg {
-                            NetworkMessage::Headers(ref headers) => if self.is_serving_blocks(pid) {self.headers(headers, pid)} else {Ok(())},
-                            NetworkMessage::Inv(ref inv) => if self.is_serving_blocks(pid) {self.inv(inv, pid)} else {Ok(())},
+                            NetworkMessage::Headers(ref headers) => if self.is_serving_blocks(pid) { self.headers(headers, pid) } else { Ok(()) },
+                            NetworkMessage::Inv(ref inv) => if self.is_serving_blocks(pid) { self.inv(inv, pid) } else { Ok(()) },
                             NetworkMessage::Ping(_) => { Ok(()) }
                             _ => { Ok(()) }
                         }
@@ -90,7 +85,7 @@ impl HeaderDownload {
         }
     }
 
-    fn is_serving_blocks (&self, peer: PeerId) -> bool {
+    fn is_serving_blocks(&self, peer: PeerId) -> bool {
         if let Some(peer_version) = self.p2p.peer_version(peer) {
             return peer_version.services & SERVICE_BLOCKS != 0;
         }
@@ -142,7 +137,6 @@ impl HeaderDownload {
     }
 
     fn headers(&mut self, headers: &Vec<LoneBlockHeader>, peer: PeerId) -> Result<(), MurmelError> {
-
         self.timeout.lock().unwrap().received(peer, 1, ExpectedReply::Headers);
 
         if headers.len() > 0 {
@@ -224,9 +218,5 @@ impl HeaderDownload {
 
     fn send(&self, peer: PeerId, msg: NetworkMessage) {
         self.p2p.send(P2PControl::Send(peer, msg))
-    }
-
-    fn now() -> u64 {
-        SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs()
     }
 }

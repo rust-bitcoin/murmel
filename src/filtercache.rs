@@ -18,12 +18,10 @@
 //!
 
 use bitcoin::{
-    BitcoinHash,
     util::{
         hash::Sha256dHash
     },
 };
-
 use chaindb::StoredFilter;
 use std::{
     collections::HashMap,

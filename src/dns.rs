@@ -22,8 +22,8 @@
 //!
 //!
 
-use std::net::{SocketAddr, ToSocketAddrs};
 use bitcoin::network::constants::Network;
+use std::net::{SocketAddr, ToSocketAddrs};
 
 const MAIN_SEEDER: [&str;5] = [
     "seed.bitcoin.sipa.be",

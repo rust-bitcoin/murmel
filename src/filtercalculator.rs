@@ -30,19 +30,18 @@ use bitcoin::{
     },
     util::hash::Sha256dHash,
 };
-use chaindb::SharedChainDB;
-use blockfilter::BlockFilter;
-use p2p::{P2PControl, P2PControlSender, PeerId, PeerMessage, PeerMessageReceiver, PeerMessageSender};
-use error::MurmelError;
 use blockfilter::{COIN_FILTER, SCRIPT_FILTER};
-use timeout::{ExpectedReply, SharedTimeout};
-
+use blockfilter::BlockFilter;
+use chaindb::SharedChainDB;
+use error::MurmelError;
+use p2p::{P2PControl, P2PControlSender, PeerId, PeerMessage, PeerMessageReceiver, PeerMessageSender};
 use std::{
     collections::HashSet,
     sync::mpsc,
     thread,
     time::Duration
 };
+use timeout::{ExpectedReply, SharedTimeout};
 
 
 pub struct FilterCalculator {
@@ -55,12 +54,6 @@ pub struct FilterCalculator {
     missing: Vec<Sha256dHash>,
     timeout: SharedTimeout
 }
-
-
-// pollfrequency in millisecs
-const POLL: u64 = 1000;
-// a block should arrive within this timeout in seconds
-const BLOCK_TIMEOUT: u64 = 300;
 
 impl FilterCalculator {
     pub fn new(network: Network, chaindb: SharedChainDB, p2p: P2PControlSender, timeout: SharedTimeout) -> PeerMessageSender {
@@ -78,7 +71,7 @@ impl FilterCalculator {
         loop {
             self.timeout.lock().unwrap().check(vec!(ExpectedReply::Block));
             // wait some time for incoming block messages, process them if available
-            while let Ok(msg) = receiver.recv_timeout(Duration::from_millis(POLL)) {
+            while let Ok(msg) = receiver.recv_timeout(Duration::from_millis(1000)) {
                 match msg {
                     PeerMessage::Connected(pid) => {
                         if self.peer.is_none() {
@@ -160,7 +153,7 @@ impl FilterCalculator {
                     }
                     if missing.last().is_some() && *missing.last().unwrap() == genesis.bitcoin_hash() {
                         let mut chaindb = self.chaindb.write().unwrap();
-                        let block_ref = chaindb.store_block(&genesis)?;
+                        chaindb.store_block(&genesis)?;
                         let script_filter = BlockFilter::compute_script_filter(&genesis, chaindb.get_script_accessor(&genesis))?;
                         let coin_filter = BlockFilter::compute_coin_filter(&genesis)?;
                         chaindb.store_calculated_filter(&Sha256dHash::default(), &script_filter)?;

@@ -29,29 +29,25 @@ use bitcoin::{
     network::constants::Network,
     util::hash::Sha256dHash,
 };
-
+use blockfilter::{BlockFilter, BlockFilterReader, COIN_FILTER, SCRIPT_FILTER};
 use byteorder::{BigEndian, ByteOrder};
 use error::MurmelError;
 use filtercache::FilterCache;
-use headercache::{HeaderCache, HeaderIterator};
-use blockfilter::{BlockFilter, BlockFilterReader, COIN_FILTER, SCRIPT_FILTER};
-use scriptcache::ScriptCache;
-
 use hammersbald::{
     BitcoinAdaptor, HammersbaldAPI, persistent, PRef,
     transient,
 };
-
+use headercache::{HeaderCache, HeaderIterator};
 use rayon::prelude::{ParallelIterator, ParallelSlice};
-
+use scriptcache::ScriptCache;
 use std::{
+    cmp::max,
     collections::{HashMap, VecDeque},
-    sync::{Arc, RwLock, Mutex},
-    cmp::max
+    sync::{Arc, Mutex, RwLock}
 };
 use std::{
-    path::Path,
-    io::Cursor
+    io::Cursor,
+    path::Path
 };
 
 pub type SharedChainDB = Arc<RwLock<ChainDB>>;
@@ -180,10 +176,8 @@ impl ChainDB {
     }
 
     fn recache_block (&mut self, block: &Block, height: u32) {
-        let block_id = Arc::new(block.bitcoin_hash());
         let mut script_cache = self.scriptcache.lock().unwrap();
-        for (i, tx) in block.txdata.iter().enumerate() {
-            let tx_nr = i as u32;
+        for tx in &block.txdata {
             let txid = tx.txid();
             for input in tx.input.iter() {
                 script_cache.remove(&input.previous_output);
@@ -371,10 +365,8 @@ impl ChainDB {
     }
 
     pub fn cache_scripts(&mut self, block: &Block, height: u32) {
-        let block_id = Arc::new(block.bitcoin_hash());
         let mut script_cache = self.scriptcache.lock().unwrap();
-        for (i, tx) in block.txdata.iter().enumerate() {
-            let tx_nr = i as u32;
+        for tx in &block.txdata {
             let txid = tx.txid();
             for (idx, output) in tx.output.iter().enumerate() {
                 let vout = idx as u32;
@@ -393,7 +385,6 @@ impl ChainDB {
         if remains.len() > 0 {
             let from = self.scriptcache.lock().unwrap().complete_after();
             debug!("lookup {} input coins in filters before height {} ... ", remains.len(), from);
-            let len = remains.len();
             let mapped = remains.par_chunks(max(50, remains.len()/8)).map(|remains| {
                 let remains = remains.to_vec();
                 self.resolve_with_filters(from, remains)
@@ -418,7 +409,7 @@ impl ChainDB {
         for header in self.iter_trunk_rev(Some(from)) {
             let block_id = header.header.bitcoin_hash();
             // if filter is known for this block
-            if let Some(filter) = self.get_block_filter_header(&block_id, COIN_FILTER) {
+            if self.get_block_filter_header(&block_id, COIN_FILTER).is_some() {
                 if let Some(ref filter) = self.fetch_filter(&block_id, COIN_FILTER).unwrap() {
                     if let Some(ref filter) = filter.filter {
                         // check in a single pass read if any coins we search for might be in the filter for this block
@@ -618,13 +609,12 @@ impl<D: Decoder> Decodable<D> for StoredBlock {
 
 pub struct DBScriptAccessor<'a> {
     db: &'a ChainDB,
-    prev_block: Sha256dHash,
     same_block_scripts: HashMap<OutPoint, Script>,
 }
 
 impl<'a> DBScriptAccessor<'a> {
     pub fn new(db: &'a ChainDB, block: &Block) -> DBScriptAccessor<'a> {
-        let mut acc = DBScriptAccessor { db: db, same_block_scripts: HashMap::new(), prev_block: block.header.prev_blockhash };
+        let mut acc = DBScriptAccessor { db: db, same_block_scripts: HashMap::new() };
         for t in &block.txdata {
             let txid = t.txid();
             for (vout, o) in t.output.iter().enumerate() {
