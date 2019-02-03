@@ -63,9 +63,7 @@ pub struct Dispatcher {
     // peer timeout tracker
     timeout: SharedTimeout,
     // filter downloader (client side)
-    filtered_download: PeerMessageSender,
-    // connector to lightning
-    lightning: SharedLightningConnector
+    filtered_download: PeerMessageSender
 }
 
 impl Dispatcher {
@@ -114,8 +112,7 @@ impl Dispatcher {
             block_server,
             ping,
             timeout,
-            filtered_download,
-            lightning
+            filtered_download
         });
 
         let d2 = dispatcher.clone();

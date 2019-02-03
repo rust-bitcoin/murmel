@@ -25,7 +25,7 @@ use bitcoin::{
     }
 };
 use connector::{SharedLightningConnector, LightningConnector};
-use chaindb::{ChainDB, SharedChainDB};
+use chaindb::ChainDB;
 use configdb::{ConfigDB, SharedConfigDB};
 use dispatcher::Dispatcher;
 use dns::dns_seed;
@@ -35,7 +35,7 @@ use futures::{
     future,
     prelude::*
 };
-use p2p::{P2P, P2PControl, PeerMessageSender, PeerMessageReceiver, PeerSource, SERVICE_BLOCKS, SERVICE_FILTERS};
+use p2p::{P2P, P2PControl, PeerMessageSender, PeerSource, SERVICE_BLOCKS, SERVICE_FILTERS};
 use rand::{RngCore, thread_rng};
 use std::{
     collections::HashSet,

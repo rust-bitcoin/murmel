@@ -63,8 +63,4 @@ impl ScriptCache {
     pub fn complete_after(&self) -> u32 {
         self.complete_after
     }
-
-    pub fn clear(&mut self) {
-        self.cache.clear();
-    }
 }

@@ -48,6 +48,7 @@ pub struct Filtered {
     p2p: P2PControlSender,
     chaindb: SharedChainDB,
     timeout: SharedTimeout,
+    #[allow(unused)] // TODO send blocks
     lightning: SharedLightningConnector
 }
 

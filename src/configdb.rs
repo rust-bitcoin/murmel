@@ -106,7 +106,6 @@ impl<'a> ConfigTX<'a> {
     }
 
 
-    #[allow(unused)]
     pub fn get_birth(&self) -> Result<Option<u64>, MurmelError> {
         if let Ok(time) = self.tx.query_row::<i64, _>("select inception from birth",
                              &[],

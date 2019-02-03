@@ -37,7 +37,7 @@ use hammersbald::{
     BitcoinAdaptor, HammersbaldAPI, persistent, PRef,
     transient,
 };
-use headercache::{HeaderCache, HeaderIterator};
+use headercache::HeaderCache;
 use rayon::prelude::{ParallelIterator, ParallelSlice};
 use scriptcache::ScriptCache;
 use std::{
@@ -212,11 +212,6 @@ impl ChainDB {
             return Ok(Some((stored, unwinds, forward)));
         }
         Ok(None)
-    }
-
-    // itarate from any hash to genesis. start_with might not be on trunk. result is an iterator of [genesis .. from]
-    pub fn iter_to_genesis<'a>(&'a self, from: Option<Sha256dHash>) -> HeaderIterator<'a> {
-        return self.headercache.iter_to_genesis(from);
     }
 
     // return position of hash on trunk if hash is on trunk

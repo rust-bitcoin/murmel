@@ -294,11 +294,6 @@ impl HeaderCache {
         }
     }
 
-    /// iterate from id to genesis
-    pub fn iter_to_genesis<'a>(&'a self, start_with: Option<Sha256dHash>) -> HeaderIterator<'a> {
-        return HeaderIterator::new(self, start_with);
-    }
-
     pub fn iter_trunk<'a> (&'a self, from: u32) -> Box<Iterator<Item=&'a StoredHeader> +'a> {
         Box::new(self.trunk.iter().skip(from as usize).map(move |a| self.headers.get(&*a).unwrap()))
     }
@@ -334,38 +329,5 @@ impl HeaderCache {
         }
 
         locator
-    }
-}
-
-pub struct HeaderIterator<'a> {
-    current: Option<Sha256dHash>,
-    cache: &'a HeaderCache,
-}
-
-impl<'a> HeaderIterator<'a> {
-    pub fn new(cache: &'a HeaderCache, current: Option<Sha256dHash>) -> HeaderIterator<'a> {
-        if current.is_some() {
-            HeaderIterator { current, cache }
-        }
-        else {
-            HeaderIterator { current: cache.trunk.last().map(|tip| **tip), cache }
-        }
-    }
-}
-
-impl<'a> Iterator for HeaderIterator<'a> {
-    type Item = StoredHeader;
-
-    fn next(&mut self) -> Option<<Self as Iterator>::Item> {
-        if let Some(ref mut current) = self.current {
-            if *current == Sha256dHash::default() {
-                return None;
-            }
-            if let Some(header) = self.cache.headers.get(current) {
-                *current = header.header.prev_blockhash;
-                return Some(header.clone());
-            }
-        }
-        return None;
     }
 }

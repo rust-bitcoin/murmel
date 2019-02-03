@@ -111,10 +111,6 @@ impl Timeout {
         }
     }
 
-    fn ban(&self, peer: PeerId, score: u32) {
-        self.p2p.send(P2PControl::Ban(peer, score))
-    }
-
     fn now() -> u64 {
         SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
     }
