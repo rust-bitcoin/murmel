@@ -30,7 +30,7 @@ use bitcoin::{
     },
     util::hash::Sha256dHash,
 };
-use blockfilter::{COIN_FILTER, SCRIPT_FILTER};
+use blockfilter::{COIN_FILTER, SCRIPT_FILTER, WALLET_FILTER};
 use blockfilter::BlockFilter;
 use chaindb::SharedChainDB;
 use error::MurmelError;
@@ -156,8 +156,10 @@ impl FilterCalculator {
                         chaindb.store_block(&genesis)?;
                         let script_filter = BlockFilter::compute_script_filter(&genesis, chaindb.get_script_accessor(&genesis))?;
                         let coin_filter = BlockFilter::compute_coin_filter(&genesis)?;
+                        let wallet_filter = BlockFilter::compute_wallet_filter(&genesis)?;
                         chaindb.store_calculated_filter(&Sha256dHash::default(), &script_filter)?;
                         chaindb.store_calculated_filter(&Sha256dHash::default(), &coin_filter)?;
+                        chaindb.store_calculated_filter(&Sha256dHash::default(), &wallet_filter)?;
                         chaindb.cache_scripts(&genesis, 0);
                         chaindb.batch()?;
                         let len = missing.len();
@@ -200,6 +202,10 @@ impl FilterCalculator {
                     }
                     if let Some(prev_coin) = chaindb.get_block_filter_header(&block.header.prev_blockhash, COIN_FILTER) {
                         let coin_filter = BlockFilter::compute_coin_filter(&block)?;
+                        chaindb.store_calculated_filter(&prev_coin.filter_id(), &coin_filter)?;
+                    }
+                    if let Some(prev_coin) = chaindb.get_block_filter_header(&block.header.prev_blockhash, WALLET_FILTER) {
+                        let coin_filter = BlockFilter::compute_wallet_filter(&block)?;
                         chaindb.store_calculated_filter(&prev_coin.filter_id(), &coin_filter)?;
                     }
                     chaindb.store_block(block)?;

@@ -42,8 +42,12 @@ use std::{
 
 };
 
+// BIP158 base filter: input and output scripts
 pub const SCRIPT_FILTER:u8 = 0;
-pub const COIN_FILTER:u8 = 1;
+// filter most suitable for a wallet: output scripts and input coins
+pub const WALLET_FILTER:u8 = 1;
+// filter suitable to find a coin in absence of cache: output coins only
+pub const COIN_FILTER:u8 = 2;
 
 const P: u8 = 19;
 const M: u64 = 784931;
@@ -57,12 +61,13 @@ pub struct BlockFilter {
 
 impl BlockFilter {
 
-    pub fn compute_script_filter(block: &Block, utxo: impl ScriptAccessor) -> Result<BlockFilter, MurmelError> {
+    pub fn compute_script_filter(block: &Block, scripts: impl ScriptAccessor) -> Result<BlockFilter, MurmelError> {
         let mut bytes = Vec::new();
         let mut out = Cursor::new(&mut bytes);
         {
             let mut writer = BlockFilterWriter::new(&mut out, block);
-            writer.script_filter(utxo)?;
+            writer.add_output_scripts();
+            writer.add_input_scripts(scripts)?;
             writer.finish()?;
         }
         Ok(BlockFilter{block: block.bitcoin_hash(), filter_type: SCRIPT_FILTER, content: out.into_inner().to_vec()})
@@ -73,10 +78,22 @@ impl BlockFilter {
         let mut out = Cursor::new(&mut bytes);
         {
             let mut writer = BlockFilterWriter::new(&mut out, block);
-            writer.coin_filter()?;
+            writer.add_output_coins();
             writer.finish()?;
         }
         Ok(BlockFilter{block: block.bitcoin_hash(), filter_type: COIN_FILTER, content: out.into_inner().to_vec()})
+    }
+
+    pub fn compute_wallet_filter(block: &Block) -> Result<BlockFilter, MurmelError> {
+        let mut bytes = Vec::new();
+        let mut out = Cursor::new(&mut bytes);
+        {
+            let mut writer = BlockFilterWriter::new(&mut out, block);
+            writer.add_output_scripts();
+            writer.add_input_coins();
+            writer.finish()?;
+        }
+        Ok(BlockFilter{block: block.bitcoin_hash(), filter_type: WALLET_FILTER, content: out.into_inner().to_vec()})
     }
 }
 
@@ -95,7 +112,7 @@ impl <'a> BlockFilterWriter<'a> {
     }
 
     /// Add output scripts of the block - excluding OP_RETURN scripts
-    fn add_output_scripts (&mut self) {
+    pub fn add_output_scripts (&mut self) {
         for transaction in &self.block.txdata {
             for output in &transaction.output {
                 if !output.script_pubkey.is_op_return() {
@@ -106,7 +123,7 @@ impl <'a> BlockFilterWriter<'a> {
     }
 
     /// Add consumed output scripts of a block to filter
-    fn add_consumed_scripts (&mut self, tx_accessor: impl ScriptAccessor) -> Result<(), MurmelError> {
+    pub fn add_input_scripts(&mut self, tx_accessor: impl ScriptAccessor) -> Result<(), MurmelError> {
         let mut coins = Vec::new();
         for transaction in &self.block.txdata {
             if !transaction.is_coin_base() {
@@ -121,27 +138,30 @@ impl <'a> BlockFilterWriter<'a> {
         Ok(())
     }
 
-    /// compile a filter useful for wallets
-    pub fn script_filter(&mut self, tx_accessor: impl ScriptAccessor) -> Result<(), MurmelError> {
-        self.add_output_scripts();
-        self.add_consumed_scripts(tx_accessor)
-    }
-
-    /// compile a filter useful to find spent outputs
-    pub fn coin_filter(&mut self) -> Result<(), MurmelError> {
+    pub fn add_output_coins(&mut self) {
         let mut buf = Vec::with_capacity(40);
         for tx in &self.block.txdata {
             let txid = tx.txid();
             for (vout, o) in tx.output.iter().enumerate() {
                 if !o.script_pubkey.is_op_return() {
                     let coin = OutPoint { txid, vout: vout as u32 };
-                    coin.consensus_encode(&mut buf)?;
+                    coin.consensus_encode(&mut buf).unwrap();
                     self.writer.add_element(&buf.as_slice());
                     buf.clear();
                 }
             }
         }
-        Ok(())
+    }
+
+    pub fn add_input_coins(&mut self) {
+        let mut buf = Vec::with_capacity(40);
+        for tx in &self.block.txdata {
+            for input in &tx.input {
+                input.previous_output.consensus_encode(&mut buf).unwrap();
+                self.writer.add_element(&buf);
+                buf.clear();
+            }
+        }
     }
 
     /// Write block filter
@@ -522,7 +542,8 @@ mod test {
             let mut constructed_filter = Cursor::new(Vec::new());
             {
                 let mut writer = BlockFilterWriter::new(&mut constructed_filter, &block);
-                writer.script_filter(txmap).unwrap();
+                writer.add_output_scripts();
+                writer.add_input_scripts(txmap).unwrap();
                 writer.finish().unwrap();
             }
 
