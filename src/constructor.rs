@@ -24,51 +24,64 @@ use bitcoin::{
         constants::Network
     }
 };
-use connector::{SharedLightningConnector, LightningConnector};
-use chaindb::ChainDB;
+use blockserver::BlockServer;
+use chaindb::{ChainDB, SharedChainDB};
 use configdb::{ConfigDB, SharedConfigDB};
+use connector::{LightningConnector, SharedLightningConnector};
 use dispatcher::Dispatcher;
 use dns::dns_seed;
 use error::MurmelError;
+use filtercalculator::FilterCalculator;
+use filtered::Filtered;
+use filterserver::FilterServer;
 use futures::{
     executor::ThreadPool,
     future,
-    prelude::*
+    prelude::*,
 };
+use headerdownload::HeaderDownload;
 use p2p::{P2P, P2PControl, PeerMessageSender, PeerSource, SERVICE_BLOCKS, SERVICE_FILTERS};
+use ping::Ping;
 use rand::{RngCore, thread_rng};
 use std::{
     collections::HashSet,
     net::SocketAddr,
     path::Path,
-    sync::{Arc, mpsc, Mutex, RwLock}
+    sync::{Arc, mpsc, Mutex, RwLock},
 };
+use timeout::Timeout;
 
-const MAX_PROTOCOL_VERSION :u32 = 70001;
+const MAX_PROTOCOL_VERSION: u32 = 70001;
 
 /// The complete stack
 pub struct Constructor {
     p2p: Arc<P2P>,
     configdb: SharedConfigDB,
-    dispatcher: Arc<Dispatcher>,
     /// this should be accessed by Lightning
     pub lightning: SharedLightningConnector,
-    server: bool
+    /// message dispatcher
+    dispatcher: Dispatcher,
+    server: bool,
 }
 
 impl Constructor {
-    /// Initialize the stack and return a ChainWatchInterface
-    /// Set
-    ///      network - main or testnet
-    ///      bootstrap - peer addresses (only tested to work with one local node for now)
-    ///      db - file path to data
-    /// The method will read previously stored headers from the database and sync up with the peers
-    /// then serve the returned ChainWatchInterface
-    pub fn new(user_agent :String, network: Network, path: &Path, listen: Vec<SocketAddr>, server: bool, script_cache_size: usize, birth: u64) -> Result<Constructor, MurmelError> {
-        let configdb = Arc::new(Mutex::new(ConfigDB::new(path)?));
-        create_tables(configdb.clone(), birth)?;
-        let chaindb = Arc::new(RwLock::new(ChainDB::new(path, network,server, script_cache_size, birth)?));
+    /// open DBs
+    pub fn open_db(path: Option<&Path>, network: Network, server: bool, script_cache_size: usize, birth: u64) -> Result<(SharedConfigDB, SharedChainDB), MurmelError> {
+        if let Some(path) = path {
+            let configdb = Arc::new(Mutex::new(ConfigDB::new(path)?));
+            create_tables(configdb.clone(), birth)?;
+            let chaindb = Arc::new(RwLock::new(ChainDB::new(path, network, server, script_cache_size, birth)?));
+            Ok((configdb, chaindb))
+        } else {
+            let configdb = Arc::new(Mutex::new(ConfigDB::mem()?));
+            create_tables(configdb.clone(), birth)?;
+            let chaindb = Arc::new(RwLock::new(ChainDB::mem(network, server, script_cache_size, birth)?));
+            Ok((configdb, chaindb))
+        }
+    }
 
+    /// Construct the stack
+    pub fn new(user_agent: String, network: Network, listen: Vec<SocketAddr>, server: bool, configdb: SharedConfigDB, chaindb: SharedChainDB) -> Result<Constructor, MurmelError> {
         let back_pressure = if server {
             1000
         } else {
@@ -83,59 +96,35 @@ impl Constructor {
 
         let lightning = Arc::new(Mutex::new(LightningConnector::new(network, p2p_control.clone())));
 
-        let dispatcher =
-            Dispatcher::new(network, configdb.clone(), chaindb.clone(), server, p2p_control.clone(), from_p2p, lightning.clone());
 
-        for addr in &listen {
-            p2p_control.send(P2PControl::Bind(addr.clone()));
-        }
+        let timeout = Arc::new(Mutex::new(Timeout::new(p2p_control.clone())));
 
-        Ok(Constructor { p2p, dispatcher, configdb, server, lightning })
-    }
+        let mut dispatcher = Dispatcher::new(from_p2p);
 
-    /// Initialize the stack and return a ChainWatchInterface
-    /// Set
-    ///      network - main or testnet
-    ///      bootstrap - peer adresses (only tested to work with one local node for now)
-    /// The method will start with an empty in-memory database and sync up with the peers
-    /// then serve the returned ChainWatchInterface
-    pub fn new_in_memory(user_agent :String, network: Network, listen: Vec<SocketAddr>, server: bool, script_cache_size: usize, birth: u64) -> Result<Constructor, MurmelError> {
-        let configdb = Arc::new(Mutex::new(ConfigDB::mem()?));
-        let chaindb = Arc::new(RwLock::new(ChainDB::mem( network,server, script_cache_size, birth)?));
-        create_tables(configdb.clone(), birth)?;
-        let back_pressure = if server {
-            1000
+        dispatcher.add_listener(HeaderDownload::new(chaindb.clone(), p2p_control.clone(), timeout.clone(), lightning.clone()));
+        dispatcher.add_listener(Ping::new(p2p_control.clone(), timeout.clone()));
+        if server {
+            dispatcher.add_listener(FilterCalculator::new(network, chaindb.clone(), p2p_control.clone(), timeout.clone()));
+            dispatcher.add_listener(FilterServer::new(chaindb.clone(), p2p_control.clone()));
+            dispatcher.add_listener(BlockServer::new(chaindb.clone(), p2p_control.clone()));
         } else {
-            10
-        };
+            dispatcher.add_listener(Filtered::new(chaindb.clone(), p2p_control.clone(), timeout.clone(), lightning.clone()));
+        }
 
-        let (to_dispatcher, from_p2p) = mpsc::sync_channel(back_pressure);
-
-        let (p2p, p2p_control) =
-            P2P::new(user_agent.clone(), network, 0, MAX_PROTOCOL_VERSION, server,
-                     PeerMessageSender::new(to_dispatcher), back_pressure);
-
-        let lightning = Arc::new(Mutex::new(LightningConnector::new(network, p2p_control.clone())));
-
-        let dispatcher =
-            Dispatcher::new(network, configdb.clone(), chaindb.clone(), server, p2p_control.clone(), from_p2p, lightning.clone());
 
         for addr in &listen {
             p2p_control.send(P2PControl::Bind(addr.clone()));
         }
 
-        Ok(Constructor { p2p, dispatcher, configdb, server, lightning })
+        Ok(Constructor { p2p, configdb, dispatcher, server, lightning })
     }
 
-	/// Run the stack. This should be called AFTER registering listener of the ChainWatchInterface,
-	/// so they are called as the stack catches up with the blockchain
-	/// * peers - connect to these peers at startup (might be empty)
-	/// * min_connections - keep connections with at least this number of peers. Peers will be randomly chosen
-	/// from those discovered in earlier runs
-    pub fn run(&mut self, peers: Vec<SocketAddr>, min_connections: usize, nodns: bool) -> Result<(), MurmelError>{
-
-        self.dispatcher.init(self.server).unwrap();
-
+    /// Run the stack. This should be called AFTER registering listener of the ChainWatchInterface,
+    /// so they are called as the stack catches up with the blockchain
+    /// * peers - connect to these peers at startup (might be empty)
+    /// * min_connections - keep connections with at least this number of peers. Peers will be randomly chosen
+    /// from those discovered in earlier runs
+    pub fn run(&mut self, peers: Vec<SocketAddr>, min_connections: usize, nodns: bool) -> Result<(), MurmelError> {
         let needed_services = if self.server {
             0
         } else {
@@ -143,7 +132,7 @@ impl Constructor {
         };
 
         let p2p2 = self.p2p.clone();
-        let p2p_task = Box::new(future::poll_fn (move |ctx| {
+        let p2p_task = Box::new(future::poll_fn(move |ctx| {
             p2p2.run(needed_services, ctx).unwrap();
             Ok(Async::Ready(()))
         }));
@@ -151,7 +140,7 @@ impl Constructor {
         let mut thread_pool = ThreadPool::new()?;
 
         // start the task that runs all network communication
-        thread_pool.spawn (p2p_task).unwrap();
+        thread_pool.spawn(p2p_task).unwrap();
 
         // the task that keeps us connected
         // note that this call does not return
@@ -160,7 +149,6 @@ impl Constructor {
     }
 
     fn keep_connected(&self, p2p: Arc<P2P>, peers: Vec<SocketAddr>, min_connections: usize, nodns: bool) -> Box<Future<Item=(), Error=Never> + Send> {
-
         let db = self.configdb.clone();
 
         // add initial peers if any
@@ -176,7 +164,7 @@ impl Constructor {
             p2p: Arc<P2P>,
             dns: Vec<SocketAddr>,
             earlier: HashSet<SocketAddr>,
-            nodns: bool
+            nodns: bool,
         }
 
         // this task runs until it runs out of peers
@@ -188,7 +176,7 @@ impl Constructor {
                 // return from this loop with 'pending' if enough peers are connected
                 loop {
                     // add further peers from db if needed
-                    self.peers_from_db ();
+                    self.peers_from_db();
                     if !self.nodns {
                         self.dns_lookup();
                     }
@@ -206,11 +194,12 @@ impl Constructor {
                             Ok(Async::Pending) => None,
                             Ok(Async::Ready(e)) => {
                                 trace!("woke up to lost peer");
-                                Some((i, Ok(e)))},
+                                Some((i, Ok(e)))
+                            }
                             Err(e) => {
                                 trace!("woke up to peer error");
                                 Some((i, Err(e)))
-                            },
+                            }
                         }
                     }).next();
                     match finished {
@@ -222,10 +211,10 @@ impl Constructor {
         }
 
         impl KeepConnected {
-            fn peers_from_db (&mut self) {
+            fn peers_from_db(&mut self) {
                 let mut db = self.db.lock().unwrap();
 
-                while self.connections.len()  < self.min_connections {
+                while self.connections.len() < self.min_connections {
                     if let Ok(tx) = db.transaction() {
                         // found a peer
                         if let Ok(peer) = tx.get_a_peer(&self.earlier) {
@@ -246,12 +235,12 @@ impl Constructor {
                 }
             }
 
-            fn dns_lookup (&mut self) {
-                while self.connections.len()  < self.min_connections {
+            fn dns_lookup(&mut self) {
+                while self.connections.len() < self.min_connections {
                     if self.dns.len() == 0 {
                         self.dns = dns_seed(self.p2p.network);
                     }
-                    if self.dns.len() >0 {
+                    if self.dns.len() > 0 {
                         let mut rng = thread_rng();
                         let addr = self.dns[(rng.next_u64() as usize) % self.dns.len()];
                         self.connections.push(self.p2p.add_peer(PeerSource::Outgoing(addr)));
@@ -260,10 +249,9 @@ impl Constructor {
             }
         }
 
-        Box::new(KeepConnected{min_connections, connections: added, db, p2p, dns: Vec::new(), nodns, earlier: HashSet::new() })
-	}
+        Box::new(KeepConnected { min_connections, connections: added, db, p2p, dns: Vec::new(), nodns, earlier: HashSet::new() })
+    }
 }
-
 
 
 /// create tables (if not already there) in the database

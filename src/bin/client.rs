@@ -80,7 +80,6 @@ pub fn main() {
     if let Some(numstring) = find_arg("connections") {
         connections = numstring.parse().unwrap();
     }
-    let mut spv;
     let listen = get_listeners();
     let birth = if let Some(timestamp) = find_arg("birth") {
         timestamp.parse::<u64>().unwrap()
@@ -89,12 +88,13 @@ pub fn main() {
         SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs()
     };
 
-    if let Some(path) = find_arg("db") {
-        spv = Constructor::new("/Murmel:0.1.0/".to_string(), network, Path::new(path.as_str()),  listen, false,cache, birth).unwrap();
-    }
-    else {
-        spv = Constructor::new("/Murmel:0.1.0/".to_string(), network, Path::new("client.db"), listen, false,cache, birth).unwrap();
-    }
+    let (configdb, chaindb) =
+        if let Some(path) = find_arg("db") {
+            Constructor::open_db(Some(&Path::new(path.as_str())), network, false, cache, birth).unwrap()
+        } else {
+            Constructor::open_db(Some(&Path::new("client.db")), network, false, cache, birth).unwrap()
+        };
+    let mut spv = Constructor::new("/Murmel:0.1.0/".to_string(), network, listen, true, configdb, chaindb).unwrap();
     spv.run(peers, connections, true).expect("can not start node");
 }
 

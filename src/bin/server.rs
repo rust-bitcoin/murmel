@@ -49,7 +49,7 @@ pub fn main() {
         println!("in memory database");
         return;
     }
-    if let Some (log) = find_arg("log") {
+    if let Some(log) = find_arg("log") {
         match log.as_str() {
             "error" => simple_logger::init_with_level(Level::Error).unwrap(),
             "warn" => simple_logger::init_with_level(Level::Warn).unwrap(),
@@ -58,8 +58,7 @@ pub fn main() {
             "trace" => simple_logger::init_with_level(Level::Trace).unwrap(),
             _ => simple_logger::init_with_level(Level::Info).unwrap()
         }
-    }
-    else {
+    } else {
         simple_logger::init_with_level(Level::Debug).unwrap();
     }
 
@@ -74,7 +73,7 @@ pub fn main() {
 
     let mut cache = 0;
     if let Some(numstring) = find_arg("utxo-cache") {
-        cache = 1024usize *1024usize * numstring.parse::<usize>().unwrap() as usize;
+        cache = 1024usize * 1024usize * numstring.parse::<usize>().unwrap() as usize;
     }
 
     let peers = get_peers();
@@ -82,17 +81,17 @@ pub fn main() {
     if let Some(numstring) = find_arg("connections") {
         connections = numstring.parse().unwrap();
     }
-    let mut spv;
     let mut listen = get_listeners();
     if listen.is_empty() {
         listen.push(SocketAddr::from(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 8333)));
     }
-    if let Some(path) = find_arg("db") {
-        spv = Constructor::new("/Murmel:0.1.0/".to_string(), network, Path::new(path.as_str()),  listen, true, cache, 0).unwrap();
-    }
-    else {
-        spv = Constructor::new("/Murmel:0.1.0/".to_string(), network, Path::new("server.db"), listen, true, cache, 0).unwrap();
-    }
+    let (configdb, chaindb) =
+        if let Some(path) = find_arg("db") {
+            Constructor::open_db(Some(&Path::new(path.as_str())), network, true, cache, 0).unwrap()
+        } else {
+            Constructor::open_db(Some(&Path::new("server.db")), network, true, cache, 0).unwrap()
+        };
+    let mut spv = Constructor::new("/Murmel:0.1.0/".to_string(), network, listen, true, configdb, chaindb).unwrap();
     spv.run(peers, connections, find_opt("nodns")).expect("can not start node");
 }
 
@@ -106,7 +105,7 @@ fn get_listeners() -> Vec<SocketAddr> {
 
 
 // Returns key-value zipped iterator.
-fn zipped_args() -> impl Iterator<Item = (String, String)> {
+fn zipped_args() -> impl Iterator<Item=(String, String)> {
     let key_args = args().filter(|arg| arg.starts_with("--")).map(|mut arg| arg.split_off(2));
     let val_args = args().skip(1).filter(|arg| !arg.starts_with("--"));
     key_args.zip(val_args)
