@@ -35,12 +35,15 @@ use std::{
 };
 use std::sync::{Arc, Mutex};
 
+/// handle of the configuration database
 pub type SharedConfigDB = Arc<Mutex<ConfigDB>>;
 
+/// the configuration database
 pub struct ConfigDB {
     conn: Connection
 }
 
+/// a transaction of the configuration db
 pub struct ConfigTX<'a> {
     tx: rusqlite::Transaction<'a>,
     dirty: Cell<bool>
@@ -66,6 +69,15 @@ impl ConfigDB {
     pub fn transaction<'a>(&'a mut self) -> Result<ConfigTX<'a>, MurmelError> {
         trace!("starting transaction");
         Ok(ConfigTX { tx: self.conn.transaction()?, dirty: Cell::new(false) })
+    }
+
+    /// create tables (if not already there) in the database
+    pub fn create_tables(&mut self, birth: u64) -> Result<(), MurmelError> {
+        let mut tx = self.transaction()?;
+        tx.create_tables()?;
+        tx.set_birth(birth)?;
+        tx.commit()?;
+        Ok(())
     }
 }
 
@@ -106,6 +118,7 @@ impl<'a> ConfigTX<'a> {
     }
 
 
+    /// get time point the history starts for this node
     pub fn get_birth(&self) -> Result<Option<u64>, MurmelError> {
         if let Ok(time) = self.tx.query_row::<i64, _>("select inception from birth",
                              &[],
@@ -119,6 +132,7 @@ impl<'a> ConfigTX<'a> {
         }
     }
 
+    /// set the time point the history starts for this node
     pub fn set_birth(&mut self, birth: u64) -> Result<(), MurmelError> {
         if self.get_birth()?.is_none() {
             self.tx.execute("insert into birth (inception) values (?)", &[&(birth as i64)])?;
@@ -153,6 +167,7 @@ impl<'a> ConfigTX<'a> {
     }
 
     #[allow(unused)]
+    /// store that a peer with this address is banned
     pub fn ban (&mut self, addr: &SocketAddr) -> Result<i32, MurmelError> {
         self.dirty.set(true);
         let address = Address::new (addr, 0);
@@ -165,6 +180,7 @@ impl<'a> ConfigTX<'a> {
     }
 
     #[allow(unused)]
+    /// remove peer from this db
     pub fn remove_peer (&mut self, addr: &SocketAddr) -> Result<i32, MurmelError> {
         self.dirty.set(true);
         let address = Address::new (addr, 0);

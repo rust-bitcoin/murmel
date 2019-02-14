@@ -69,12 +69,12 @@ impl Constructor {
     pub fn open_db(path: Option<&Path>, network: Network, server: bool, script_cache_size: usize, birth: u64) -> Result<(SharedConfigDB, SharedChainDB), MurmelError> {
         if let Some(path) = path {
             let configdb = Arc::new(Mutex::new(ConfigDB::new(path)?));
-            create_tables(configdb.clone(), birth)?;
+            configdb.lock().unwrap().create_tables(birth)?;
             let chaindb = Arc::new(RwLock::new(ChainDB::new(path, network, server, script_cache_size, birth)?));
             Ok((configdb, chaindb))
         } else {
             let configdb = Arc::new(Mutex::new(ConfigDB::mem()?));
-            create_tables(configdb.clone(), birth)?;
+            configdb.lock().unwrap().create_tables(birth)?;
             let chaindb = Arc::new(RwLock::new(ChainDB::mem(network, server, script_cache_size, birth)?));
             Ok((configdb, chaindb))
         }
@@ -251,15 +251,4 @@ impl Constructor {
 
         Box::new(KeepConnected { min_connections, connections: added, db, p2p, dns: Vec::new(), nodns, earlier: HashSet::new() })
     }
-}
-
-
-/// create tables (if not already there) in the database
-fn create_tables(db: Arc<Mutex<ConfigDB>>, birth: u64) -> Result<(), MurmelError> {
-    let mut db = db.lock().unwrap();
-    let mut tx = db.transaction()?;
-    tx.create_tables()?;
-    tx.set_birth(birth)?;
-    tx.commit()?;
-    Ok(())
 }

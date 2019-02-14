@@ -21,12 +21,17 @@ extern crate simple_logger;
 
 use bitcoin::network::constants::Network;
 use log::Level;
-use murmel::constructor::Constructor;
-use std::env::args;
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
-use std::path::Path;
-use std::str::FromStr;
-use std::time::SystemTime;
+use murmel::{
+    constructor::Constructor
+};
+
+use std::{
+    env::args,
+    net::{Ipv4Addr, SocketAddr, SocketAddrV4},
+    path::Path,
+    str::FromStr,
+    time::SystemTime
+};
 
 pub fn main() {
     if find_opt("help") {
@@ -105,7 +110,6 @@ fn get_peers() -> Vec<SocketAddr> {
 fn get_listeners() -> Vec<SocketAddr> {
     find_args("listen").iter().map(|s| SocketAddr::from_str(s).unwrap()).collect()
 }
-
 
 // Returns key-value zipped iterator.
 fn zipped_args() -> impl Iterator<Item = (String, String)> {
