@@ -109,7 +109,7 @@ impl HeaderDownload {
             } else {
                 // do not spam us with transactions
                 debug!("received unwanted inv {:?} peer={}", inventory.inv_type, peer);
-                self.ban(peer, 10);
+                self.p2p.ban(peer, 10);
                 return Ok(());
             }
         }
@@ -133,7 +133,7 @@ impl HeaderDownload {
                 Sha256dHash::default()
             };
             self.timeout.lock().unwrap().expect(peer, 1, ExpectedReply::Headers);
-            self.send(peer, NetworkMessage::GetHeaders(GetHeadersMessage::new(locator, first)));
+            self.p2p.send_network(peer, NetworkMessage::GetHeaders(GetHeadersMessage::new(locator, first)));
         }
         Ok(())
     }
@@ -184,7 +184,7 @@ impl HeaderDownload {
                             Ok(None) => {}
                             Err(MurmelError::SpvBadProofOfWork) => {
                                 info!("Incorrect POW, banning peer={}", peer);
-                                self.ban(peer, 100);
+                                self.p2p.ban(peer, 100);
                                 return Ok(());
                             }
                             Err(e) => {
@@ -214,13 +214,5 @@ impl HeaderDownload {
             }
         }
         Ok(())
-    }
-
-    fn ban(&self, peer: PeerId, score: u32) {
-        self.p2p.send(P2PControl::Ban(peer, score))
-    }
-
-    fn send(&self, peer: PeerId, msg: NetworkMessage) {
-        self.p2p.send(P2PControl::Send(peer, msg))
     }
 }
