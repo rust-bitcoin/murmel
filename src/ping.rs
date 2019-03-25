@@ -52,7 +52,7 @@ impl Ping {
 
     fn run(&mut self, receiver: PeerMessageReceiver) {
         loop {
-            while let Ok(msg) = receiver.recv_timeout(Duration::from_millis(SECS)) {
+            while let Ok(msg) = receiver.recv_timeout(Duration::from_millis(SECS*1000)) {
                 match msg {
                     PeerMessage::Message(pid, msg) => {
                         match msg {
