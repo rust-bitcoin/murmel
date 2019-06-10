@@ -29,10 +29,13 @@ use bitcoin::{
 };
 use bitcoin::{
     consensus::{Decodable, Encodable, encode::VarInt},
-    util::hash::{BitcoinHash, Sha256dHash}
+    util::hash::BitcoinHash
 };
+use bitcoin_hashes::sha256d::Hash as Sha256dHash;
+use bitcoin_hashes::Hash;
 use chaindb::ScriptAccessor;
 use error::MurmelError;
+use byteorder::{ByteOrder, LittleEndian};
 use siphasher::sip::SipHasher;
 use std::{
     cmp,
@@ -106,8 +109,10 @@ pub struct BlockFilterWriter<'a> {
 impl <'a> BlockFilterWriter<'a> {
     /// Create a block filter writer
     pub fn new (writer: &'a mut io::Write, block: &'a Block) -> BlockFilterWriter<'a> {
-        let block_hash_as_int = block.bitcoin_hash().into_le();
-        let writer = GCSFilterWriter::new(writer, block_hash_as_int.0[0], block_hash_as_int.0[1]);
+        let block_hash_as_int = block.bitcoin_hash().into_inner();
+        let k0 = LittleEndian::read_u64(&block_hash_as_int[0..8]);
+        let k1 = LittleEndian::read_u64(&block_hash_as_int[8..16]);
+        let writer = GCSFilterWriter::new(writer, k0, k1);
         BlockFilterWriter { block, writer }
     }
 
@@ -179,9 +184,11 @@ pub struct BlockFilterReader {
 impl BlockFilterReader {
     /// Create a block filter reader
     pub fn new (block_hash: &Sha256dHash) -> Result<BlockFilterReader, io::Error> {
-        let block_hash_as_int = block_hash.into_le();
+        let block_hash_as_int = block_hash.into_inner();
+        let k0 = LittleEndian::read_u64(&block_hash_as_int[0..8]);
+        let k1 = LittleEndian::read_u64(&block_hash_as_int[8..16]);
         Ok(BlockFilterReader {
-            reader: GCSFilterReader::new( block_hash_as_int.0[0], block_hash_as_int.0[1])?
+            reader: GCSFilterReader::new( k0, k1)?
         })
     }
 
@@ -477,6 +484,7 @@ mod test {
     use std::io::Cursor;
     use std::io::Read;
     use std::path::PathBuf;
+    use bitcoin_hashes::hex::FromHex;
     use super::*;
 
     extern crate rustc_serialize;
@@ -549,11 +557,11 @@ mod test {
 
             let filter = constructed_filter.into_inner();
             assert_eq!(test_filter, filter);
-            let filter_hash = Sha256dHash::from_data(filter.as_slice());
+            let filter_hash = Sha256dHash::hash(filter.as_slice());
             let mut header_data = [0u8; 64];
-            header_data[0..32].copy_from_slice(&filter_hash.as_bytes()[..]);
-            header_data[32..64].copy_from_slice(&previous_header_hash.as_bytes()[..]);
-            let filter_header_hash = Sha256dHash::from_data(&header_data);
+            header_data[0..32].copy_from_slice(&filter_hash[..]);
+            header_data[32..64].copy_from_slice(&previous_header_hash[..]);
+            let filter_header_hash = Sha256dHash::hash(&header_data);
             assert_eq!(filter_header_hash, header_hash);
         }
     }

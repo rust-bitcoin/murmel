@@ -22,10 +22,10 @@ use bitcoin::{
     blockdata::block::BlockHeader,
     network::constants::Network,
     util::{
-        hash::Sha256dHash,
         uint::Uint256,
     },
 };
+use bitcoin_hashes::sha256d::Hash as Sha256dHash;
 use chaindb::StoredHeader;
 use error::MurmelError;
 use std::{

@@ -26,9 +26,11 @@ use bitcoin::{
         message_filter::{
             CFCheckpt, CFHeaders, CFilter, GetCFCheckpt, GetCFHeaders, GetCFilters
         },
-    },
-    util::hash::Sha256dHash
+    }
 };
+
+use bitcoin_hashes::sha256d::Hash as Sha256dHash;
+use bitcoin_hashes::Hash;
 
 use connector::SharedLightningConnector;
 use blockfilter::{SCRIPT_FILTER, BlockFilterReader};
@@ -283,7 +285,7 @@ impl Filtered {
         if let Some(filter_header) = chaindb.get_block_filter_header(&filter.block_hash, filter.filter_type) {
             self.timeout.lock().unwrap().received(peer, 1, ExpectedReply::Filter);
 
-            let filter_hash = Sha256dHash::from_data(filter.filter.as_slice());
+            let filter_hash = Sha256dHash::hash(filter.filter.as_slice());
 
             if filter_header.filter_hash == filter_hash {
                 // checks out with previously downloaded header, just store

@@ -27,6 +27,7 @@
 #![deny(unused_must_use)]
 
 extern crate bitcoin;
+extern crate bitcoin_hashes;
 extern crate lightning;
 extern crate byteorder;
 extern crate futures;

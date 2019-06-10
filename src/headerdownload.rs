@@ -24,9 +24,9 @@ use bitcoin::{
     network::{
         message::NetworkMessage,
         message_blockdata::{GetHeadersMessage, Inventory, InvType},
-    },
-    util::hash::Sha256dHash,
+    }
 };
+use bitcoin_hashes::sha256d::Hash as Sha256dHash;
 use connector::SharedLightningConnector;
 use chaindb::SharedChainDB;
 use error::MurmelError;

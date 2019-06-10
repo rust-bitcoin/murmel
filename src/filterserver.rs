@@ -21,8 +21,8 @@ use bitcoin::{
     BitcoinHash,
     network::message::NetworkMessage,
     network::message_filter::{CFCheckpt, CFHeaders, CFilter, GetCFCheckpt, GetCFHeaders, GetCFilters},
-    util::hash::Sha256dHash
 };
+use bitcoin_hashes::sha256d::Hash as Sha256dHash;
 use chaindb::{ChainDB, SharedChainDB};
 use chaindb::StoredFilter;
 use error::MurmelError;

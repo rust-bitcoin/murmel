@@ -28,9 +28,10 @@ use bitcoin::{
     network::{
         message::NetworkMessage,
         constants::Network
-    },
-    util::hash::Sha256dHash
+    }
 };
+
+use bitcoin_hashes::sha256d::Hash as Sha256dHash;
 
 use lightning::chain::chaininterface::{ChainListener, ChainWatchInterface, ChainWatchInterfaceUtil};
 use lightning::chain::chaininterface::ChainError;

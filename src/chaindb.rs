@@ -26,9 +26,10 @@ use bitcoin::{
         transaction::{OutPoint, Transaction},
     },
     consensus::{Decodable, Decoder, Encodable, encode, Encoder},
-    network::constants::Network,
-    util::hash::Sha256dHash,
+    network::constants::Network
 };
+use bitcoin_hashes::sha256d::Hash as Sha256dHash;
+use bitcoin_hashes::Hash;
 use blockfilter::{BlockFilter, BlockFilterReader, COIN_FILTER, SCRIPT_FILTER};
 use byteorder::{BigEndian, ByteOrder};
 use error::MurmelError;
@@ -302,7 +303,7 @@ impl ChainDB {
     /// Store a calculated filter
     pub fn store_calculated_filter (&mut self, previous: &Sha256dHash, filter: &BlockFilter) -> Result<(), MurmelError> {
         let stored_filter = StoredFilter{block_id: filter.block, previous: previous.clone(),
-            filter_hash: Sha256dHash::from_data(filter.content.as_slice()), filter: Some(filter.content.clone()), filter_type: filter.filter_type };
+            filter_hash: Sha256dHash::hash(filter.content.as_slice()), filter: Some(filter.content.clone()), filter_type: filter.filter_type };
         if self.filtercache.add_filter_header(&stored_filter).is_none() {
             self.store_filter(&stored_filter)?;
         }
@@ -312,9 +313,9 @@ impl ChainDB {
     /// Read filter from DB
     pub fn fetch_filter(&self, block_id: &Sha256dHash, filter_type: u8) -> Result<Option<StoredFilter>, MurmelError> {
         let mut id_data = [0u8; 33];
-        id_data[0..32].copy_from_slice(&block_id.as_bytes()[..]);
+        id_data[0..32].copy_from_slice(&block_id[..]);
         id_data[32] = filter_type;
-        let key = Sha256dHash::from_data(&id_data);
+        let key = Sha256dHash::hash(&id_data);
         Ok(self.light.get_hash_keyed::<StoredFilter>(&key)?.map(|(_, filter)| filter))
     }
 
@@ -438,7 +439,7 @@ impl ChainDB {
                                 // for all transactions
                                 for (txpos, txid) in block.txids.iter().enumerate() {
                                     // check if any or many! outputs of this transaction are those we search for
-                                    while let Ok(pos) = remains.binary_search_by(|r| r[0..32].cmp(txid.as_bytes())) {
+                                    while let Ok(pos) = remains.binary_search_by(|r| r[0..32].cmp(&txid[..])) {
                                         // a transaction that we are interested in
                                         let coin = OutPoint::consensus_decode(&mut Cursor::new(remains[pos].as_slice())).unwrap();
                                         // get the script
@@ -540,9 +541,9 @@ impl StoredFilter {
     /// the filter's unique id
     pub fn filter_id(&self) -> Sha256dHash {
         let mut id_data = [0u8; 64];
-        id_data[0..32].copy_from_slice(&self.filter_hash.as_bytes()[..]);
-        id_data[32..].copy_from_slice(&self.previous.as_bytes()[..]);
-        Sha256dHash::from_data(&id_data)
+        id_data[0..32].copy_from_slice(&self.filter_hash[..]);
+        id_data[32..].copy_from_slice(&self.previous[..]);
+        Sha256dHash::hash(&id_data)
     }
 }
 
@@ -550,9 +551,9 @@ impl StoredFilter {
 impl BitcoinHash for StoredFilter {
     fn bitcoin_hash(&self) -> Sha256dHash {
         let mut id_data = [0u8; 33];
-        id_data[0..32].copy_from_slice(&self.block_id.as_bytes()[..]);
+        id_data[0..32].copy_from_slice(&self.block_id[..]);
         id_data[32] = self.filter_type;
-        Sha256dHash::from_data(&id_data)
+        Sha256dHash::hash(&id_data)
     }
 }
 

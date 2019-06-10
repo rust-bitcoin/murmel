@@ -27,9 +27,9 @@ use bitcoin::{
         constants::Network,
         message::NetworkMessage,
         message_blockdata::{Inventory, InvType},
-    },
-    util::hash::Sha256dHash,
+    }
 };
+use bitcoin_hashes::sha256d::Hash as Sha256dHash;
 use blockfilter::{COIN_FILTER, SCRIPT_FILTER, WALLET_FILTER};
 use blockfilter::BlockFilter;
 use chaindb::SharedChainDB;
