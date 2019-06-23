@@ -32,11 +32,10 @@ use bitcoin::{
     util::hash::BitcoinHash
 };
 use bitcoin_hashes::sha256d::Hash as Sha256dHash;
-use bitcoin_hashes::Hash;
+use bitcoin_hashes::{siphash24, Hash};
 use chaindb::ScriptAccessor;
 use error::MurmelError;
 use byteorder::{ByteOrder, LittleEndian};
-use siphasher::sip::SipHasher;
 use std::{
     cmp,
     collections::HashSet,
@@ -375,9 +374,7 @@ impl GCSFilter {
 
     /// Hash an arbitary slice with siphash using parameters of this filter
     fn hash (&self, element: &[u8]) -> u64 {
-        let mut hasher = SipHasher::new_with_keys(self.k0, self.k1);
-        hasher.write(element);
-        hasher.finish()
+        siphash24::Hash::hash_to_u64_with_keys(self.k0, self.k1, element)
     }
 }
 

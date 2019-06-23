@@ -40,7 +40,6 @@ extern crate mio;
 extern crate rand;
 extern crate rayon;
 extern crate rusqlite;
-extern crate siphasher;
 
 mod connector;
 mod filtered;

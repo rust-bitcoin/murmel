@@ -21,7 +21,6 @@ bitcoin_hashes = "0.3"
 hammersbald = { version="1.7", features=["bitcoin_support"]}
 mio = "0.6"
 rand = "0.5"
-siphasher = "0.2"
 log = "0.4"
 simple_logger = "0.5.0"
 rusqlite = { version = "0.13.0", features = ["bundled"] }
@@ -35,3 +34,6 @@ futures-timer= { git= "https://github.com/tamasblummer/futures-timer.git", branc
 rustc-serialize = "0.3"
 hex = "0.3"
 tempfile = "3.0.2"
+
+[patch.crates-io]
+bitcoin_hashes = { git="https://github.com/rust-bitcoin/bitcoin_hashes.git", branch="master" }
