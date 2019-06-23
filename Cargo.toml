@@ -18,7 +18,7 @@ path = "src/lib.rs"
 lightning = "0.0.9"
 bitcoin = { version="0.18", features = ["bitcoinconsensus"] }
 bitcoin_hashes = "0.3"
-hammersbald = { version="1.7", features=["bitcoin_support"]}
+hammersbald = { version="2.0", features=["bitcoin_support"]}
 mio = "0.6"
 rand = "0.5"
 log = "0.4"
