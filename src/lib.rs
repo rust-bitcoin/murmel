@@ -38,7 +38,6 @@ extern crate lru_cache;
 extern crate mio;
 extern crate rand;
 extern crate rayon;
-extern crate rusqlite;
 
 #[cfg(feature="lightning")] extern crate lightning;
 mod connector;
@@ -58,5 +57,4 @@ mod p2p;
 mod dns;
 pub mod error;
 pub mod chaindb;
-pub mod configdb;
 pub mod constructor;

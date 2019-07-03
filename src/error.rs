@@ -23,7 +23,6 @@ use bitcoin::consensus::encode;
 use bitcoin::util;
 use bitcoin::bip158::BlockFilterError;
 use hammersbald::HammersbaldError;
-use rusqlite;
 use std::convert;
 use std::error::Error;
 use std::fmt;
@@ -47,8 +46,6 @@ pub enum MurmelError {
     Downstream(String),
     /// Network IO error
     IO(io::Error),
-    /// Database error
-    DB(rusqlite::Error),
     /// Bitcoin util error
     Util(util::Error),
     /// Bitcoin serialize error
@@ -68,7 +65,6 @@ impl Error for MurmelError {
             MurmelError::BadMerkleRoot => "merkle root of header does not match transaction list",
             MurmelError::Downstream(ref s) => s,
             MurmelError::IO(ref err) => err.description(),
-            MurmelError::DB(ref err) => err.description(),
             MurmelError::Util(ref err) => err.description(),
             MurmelError::Hammersbald(ref err) => err.description(),
             MurmelError::Serialize(ref err) => err.description()
@@ -85,7 +81,6 @@ impl Error for MurmelError {
             MurmelError::Downstream(_) => None,
             MurmelError::BadMerkleRoot => None,
             MurmelError::IO(ref err) => Some(err),
-            MurmelError::DB(ref err) => Some(err),
             MurmelError::Util(ref err) => Some(err),
             MurmelError::Hammersbald(ref err) => Some(err),
             MurmelError::Serialize(ref err) => Some(err)
@@ -105,7 +100,6 @@ impl fmt::Display for MurmelError {
             MurmelError::UnknownUTXO => write!(f, "{}", self.description()),
             MurmelError::Downstream(ref s) => write!(f, "{}", s),
             MurmelError::IO(ref err) => write!(f, "IO error: {}", err),
-            MurmelError::DB(ref err) => write!(f, "DB error: {}", err),
             MurmelError::Util(ref err) => write!(f, "Util error: {}", err),
             MurmelError::Hammersbald(ref err) => write!(f, "Hammersbald error: {}", err),
             MurmelError::Serialize(ref err) => write!(f, "Serialize error: {}", err),
@@ -138,12 +132,6 @@ impl convert::From<io::Error> for MurmelError {
 impl convert::From<util::Error> for MurmelError {
     fn from(err: util::Error) -> MurmelError {
         MurmelError::Util(err)
-    }
-}
-
-impl convert::From<rusqlite::Error> for MurmelError {
-    fn from(err: rusqlite::Error) -> MurmelError {
-        MurmelError::DB(err)
     }
 }
 

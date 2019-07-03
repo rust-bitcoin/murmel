@@ -26,7 +26,6 @@ use bitcoin::{
 };
 use blockserver::BlockServer;
 use chaindb::{ChainDB, SharedChainDB};
-use configdb::{ConfigDB, SharedConfigDB};
 use connector::{LightningConnector, SharedLightningConnector};
 use dispatcher::Dispatcher;
 use dns::dns_seed;
@@ -56,7 +55,6 @@ const MAX_PROTOCOL_VERSION: u32 = 70001;
 /// The complete stack
 pub struct Constructor {
     p2p: Arc<P2P>,
-    configdb: SharedConfigDB,
     /// this should be accessed by Lightning
     pub lightning: SharedLightningConnector,
     /// message dispatcher
@@ -66,22 +64,18 @@ pub struct Constructor {
 
 impl Constructor {
     /// open DBs
-    pub fn open_db(path: Option<&Path>, network: Network, server: bool, script_cache_size: usize, birth: u64) -> Result<(SharedConfigDB, SharedChainDB), MurmelError> {
+    pub fn open_db(path: Option<&Path>, network: Network, server: bool, script_cache_size: usize, birth: u64) -> Result<SharedChainDB, MurmelError> {
         if let Some(path) = path {
-            let configdb = Arc::new(Mutex::new(ConfigDB::new(path)?));
-            configdb.lock().unwrap().create_tables(birth)?;
             let chaindb = Arc::new(RwLock::new(ChainDB::new(path, network, server, script_cache_size, birth)?));
-            Ok((configdb, chaindb))
+            Ok(chaindb)
         } else {
-            let configdb = Arc::new(Mutex::new(ConfigDB::mem()?));
-            configdb.lock().unwrap().create_tables(birth)?;
             let chaindb = Arc::new(RwLock::new(ChainDB::mem(network, server, script_cache_size, birth)?));
-            Ok((configdb, chaindb))
+            Ok(chaindb)
         }
     }
 
     /// Construct the stack
-    pub fn new(user_agent: String, network: Network, listen: Vec<SocketAddr>, server: bool, configdb: SharedConfigDB, chaindb: SharedChainDB) -> Result<Constructor, MurmelError> {
+    pub fn new(user_agent: String, network: Network, listen: Vec<SocketAddr>, server: bool, chaindb: SharedChainDB) -> Result<Constructor, MurmelError> {
         let back_pressure = if server {
             1000
         } else {
@@ -116,7 +110,7 @@ impl Constructor {
             p2p_control.send(P2PControl::Bind(addr.clone()));
         }
 
-        Ok(Constructor { p2p, configdb, dispatcher, server, lightning })
+        Ok(Constructor { p2p, dispatcher, server, lightning })
     }
 
     /// Run the stack. This should be called AFTER registering listener of the ChainWatchInterface,
@@ -149,7 +143,6 @@ impl Constructor {
     }
 
     fn keep_connected(&self, p2p: Arc<P2P>, peers: Vec<SocketAddr>, min_connections: usize, nodns: bool) -> Box<Future<Item=(), Error=Never> + Send> {
-        let db = self.configdb.clone();
 
         // add initial peers if any
         let mut added = Vec::new();
@@ -160,7 +153,6 @@ impl Constructor {
         struct KeepConnected {
             min_connections: usize,
             connections: Vec<Box<Future<Item=SocketAddr, Error=MurmelError> + Send>>,
-            db: Arc<Mutex<ConfigDB>>,
             p2p: Arc<P2P>,
             dns: Vec<SocketAddr>,
             earlier: HashSet<SocketAddr>,
@@ -212,27 +204,7 @@ impl Constructor {
 
         impl KeepConnected {
             fn peers_from_db(&mut self) {
-                let mut db = self.db.lock().unwrap();
-
-                while self.connections.len() < self.min_connections {
-                    if let Ok(tx) = db.transaction() {
-                        // found a peer
-                        if let Ok(peer) = tx.get_a_peer(&self.earlier) {
-                            // have an address for it
-                            // Note: we do not store Tor addresses, so this should always be true
-                            if let Ok(ref sock) = peer.socket_addr() {
-                                self.earlier.insert(*sock);
-                                self.connections.push(self.p2p.add_peer(PeerSource::Outgoing(sock.clone())));
-                            } else {
-                                break;
-                            }
-                        } else {
-                            break;
-                        }
-                    } else {
-                        break;
-                    }
-                }
+                // TODO
             }
 
             fn dns_lookup(&mut self) {
@@ -249,6 +221,6 @@ impl Constructor {
             }
         }
 
-        Box::new(KeepConnected { min_connections, connections: added, db, p2p, dns: Vec::new(), nodns, earlier: HashSet::new() })
+        Box::new(KeepConnected { min_connections, connections: added, p2p, dns: Vec::new(), nodns, earlier: HashSet::new() })
     }
 }
