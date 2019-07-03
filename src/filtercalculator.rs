@@ -30,7 +30,7 @@ use bitcoin::{
         message::NetworkMessage,
         message_blockdata::{Inventory, InvType},
     },
-    bip158::{BlockFilter, SCRIPT_FILTER, BlockFilterError}
+    bip158::{BlockFilter, SCRIPT_FILTER, BlockFilterError, BlockFilterWriter}
 };
 use bitcoin_hashes::sha256d::Hash as Sha256dHash;
 use chaindb::SharedChainDB;
@@ -44,6 +44,7 @@ use std::{
 };
 use timeout::{ExpectedReply, SharedTimeout};
 
+pub const TXID_FILTER:u8 = 'c' as u8;
 
 pub struct FilterCalculator {
     network: Network,
@@ -166,6 +167,7 @@ impl FilterCalculator {
                         {
                             let mut chaindb = self.chaindb.write().unwrap();
                             chaindb.store_calculated_filter(&Sha256dHash::default(), &script_filter)?;
+                            chaindb.store_calculated_filter(&Sha256dHash::default(), &Self::tx_filter(&genesis)?)?;
                             chaindb.cache_scripts(&genesis, 0);
                             chaindb.batch()?;
                         }
@@ -211,6 +213,9 @@ impl FilterCalculator {
                         }
                         chaindb.store_calculated_filter(&prev_script.filter_id(), &script_filter)?;
                     }
+                    if let Some(prev_tx) = chaindb.get_block_filter_header(&block.header.prev_blockhash, TXID_FILTER) {
+                        chaindb.store_calculated_filter(&prev_tx.filter_id(), &Self::tx_filter(block)?)?;
+                    }
                     chaindb.store_block(block)?;
                     self.p2p.send(P2PControl::Broadcast(NetworkMessage::Inv(vec!(Inventory{inv_type: InvType::Block, hash:block_id}))));
                 }
@@ -228,5 +233,15 @@ impl FilterCalculator {
             debug!("received unwanted block {}", block.bitcoin_hash());
         }
         Ok(())
+    }
+
+    fn tx_filter(block: &Block) -> Result<BlockFilter, MurmelError> {
+        let mut content = Vec::new();
+        let mut writer = BlockFilterWriter::new(&mut content, block);
+        for tx in &block.txdata {
+            writer.add_element(&tx.bitcoin_hash()[..])
+        }
+        writer.finish()?;
+        Ok(BlockFilter{block: block.bitcoin_hash(), filter_type: TXID_FILTER, content})
     }
 }
