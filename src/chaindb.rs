@@ -39,7 +39,6 @@ use hammersbald::{
     transient,
 };
 use headercache::HeaderCache;
-use rayon::prelude::{ParallelIterator, ParallelSlice};
 use scriptcache::ScriptCache;
 use std::{
     cmp::max,
@@ -401,7 +400,7 @@ impl ChainDB {
         if remains.len() > 0 {
             let from = self.scriptcache.lock().unwrap().complete_after();
             debug!("lookup {} input coins in filters before height {} ... ", remains.len(), from);
-            let mapped = remains.par_chunks(max(50, remains.len()/8)).map(|remains| {
+            let mapped = remains.chunks(max(50, remains.len()/8)).map(|remains| {
                 let remains = remains.to_vec();
                 self.resolve_with_filters(from, remains)
             }).flatten().collect::<Vec<_>>();

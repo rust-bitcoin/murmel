@@ -37,7 +37,6 @@ extern crate log;
 extern crate lru_cache;
 extern crate mio;
 extern crate rand;
-extern crate rayon;
 
 #[cfg(feature="lightning")] extern crate lightning;
 mod connector;
