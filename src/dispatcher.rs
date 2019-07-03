@@ -44,7 +44,7 @@ impl Dispatcher {
 
     fn incoming_messages_loop (incoming: PeerMessageReceiver, listener: Arc<Mutex<Vec<PeerMessageSender>>>) {
         while let Ok(pm) = incoming.recv() {
-            let mut list = listener.lock().unwrap();
+            let list = listener.lock().unwrap();
             for listener in list.iter() {
                 listener.send(pm.clone());
             }
