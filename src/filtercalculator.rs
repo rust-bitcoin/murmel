@@ -22,16 +22,17 @@ use bitcoin::{
     blockdata::{
         block::Block,
         constants::genesis_block,
+        transaction::OutPoint,
+        script::Script
     },
     network::{
         constants::Network,
         message::NetworkMessage,
         message_blockdata::{Inventory, InvType},
-    }
+    },
+    bip158::{BlockFilter, SCRIPT_FILTER, BlockFilterError}
 };
 use bitcoin_hashes::sha256d::Hash as Sha256dHash;
-use blockfilter::{COIN_FILTER, SCRIPT_FILTER, WALLET_FILTER};
-use blockfilter::BlockFilter;
 use chaindb::SharedChainDB;
 use error::MurmelError;
 use p2p::{P2PControl, P2PControlSender, PeerId, PeerMessage, PeerMessageReceiver, PeerMessageSender};
@@ -152,16 +153,22 @@ impl FilterCalculator {
                         debug!("missing {} blocks", missing.len());
                     }
                     if missing.last().is_some() && *missing.last().unwrap() == genesis.bitcoin_hash() {
-                        let mut chaindb = self.chaindb.write().unwrap();
-                        chaindb.store_block(&genesis)?;
-                        let script_filter = BlockFilter::compute_script_filter(&genesis, chaindb.get_script_accessor(&genesis))?;
-                        let coin_filter = BlockFilter::compute_coin_filter(&genesis)?;
-                        let wallet_filter = BlockFilter::compute_wallet_filter(&genesis)?;
-                        chaindb.store_calculated_filter(&Sha256dHash::default(), &script_filter)?;
-                        chaindb.store_calculated_filter(&Sha256dHash::default(), &coin_filter)?;
-                        chaindb.store_calculated_filter(&Sha256dHash::default(), &wallet_filter)?;
-                        chaindb.cache_scripts(&genesis, 0);
-                        chaindb.batch()?;
+                        {
+                            let mut chaindb = self.chaindb.write().unwrap();
+                            chaindb.store_block(&genesis)?;
+                        }
+                        let script_filter;
+                        {
+                            let chaindb = self.chaindb.read().unwrap();
+                            let accessor = chaindb.get_script_accessor(&genesis);
+                            script_filter = BlockFilter::compute_script_filter(&genesis, move |coin| accessor.resolve(coin))?;
+                        }
+                        {
+                            let mut chaindb = self.chaindb.write().unwrap();
+                            chaindb.store_calculated_filter(&Sha256dHash::default(), &script_filter)?;
+                            chaindb.cache_scripts(&genesis, 0);
+                            chaindb.batch()?;
+                        }
                         let len = missing.len();
                         missing.truncate(len - 1);
                     }
@@ -197,16 +204,12 @@ impl FilterCalculator {
                     chaindb.cache_scripts(block, header.height);
                     // if this is the next block for filter calculation
                     if let Some(prev_script) = chaindb.get_block_filter_header(&block.header.prev_blockhash, SCRIPT_FILTER) {
-                        let script_filter = BlockFilter::compute_script_filter(&block, chaindb.get_script_accessor(block))?;
+                        let script_filter;
+                        {
+                            let accessor = chaindb.get_script_accessor(&block);
+                            script_filter = BlockFilter::compute_script_filter(&block, |coin| accessor.resolve(coin))?;
+                        }
                         chaindb.store_calculated_filter(&prev_script.filter_id(), &script_filter)?;
-                    }
-                    if let Some(prev_coin) = chaindb.get_block_filter_header(&block.header.prev_blockhash, COIN_FILTER) {
-                        let coin_filter = BlockFilter::compute_coin_filter(&block)?;
-                        chaindb.store_calculated_filter(&prev_coin.filter_id(), &coin_filter)?;
-                    }
-                    if let Some(prev_coin) = chaindb.get_block_filter_header(&block.header.prev_blockhash, WALLET_FILTER) {
-                        let coin_filter = BlockFilter::compute_wallet_filter(&block)?;
-                        chaindb.store_calculated_filter(&prev_coin.filter_id(), &coin_filter)?;
                     }
                     chaindb.store_block(block)?;
                     self.p2p.send(P2PControl::Broadcast(NetworkMessage::Inv(vec!(Inventory{inv_type: InvType::Block, hash:block_id}))));

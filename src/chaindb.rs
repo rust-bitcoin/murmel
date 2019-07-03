@@ -26,11 +26,11 @@ use bitcoin::{
         transaction::{OutPoint, Transaction},
     },
     consensus::{Decodable, Decoder, Encodable, encode, Encoder},
-    network::constants::Network
+    network::constants::Network,
+    bip158::{BlockFilter, SCRIPT_FILTER, BlockFilterReader, BlockFilterError}
 };
 use bitcoin_hashes::sha256d::Hash as Sha256dHash;
 use bitcoin_hashes::Hash;
-use blockfilter::{BlockFilter, BlockFilterReader, COIN_FILTER, SCRIPT_FILTER};
 use byteorder::{BigEndian, ByteOrder};
 use error::MurmelError;
 use filtercache::FilterCache;
@@ -163,9 +163,6 @@ impl ChainDB {
                 self.headercache.add_header_unchecked(&stored);
                 let block_id = stored.header.bitcoin_hash();
                 if let Some(filter) = self.fetch_filter(&block_id, SCRIPT_FILTER)? {
-                    self.filtercache.add_filter_header(&filter);
-                }
-                if let Some(filter) = self.fetch_filter(&block_id, COIN_FILTER)? {
                     self.filtercache.add_filter_header(&filter);
                 }
             }
@@ -423,8 +420,10 @@ impl ChainDB {
         Ok(sofar)
     }
 
-    fn resolve_with_filters (&self, from: u32, mut remains: Vec<Vec<u8>>) -> Vec<(Script, u32)> {
-        let mut sofar = Vec::new();
+    fn resolve_with_filters (&self, from: u32, remains: Vec<Vec<u8>>) -> Vec<(Script, u32)> {
+        // TODO: replace
+        let sofar = Vec::new();
+        /*
         for header in self.iter_trunk_rev(Some(from)) {
             let block_id = header.header.bitcoin_hash();
             // if filter is known for this block
@@ -467,6 +466,7 @@ impl ChainDB {
                 }
             }
         }
+        */
         sofar
     }
 
@@ -647,6 +647,15 @@ impl<'a> DBScriptAccessor<'a> {
             }
         }
         acc
+    }
+
+    /// find the script for a coin (UTXO)
+    pub fn resolve (&self, coin: &OutPoint) -> Result<Script, BlockFilterError> {
+        if let Some(script) = self.same_block_scripts.get(coin) {
+            Ok(script.clone())
+        } else {
+            Err(BlockFilterError::UTXOMissing(coin.clone()))
+        }
     }
 }
 

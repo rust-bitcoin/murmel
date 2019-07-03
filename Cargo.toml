@@ -15,9 +15,9 @@ name = "murmel"
 path = "src/lib.rs"
 
 [dependencies]
-lightning = "0.0.9"
+lightning = { version ="0.0.9", optional=true }
 bitcoin = { version="0.18", features = ["bitcoinconsensus"] }
-bitcoin_hashes = "0.3"
+bitcoin_hashes = "0.4"
 hammersbald = { version="2.0", features=["bitcoin_support"]}
 mio = "0.6"
 rand = "0.5"
@@ -36,4 +36,4 @@ hex = "0.3"
 tempfile = "3.0.2"
 
 [patch.crates-io]
-bitcoin_hashes = { git="https://github.com/rust-bitcoin/bitcoin_hashes.git", branch="master" }
+bitcoin = { git="https://github.com/tamasblummer/rust-bitcoin.git", branch="blockfilter" }

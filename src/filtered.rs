@@ -26,14 +26,14 @@ use bitcoin::{
         message_filter::{
             CFCheckpt, CFHeaders, CFilter, GetCFCheckpt, GetCFHeaders, GetCFilters
         },
-    }
+    },
+    bip158::{SCRIPT_FILTER, BlockFilterReader}
 };
 
 use bitcoin_hashes::sha256d::Hash as Sha256dHash;
 use bitcoin_hashes::Hash;
 
 use connector::SharedLightningConnector;
-use blockfilter::{SCRIPT_FILTER, BlockFilterReader};
 use chaindb::SharedChainDB;
 use chaindb::StoredFilter;
 use error::MurmelError;
@@ -172,12 +172,12 @@ impl Filtered {
                     for transaction in &block.txdata {
                         for output in &transaction.output {
                             if !output.script_pubkey.is_op_return() {
-                                query.push(output.script_pubkey.as_bytes().to_vec());
+                                query.push(output.script_pubkey.as_bytes());
                             }
                         }
                     }
                     let filter_reader = BlockFilterReader::new(&block.bitcoin_hash())?;
-                    if filter_reader.match_all(&mut Cursor::new(content), &query)? == false {
+                    if filter_reader.match_all(&mut Cursor::new(content), &mut query.iter().cloned())? == false {
                         debug!("block {} does not match previous filter assumption peer={}", block.bitcoin_hash(), peer);
                         // TODO this gets messy: forget previously stored filter chain
                     } else {

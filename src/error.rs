@@ -21,6 +21,7 @@
 
 use bitcoin::consensus::encode;
 use bitcoin::util;
+use bitcoin::bip158::BlockFilterError;
 use hammersbald::HammersbaldError;
 use rusqlite;
 use std::convert;
@@ -161,5 +162,14 @@ impl convert::From<encode::Error> for MurmelError {
 impl convert::From<Box<Error>> for MurmelError {
     fn from(err: Box<Error>) -> Self {
         MurmelError::Downstream(err.description().to_owned())
+    }
+}
+
+impl convert::From<BlockFilterError> for MurmelError {
+    fn from(err: BlockFilterError) -> Self {
+        match err {
+            BlockFilterError::IO(io) => MurmelError::IO(io),
+            BlockFilterError::UTXOMissing(_) => MurmelError::UnknownUTXO
+        }
     }
 }
