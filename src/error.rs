@@ -30,6 +30,8 @@ use std::io;
 
 /// An error class to offer a unified error interface upstream
 pub enum MurmelError {
+    /// the block's work target is not correct
+    SpvBadTarget,
     /// bad proof of work
     SpvBadProofOfWork,
     /// unconnected header chain detected
@@ -57,6 +59,7 @@ pub enum MurmelError {
 impl Error for MurmelError {
     fn description(&self) -> &str {
         match *self {
+            MurmelError::SpvBadTarget => "bad proof of work target",
             MurmelError::SpvBadProofOfWork => "bad proof of work",
             MurmelError::UnconnectedHeader => "unconnected header",
             MurmelError::NoTip => "no chain tip found",
@@ -73,6 +76,7 @@ impl Error for MurmelError {
 
     fn cause(&self) -> Option<&Error> {
         match *self {
+            MurmelError::SpvBadTarget => None,
             MurmelError::SpvBadProofOfWork => None,
             MurmelError::UnconnectedHeader => None,
             MurmelError::NoTip => None,
@@ -93,6 +97,7 @@ impl fmt::Display for MurmelError {
         match *self {
             // Both underlying errors already impl `Display`, so we defer to
             // their implementations.
+            MurmelError::SpvBadTarget |
             MurmelError::SpvBadProofOfWork |
             MurmelError::UnconnectedHeader |
             MurmelError::NoTip |

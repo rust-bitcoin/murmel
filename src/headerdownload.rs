@@ -165,6 +165,7 @@ impl HeaderDownload {
                     let mut chaindb = self.chaindb.write().unwrap();
                     while let Some(header) = headers_queue.pop_front() {
                         // add to blockchain - this also checks proof of work
+                        debug!("process header {}", header.header.bitcoin_hash());
                         match chaindb.add_header(&header.header) {
                             Ok(Some((stored, unwinds, forwards))) => {
                                 // POW is ok, stored top chaindb
@@ -177,7 +178,7 @@ impl HeaderDownload {
 
                                 if let Some(unwinds) = unwinds {
                                     disconnected_headers.extend(unwinds.iter()
-                                        .map(|h| chaindb.get_header(h).unwrap().header));
+                                        .map(|h| chaindb.get_header(h).unwrap().stored.header));
                                     break;
                                 }
                             }

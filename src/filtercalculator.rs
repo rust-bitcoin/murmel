@@ -135,8 +135,8 @@ impl FilterCalculator {
                 if self.missing.is_empty() {
                     // compute the list of missing blocks
                     {
-                        debug!("calculate missing blocks...");
                         let chaindb = self.chaindb.read().unwrap();
+                        debug!("calculate missing blocks...");
                         for header in chaindb.iter_trunk_rev(None) {
                             let id = header.bitcoin_hash();
                             if chaindb.may_have_block(&id)? == false {
@@ -203,7 +203,7 @@ impl FilterCalculator {
                 // do not store fake blocks
                 if block.check_merkle_root() && block.check_witness_commitment() {
                     // cache output scripts for later calculation
-                    chaindb.cache_scripts(block, header.height);
+                    chaindb.cache_scripts(block, header.stored.height);
                     // if this is the next block for filter calculation
                     if let Some(prev_script) = chaindb.get_block_filter_header(&block.header.prev_blockhash, SCRIPT_FILTER) {
                         let script_filter;

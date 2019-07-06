@@ -65,13 +65,14 @@ pub struct Constructor {
 impl Constructor {
     /// open DBs
     pub fn open_db(path: Option<&Path>, network: Network, server: bool, script_cache_size: usize, birth: u64) -> Result<SharedChainDB, MurmelError> {
+        let mut chaindb =
         if let Some(path) = path {
-            let chaindb = Arc::new(RwLock::new(ChainDB::new(path, network, server, script_cache_size, birth)?));
-            Ok(chaindb)
+            ChainDB::new(path, network, server, script_cache_size, birth)?
         } else {
-            let chaindb = Arc::new(RwLock::new(ChainDB::mem(network, server, script_cache_size, birth)?));
-            Ok(chaindb)
-        }
+            ChainDB::mem(network, server, script_cache_size, birth)?
+        };
+        chaindb.init(server)?;
+        Ok(Arc::new(RwLock::new(chaindb)))
     }
 
     /// Construct the stack

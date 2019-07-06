@@ -39,7 +39,7 @@ use hammersbald::{
     BitcoinAdaptor, HammersbaldAPI, persistent, PRef,
     transient,
 };
-use headercache::HeaderCache;
+use headercache::{CachedHeader, HeaderCache};
 use scriptcache::ScriptCache;
 use std::{
     cmp::max,
@@ -80,7 +80,7 @@ impl ChainDB {
     /// Create or open a persistent database instance identified by the path
     pub fn new(path: &Path, network: Network, server: bool, script_cache_size: usize, birth: u64) -> Result<ChainDB, MurmelError> {
         let basename = path.to_str().unwrap().to_string();
-        let db = BitcoinAdaptor::new(persistent((basename.clone() + ".h").as_str(), 100, 2)?);
+        let db = BitcoinAdaptor::new(persistent((basename.clone()).as_str(), 100, 2)?);
         let headercache = HeaderCache::new(network);
         let filtercache = FilterCache::new();
         let scriptcache = Mutex::new(ScriptCache::new(script_cache_size));
@@ -105,8 +105,8 @@ impl ChainDB {
     /// Block height where history for this node
     pub fn birth_height(&self) -> Option<u32> {
         for header in self.iter_trunk(0) {
-            if header.header.time as u64 >= self.birth {
-                return Some (header.height)
+            if header.stored.header.time as u64 >= self.birth {
+                return Some (header.stored.height)
             }
         }
         None
@@ -139,9 +139,9 @@ impl ChainDB {
         if sl.is_empty() {
             info!("Initialized with genesis header.");
             let genesis = genesis_block(self.network).header;
-            if let Some((stored, _, _)) = self.headercache.add_header(&genesis)? {
-                self.store_header(&stored)?;
-                self.store_header_tip(&stored.bitcoin_hash())?;
+            if let Some((cached, _, _)) = self.headercache.add_header(&genesis)? {
+                self.store_header(&cached.stored)?;
+                self.store_header_tip(&cached.bitcoin_hash())?;
             }
         } else {
             info!("Caching block headers and filter headers ...");
@@ -167,14 +167,14 @@ impl ChainDB {
         debug!("Rebuilding UTXO cache ...");
         let trunk = self.iter_trunk(0).cloned().collect::<Vec<_>>();
         for header in trunk {
-            if let Some(txdata) = self.fetch_txdata(&header.header.bitcoin_hash())? {
-                self.recache_block(&Block { header: header.header.clone(), txdata }, header.height);
+            if let Some(txdata) = self.fetch_txdata(&header.bitcoin_hash())? {
+                self.recache_block(&Block { header: header.stored.header.clone(), txdata }, header.stored.height);
             }
             else {
                 break;
             }
-            if header.height % 10000 == 0 {
-                debug!("cached UTXO of {} blocks, size={} ...", header.height, self.scriptcache.lock().unwrap().len());
+            if header.stored.height % 10000 == 0 {
+                debug!("cached UTXO of {} blocks, size={} ...", header.stored.height, self.scriptcache.lock().unwrap().len());
             }
         }
         debug!("Re-built UTXO cache, size={}", self.scriptcache.lock().unwrap().len());
@@ -199,14 +199,14 @@ impl ChainDB {
 
     /// Store a header
     pub fn add_header(&mut self, header: &BlockHeader) -> Result<Option<(StoredHeader, Option<Vec<Sha256dHash>>, Option<Vec<Sha256dHash>>)>, MurmelError> {
-        if let Some((stored, unwinds, forward)) = self.headercache.add_header(header)? {
-            self.store_header(&stored)?;
+        if let Some((cached, unwinds, forward)) = self.headercache.add_header(header)? {
+            self.store_header(&cached.stored)?;
             if let Some(forward) = forward.clone() {
                 if forward.len() > 0 {
                     self.store_header_tip(forward.last().unwrap())?;
                 }
             }
-            return Ok(Some((stored, unwinds, forward)));
+            return Ok(Some((cached.stored, unwinds, forward)));
         }
         Ok(None)
     }
@@ -217,27 +217,27 @@ impl ChainDB {
     }
 
     /// iterate trunk [from .. tip]
-    pub fn iter_trunk<'a> (&'a self, from: u32) -> impl Iterator<Item=&'a StoredHeader> +'a {
+    pub fn iter_trunk<'a> (&'a self, from: u32) -> impl Iterator<Item=&'a CachedHeader> +'a {
         self.headercache.iter_trunk(from)
     }
 
     /// iterate trunk [genesis .. from] in reverse order from is the tip if not specified
-    pub fn iter_trunk_rev<'a> (&'a self, from: Option<u32>) -> impl Iterator<Item=&'a StoredHeader> +'a {
+    pub fn iter_trunk_rev<'a> (&'a self, from: Option<u32>) -> impl Iterator<Item=&'a CachedHeader> +'a {
         self.headercache.iter_trunk_rev(from)
     }
 
     /// retrieve the id of the block/header with most work
-    pub fn header_tip(&self) -> Option<StoredHeader> {
+    pub fn header_tip(&self) -> Option<CachedHeader> {
         self.headercache.tip()
     }
 
     /// Fetch a header by its id from cache
-    pub fn get_header(&self, id: &Sha256dHash) -> Option<StoredHeader> {
+    pub fn get_header(&self, id: &Sha256dHash) -> Option<CachedHeader> {
         self.headercache.get_header(id)
     }
 
     /// Fetch a header by its id from cache
-    pub fn get_header_for_height(&self, height: u32) -> Option<StoredHeader> {
+    pub fn get_header_for_height(&self, height: u32) -> Option<CachedHeader> {
         self.headercache.get_header_for_height(height)
     }
 
@@ -342,13 +342,13 @@ impl ChainDB {
     /// store a block
     pub fn store_block(&mut self, block: &Block) -> Result<PRef, MurmelError> {
         if let Some(header) = self.headercache.get_header(&block.bitcoin_hash()) {
-            debug!("store block  {:6} {} tx: {}", header.height, header.header.bitcoin_hash(), block.txdata.len());
+            debug!("store block  {:6} {} tx: {}", header.stored.height, header.bitcoin_hash(), block.txdata.len());
             let txids = block.txdata.iter().map(|tx| tx.txid()).collect::<Vec<_>>();
             let mut txrefs = Vec::with_capacity(txids.len());
             for tx in &block.txdata {
                 txrefs.push(self.db.put_encodable(tx)?);
             }
-            let pref = self.db.put_hash_keyed(&StoredBlock { id: block.bitcoin_hash(), txids, txrefs })?;
+            let pref = self.db.put_hash_keyed(&StoredBlock { header: header.stored, txids, txrefs })?;
             return Ok(pref);
         }
         panic!("should not call store block before header is known {}", block.bitcoin_hash());
@@ -398,7 +398,7 @@ impl ChainDB {
     fn resolve_with_filters (&self, from: u32, mut remains: Vec<Vec<u8>>) -> Vec<(Script, u32)> {
         let mut sofar = Vec::new();
         for header in self.iter_trunk_rev(Some(from)) {
-            let block_id = header.header.bitcoin_hash();
+            let block_id = header.bitcoin_hash();
             // if filter is known for this block
             if self.get_block_filter_header(&block_id, TXID_FILTER).is_some() {
                 if let Some(ref filter) = self.fetch_filter(&block_id, TXID_FILTER).unwrap() {
@@ -416,7 +416,7 @@ impl ChainDB {
                                         let coin = OutPoint::consensus_decode(&mut Cursor::new(remains[pos].as_slice())).unwrap();
                                         // get the script
                                         let tx = self.fetch_transaction(block.txrefs[txpos]).unwrap();
-                                        sofar.push((tx.output[coin.vout as usize].script_pubkey.clone(), header.height));
+                                        sofar.push((tx.output[coin.vout as usize].script_pubkey.clone(), header.stored.height));
                                         // one less to worry about
                                         remains.remove(pos);
                                         // are we done?
@@ -475,6 +475,7 @@ impl<S: Encoder> Encodable<S> for StoredHeader {
         let mut buf = [0u8; 4];
         BigEndian::write_f32(&mut buf, self.log2work);
         buf.consensus_encode(s)?;
+        0u16.consensus_encode(s)?;
         Ok(())
     }
 }
@@ -569,7 +570,7 @@ impl<D: Decoder> Decodable<D> for StoredFilter {
 /// Block stored
 pub struct StoredBlock {
     /// the block's unique id
-    pub id: Sha256dHash,
+    pub header: StoredHeader,
     /// ids of transaction within the block
     pub txids: Vec<Sha256dHash>,
     /// persistent references to stored transactions
@@ -578,14 +579,15 @@ pub struct StoredBlock {
 
 impl BitcoinHash for StoredBlock {
     fn bitcoin_hash(&self) -> Sha256dHash {
-        self.id
+        self.header.bitcoin_hash()
     }
 }
 
 // implement encoder. tedious just repeat the consensus_encode lines
 impl<S: Encoder> Encodable<S> for StoredBlock {
     fn consensus_encode(&self, s: &mut S) -> Result<(), encode::Error> {
-        self.id.consensus_encode(s)?;
+        self.header.consensus_encode(s)?;
+        1u16.consensus_encode(s)?;
         self.txids.consensus_encode(s)?;
         self.txrefs.consensus_encode(s)?;
         Ok(())
@@ -595,11 +597,22 @@ impl<S: Encoder> Encodable<S> for StoredBlock {
 // implement decoder. tedious just repeat the consensus_encode lines
 impl<D: Decoder> Decodable<D> for StoredBlock {
     fn consensus_decode(d: &mut D) -> Result<StoredBlock, encode::Error> {
-        Ok(StoredBlock {
-            id: Decodable::consensus_decode(d)?,
-            txids: Decodable::consensus_decode(d)?,
-            txrefs: Decodable::consensus_decode(d)?
-        })
+        let header = Decodable::consensus_decode(d)?;
+        let block :u16 = Decodable::consensus_decode(d)?;
+        if block > 0 {
+            Ok(StoredBlock {
+                header,
+                txids: Decodable::consensus_decode(d)?,
+                txrefs: Decodable::consensus_decode(d)?
+            })
+        }
+        else {
+            Ok(StoredBlock {
+                header,
+                txids: Vec::new(),
+                txrefs: Vec::new()
+            })
+        }
     }
 }
 

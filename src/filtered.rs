@@ -115,7 +115,7 @@ impl Filtered {
             return Ok(());
         }
         if let Some(tip) = self.chaindb.read().unwrap().header_tip() {
-            self.p2p.send_network(peer, NetworkMessage::GetCFCheckpt(GetCFCheckpt { filter_type, stop_hash: tip.header.bitcoin_hash() }));
+            self.p2p.send_network(peer, NetworkMessage::GetCFCheckpt(GetCFCheckpt { filter_type, stop_hash: tip.bitcoin_hash() }));
             self.timeout.lock().unwrap().expect(peer, 1, ExpectedReply::FilterCheckpoints);
         }
         Ok(())
@@ -127,15 +127,15 @@ impl Filtered {
             self.timeout.lock().unwrap().received(peer, 1, ExpectedReply::FilterCheckpoints);
             let chaindb = self.chaindb.read().unwrap();
             for header in chaindb.iter_trunk(0) {
-                if header.height as usize == checkpoints.filter_headers.len() {
+                if header.stored.height as usize == checkpoints.filter_headers.len() {
                     break;
                 }
-                if header.height % 1000 == 0 {
-                    if let Some(filter_header) = chaindb.get_block_filter_header(&header.header.bitcoin_hash(), checkpoints.filter_type) {
-                        if filter_header.filter_id() != checkpoints.filter_headers[header.height as usize / 1000] {
-                            debug!("filter {} checkpoint mismatch at height {} with peer={}", checkpoints.filter_type, header.height, peer);
+                if header.stored.height % 1000 == 0 {
+                    if let Some(filter_header) = chaindb.get_block_filter_header(&header.bitcoin_hash(), checkpoints.filter_type) {
+                        if filter_header.filter_id() != checkpoints.filter_headers[header.stored.height as usize / 1000] {
+                            debug!("filter {} checkpoint mismatch at height {} with peer={}", checkpoints.filter_type, header.stored.height, peer);
                             ok = false;
-                            if chaindb.fetch_stored_block(&header.header.bitcoin_hash())?.is_some() {
+                            if chaindb.fetch_stored_block(&header.bitcoin_hash())?.is_some() {
                                 // we accepted a block previously that matches this filter. This peer must be lying.
                                 debug!("go checkpoint contradicting checked block, banning peer={}", peer);
                                 self.p2p.ban(peer, 100);
@@ -143,7 +143,7 @@ impl Filtered {
                             else {
                                 // we do not yet know the filter, get it to decide
                                 self.p2p.send_network(peer, NetworkMessage::GetCFilters(
-                                    GetCFilters{filter_type: checkpoints.filter_type, start_height: header.height, stop_hash: header.header.bitcoin_hash()}
+                                    GetCFilters{filter_type: checkpoints.filter_type, start_height: header.stored.height, stop_hash: header.bitcoin_hash()}
                                 ));
                                 self.timeout.lock().unwrap().expect(peer, 1, ExpectedReply::Filter);
                             }
@@ -203,17 +203,17 @@ impl Filtered {
             let mut start_height = 0;
             let mut stop_hash = tip.bitcoin_hash();
             for header in chaindb.iter_trunk_rev(None) {
-                if chaindb.get_block_filter_header(&header.header.bitcoin_hash(), filter_type).is_some () {
-                    start_height = header.height + 1;
+                if chaindb.get_block_filter_header(&header.bitcoin_hash(), filter_type).is_some () {
+                    start_height = header.stored.height + 1;
                     break;
                 }
             }
-            if start_height <= tip.height {
+            if start_height <= tip.stored.height {
                 for (i, sh) in chaindb.iter_trunk(start_height).enumerate() {
                     if i == 2000 {
                         break;
                     }
-                    stop_hash = sh.header.bitcoin_hash();
+                    stop_hash = sh.bitcoin_hash();
                 }
                 self.timeout.lock().unwrap().expect(peer, 1, ExpectedReply::FilterHeader);
                 debug!("asking for {} filter headers start height {} stop block {} peer={}", if filter_type == SCRIPT_FILTER { "script" } else { "coin" }, start_height, stop_hash, peer);
@@ -260,14 +260,14 @@ impl Filtered {
                     stored += 1;
                     chaindb.add_filter(filter)?;
                     if let Some(birth_height) = birth_height {
-                        if birth_height <= header.height {
+                        if birth_height <= header.stored.height {
                             ask_filters.push(header);
                         }
                     }
                 }
             }
             if !ask_filters.is_empty() {
-                let start_height = ask_filters[0].height;
+                let start_height = ask_filters[0].stored.height;
                 let stop_hash = ask_filters.last().unwrap().bitcoin_hash();
                 self.timeout.lock().unwrap().expect(peer, ask_filters.len(), ExpectedReply::Filter);
                 self.p2p.send_network(peer, NetworkMessage::GetCFilters(GetCFilters{filter_type: headers.filter_type, start_height, stop_hash}));

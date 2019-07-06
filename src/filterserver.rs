@@ -73,7 +73,7 @@ impl FilterServer {
     fn filter_headers<'a>(&self, chaindb: &'a RwLockReadGuard<ChainDB>, filter_type: u8, start: u32, stop_hash: Sha256dHash) -> Box<Iterator<Item=Arc<StoredFilter>> + 'a> {
         if let Some(pos) = chaindb.pos_on_trunk(&stop_hash) {
             if pos >= start {
-                return Box::new(chaindb.iter_trunk(start).take((pos - start + 1) as usize).filter_map(move |h| chaindb.get_block_filter_header(&h.header.bitcoin_hash(), filter_type)))
+                return Box::new(chaindb.iter_trunk(start).take((pos - start + 1) as usize).filter_map(move |h| chaindb.get_block_filter_header(&h.bitcoin_hash(), filter_type)))
             }
         }
         Box::new(iter::empty::<Arc<StoredFilter>>())
@@ -112,7 +112,7 @@ impl FilterServer {
         }
         else {
             if let Some(header) = chaindb.get_header_for_height(get.start_height - 1) {
-                if let Some(previous_filter) = chaindb.get_block_filter_header(&header.header.bitcoin_hash(), get.filter_type) {
+                if let Some(previous_filter) = chaindb.get_block_filter_header(&header.bitcoin_hash(), get.filter_type) {
                     self.p2p.send(P2PControl::Send(peer, NetworkMessage::CFHeaders(
                         CFHeaders {
                             filter_type: get.filter_type,
