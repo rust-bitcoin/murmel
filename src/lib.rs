@@ -25,6 +25,7 @@
 #![deny(unused_mut)]
 #![deny(missing_docs)]
 #![deny(unused_must_use)]
+#![forbid(unsafe_code)]
 
 extern crate bitcoin;
 extern crate bitcoin_hashes;

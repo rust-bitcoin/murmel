@@ -1,3 +1,5 @@
+[![Safety Dance](https://img.shields.io/badge/unsafe-forbidden-success.svg)](https://github.com/rust-secure-code/safety-dance/)
+
 # Murmel
 Murmel is a lightweight Bitcoin node. Its intended use is to serve a lightning network stack with a settlement layer.
 Its resource requirements are marginal if compared to a Bitcoin Core node.
