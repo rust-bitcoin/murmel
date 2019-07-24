@@ -37,10 +37,11 @@ extern crate log;
 extern crate lru_cache;
 extern crate mio;
 extern crate rand;
+extern crate siphasher;
 
 #[cfg(feature="lightning")] extern crate lightning;
 mod connector;
-
+mod bip158;
 mod filtered;
 mod ping;
 mod timeout;

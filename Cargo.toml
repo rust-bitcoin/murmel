@@ -17,14 +17,15 @@ path = "src/lib.rs"
 [dependencies]
 lightning = { version ="0.0.9", optional=true }
 bitcoin = { version="0.18", features = ["bitcoinconsensus"] }
-bitcoin_hashes = "0.4"
-hammersbald = { version="2.0", features=["bitcoin_support"]}
+bitcoin_hashes = "0.3.0"
+hammersbald = { version="2.0", features = ["bitcoin_support"] }
 mio = "0.6"
 rand = "0.5"
 log = "0.4"
 simple_logger = "0.5.0"
 byteorder = "1.2"
 lru-cache = "0.1.1"
+siphasher = "0.3.0"
 futures={ git= "https://github.com/tamasblummer/futures-rs.git", tag = "0.2.1" }
 futures-timer= { git= "https://github.com/tamasblummer/futures-timer.git", branch = "futures_0.2.1" }
 
@@ -32,6 +33,3 @@ futures-timer= { git= "https://github.com/tamasblummer/futures-timer.git", branc
 rustc-serialize = "0.3"
 hex = "0.3"
 tempfile = "3.0.2"
-
-[patch.crates-io]
-bitcoin = { git="https://github.com/tamasblummer/rust-bitcoin.git", branch="blockfilter" }

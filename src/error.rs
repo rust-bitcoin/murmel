@@ -21,7 +21,7 @@
 
 use bitcoin::consensus::encode;
 use bitcoin::util;
-use bitcoin::bip158::BlockFilterError;
+use bip158;
 use hammersbald::HammersbaldError;
 use std::convert;
 use std::error::Error;
@@ -158,11 +158,11 @@ impl convert::From<Box<Error>> for MurmelError {
     }
 }
 
-impl convert::From<BlockFilterError> for MurmelError {
-    fn from(err: BlockFilterError) -> Self {
+impl convert::From<bip158::Error> for MurmelError {
+    fn from(err: bip158::Error) -> Self {
         match err {
-            BlockFilterError::IO(io) => MurmelError::IO(io),
-            BlockFilterError::UTXOMissing(_) => MurmelError::UnknownUTXO
+            bip158::Error::Io(io) => MurmelError::IO(io),
+            bip158::Error::UtxoMissing(_) => MurmelError::UnknownUTXO
         }
     }
 }

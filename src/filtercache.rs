@@ -43,20 +43,24 @@ impl FilterCache {
         self.filters.len()
     }
 
-    pub fn add_filter_header(&mut self, filter: &StoredFilter) -> Option<Arc<StoredFilter>> {
-        let mut stored = filter.clone();
-        stored.filter = None;
-        let filter = Arc::new(stored);
+    pub fn add_filter_header(&mut self, mut filter: StoredFilter) {
+        filter.filter = None;
+        let filter = Arc::new(filter);
         self.by_block.insert((filter.block_id, filter.filter_type), filter.clone());
-        self.filters.insert(filter.filter_id(), filter)
+        self.filters.insert(filter.filter_id(), filter);
     }
 
-    /// Fetch a header by its id from cache
-    pub fn get_filter_header(&self, filter_id: &Sha256dHash) -> Option<Arc<StoredFilter>> {
+    pub fn add_filter(&mut self, filter: StoredFilter) {
+        let filter = Arc::new(filter);
+        self.by_block.insert((filter.block_id, filter.filter_type), filter.clone());
+        self.filters.insert(filter.filter_id(), filter);
+    }
+
+    pub fn get_filter(&self, filter_id: &Sha256dHash) -> Option<Arc<StoredFilter>> {
         self.filters.get(filter_id).map(|b|{(*b).clone()})
     }
 
-    pub fn get_block_filter_header(&self, block_id: &Sha256dHash, filter_type: u8) -> Option<Arc<StoredFilter>> {
+    pub fn get_block_filter(&self, block_id: &Sha256dHash, filter_type: u8) -> Option<Arc<StoredFilter>> {
         self.by_block.get(&(*block_id, filter_type)).map(|b|{(*b).clone()})
     }
 }

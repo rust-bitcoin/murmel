@@ -27,8 +27,9 @@ use bitcoin::{
             CFCheckpt, CFHeaders, CFilter, GetCFCheckpt, GetCFHeaders, GetCFilters
         },
     },
-    bip158::{SCRIPT_FILTER, BlockFilterReader}
 };
+
+use bip158::{BlockFilterReader, SCRIPT_FILTER};
 
 use bitcoin_hashes::sha256d::Hash as Sha256dHash;
 use bitcoin_hashes::Hash;
@@ -131,7 +132,7 @@ impl Filtered {
                     break;
                 }
                 if header.stored.height % 1000 == 0 {
-                    if let Some(filter_header) = chaindb.get_block_filter_header(&header.bitcoin_hash(), checkpoints.filter_type) {
+                    if let Some(filter_header) = chaindb.get_block_filter(&header.bitcoin_hash(), checkpoints.filter_type) {
                         if filter_header.filter_id() != checkpoints.filter_headers[header.stored.height as usize / 1000] {
                             debug!("filter {} checkpoint mismatch at height {} with peer={}", checkpoints.filter_type, header.stored.height, peer);
                             ok = false;
@@ -165,7 +166,7 @@ impl Filtered {
         if block.check_merkle_root() && block.check_witness_commitment() {
             let mut chaindb = self.chaindb.write().unwrap();
             // have to have filter stored before
-            if let Some(filter) = chaindb.fetch_filter(&block.bitcoin_hash(), SCRIPT_FILTER)? {
+            if let Some(filter) = chaindb.fetch_block_filter(&block.bitcoin_hash(), SCRIPT_FILTER)? {
                 if let Some(content) = filter.filter {
                     self.timeout.lock().unwrap().received(peer, 1, ExpectedReply::Block);
                     let mut query = Vec::new();
@@ -176,7 +177,7 @@ impl Filtered {
                             }
                         }
                     }
-                    let filter_reader = BlockFilterReader::new(&block.bitcoin_hash())?;
+                    let filter_reader = BlockFilterReader::new(&block.bitcoin_hash());
                     if filter_reader.match_all(&mut Cursor::new(content), &mut query.iter().cloned())? == false {
                         debug!("block {} does not match previous filter assumption peer={}", block.bitcoin_hash(), peer);
                         // TODO this gets messy: forget previously stored filter chain
@@ -203,7 +204,7 @@ impl Filtered {
             let mut start_height = 0;
             let mut stop_hash = tip.bitcoin_hash();
             for header in chaindb.iter_trunk_rev(None) {
-                if chaindb.get_block_filter_header(&header.bitcoin_hash(), filter_type).is_some () {
+                if chaindb.get_block_filter(&header.bitcoin_hash(), filter_type).is_some () {
                     start_height = header.stored.height + 1;
                     break;
                 }
@@ -229,7 +230,7 @@ impl Filtered {
         }
         else {
             let chaindb = self.chaindb.read().unwrap();
-            if let Some(filter) = chaindb.get_filter_header(&headers.previous_filter) {
+            if let Some(filter) = chaindb.get_filter(&headers.previous_filter) {
                 if let Some(pos) = chaindb.pos_on_trunk(&filter.block_id) {
                     Some(pos+1)
                 }
@@ -256,7 +257,7 @@ impl Filtered {
                 let filter = StoredFilter { block_id: header.bitcoin_hash(), previous, filter_hash, filter: None, filter_type: headers.filter_type };
                 previous = filter.filter_id();
 
-                if chaindb.get_filter_header(&filter.filter_id()).is_none() {
+                if chaindb.get_filter(&filter.filter_id()).is_none() {
                     stored += 1;
                     chaindb.add_filter(filter)?;
                     if let Some(birth_height) = birth_height {
@@ -282,7 +283,7 @@ impl Filtered {
 
     fn filter (&mut self, filter: CFilter, peer: PeerId) -> Result<(), MurmelError> {
         let mut chaindb = self.chaindb.write().unwrap();
-        if let Some(filter_header) = chaindb.get_block_filter_header(&filter.block_hash, filter.filter_type) {
+        if let Some(filter_header) = chaindb.get_block_filter(&filter.block_hash, filter.filter_type) {
             self.timeout.lock().unwrap().received(peer, 1, ExpectedReply::Filter);
 
             let filter_hash = Sha256dHash::hash(filter.filter.as_slice());
@@ -291,7 +292,7 @@ impl Filtered {
                 // checks out with previously downloaded header, just store
                 let mut stored_filter = (*filter_header).clone();
                 stored_filter.filter = Some(filter.filter);
-                chaindb.store_filter(&stored_filter)?;
+                chaindb.add_filter_header(stored_filter)?;
 
                 // TODO match here to decide if we need the block need ling to lightning's watches
             }
@@ -312,7 +313,7 @@ impl Filtered {
             if inventory.inv_type == InvType::Block {
                 let chaindb = self.chaindb.read().unwrap();
                 debug!("received inv for block {}", inventory.hash);
-                if chaindb.get_block_filter_header(&inventory.hash, SCRIPT_FILTER).is_none() {
+                if chaindb.get_block_filter(&inventory.hash, SCRIPT_FILTER).is_none() {
                     // ask for filter headers if observing a new block
                     ask_for_headers = true;
                     break;
