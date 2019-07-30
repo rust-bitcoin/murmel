@@ -85,13 +85,13 @@ pub fn main() {
     if listen.is_empty() {
         listen.push(SocketAddr::from(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 8333)));
     }
-    let (configdb, chaindb) =
+    let chaindb =
         if let Some(path) = find_arg("db") {
             Constructor::open_db(Some(&Path::new(path.as_str())), network, true, cache, 0).unwrap()
         } else {
             Constructor::open_db(Some(&Path::new("server.db")), network, true, cache, 0).unwrap()
         };
-    let mut spv = Constructor::new("/Murmel:0.1.0/".to_string(), network, listen, true, configdb, chaindb).unwrap();
+    let mut spv = Constructor::new("/Murmel:0.1.0/".to_string(), network, listen, true, chaindb).unwrap();
     spv.run(peers, connections, find_opt("nodns")).expect("can not start node");
 }
 

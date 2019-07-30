@@ -22,6 +22,8 @@ use bitcoin::{
     blockdata::{
         block::Block,
         constants::genesis_block,
+        transaction::OutPoint,
+        script::Script
     },
     network::{
         constants::Network,
@@ -30,8 +32,7 @@ use bitcoin::{
     }
 };
 use bitcoin_hashes::sha256d::Hash as Sha256dHash;
-use blockfilter::{COIN_FILTER, SCRIPT_FILTER, WALLET_FILTER};
-use blockfilter::BlockFilter;
+use bip158::{BlockFilter, SCRIPT_FILTER, BlockFilterWriter};
 use chaindb::SharedChainDB;
 use error::MurmelError;
 use p2p::{P2PControl, P2PControlSender, PeerId, PeerMessage, PeerMessageReceiver, PeerMessageSender};
@@ -43,6 +44,7 @@ use std::{
 };
 use timeout::{ExpectedReply, SharedTimeout};
 
+pub const TXID_FILTER:u8 = 'c' as u8;
 
 pub struct FilterCalculator {
     network: Network,
@@ -133,16 +135,18 @@ impl FilterCalculator {
                 if self.missing.is_empty() {
                     // compute the list of missing blocks
                     {
-                        debug!("calculate missing blocks...");
                         let chaindb = self.chaindb.read().unwrap();
+                        debug!("calculate missing blocks...");
                         for header in chaindb.iter_trunk_rev(None) {
                             let id = header.bitcoin_hash();
                             if chaindb.may_have_block(&id)? == false {
                                 missing.push(id);
                             }
                             else {
-                                if chaindb.fetch_stored_block(&id)?.is_none () {
-                                    missing.push(id);
+                                if let Some(block) = chaindb.fetch_stored_block(&id)? {
+                                    if block.txids.is_empty() {
+                                        missing.push(id);
+                                    }
                                 }
                                 else {
                                     break;
@@ -154,12 +158,10 @@ impl FilterCalculator {
                     if missing.last().is_some() && *missing.last().unwrap() == genesis.bitcoin_hash() {
                         let mut chaindb = self.chaindb.write().unwrap();
                         chaindb.store_block(&genesis)?;
-                        let script_filter = BlockFilter::compute_script_filter(&genesis, chaindb.get_script_accessor(&genesis))?;
-                        let coin_filter = BlockFilter::compute_coin_filter(&genesis)?;
-                        let wallet_filter = BlockFilter::compute_wallet_filter(&genesis)?;
-                        chaindb.store_calculated_filter(&Sha256dHash::default(), &script_filter)?;
-                        chaindb.store_calculated_filter(&Sha256dHash::default(), &coin_filter)?;
-                        chaindb.store_calculated_filter(&Sha256dHash::default(), &wallet_filter)?;
+                        let accessor = chaindb.get_script_accessor(&genesis);
+                        let script_filter = BlockFilter::new_script_filter(&genesis, move |coin| accessor.resolve(coin))?;
+                        chaindb.add_calculated_filter(&Sha256dHash::default(), &script_filter)?;
+                        chaindb.add_calculated_filter(&Sha256dHash::default(), &Self::tx_filter(&genesis)?)?;
                         chaindb.cache_scripts(&genesis, 0);
                         chaindb.batch()?;
                         let len = missing.len();
@@ -194,19 +196,18 @@ impl FilterCalculator {
                 // do not store fake blocks
                 if block.check_merkle_root() && block.check_witness_commitment() {
                     // cache output scripts for later calculation
-                    chaindb.cache_scripts(block, header.height);
+                    chaindb.cache_scripts(block, header.stored.height);
                     // if this is the next block for filter calculation
-                    if let Some(prev_script) = chaindb.get_block_filter_header(&block.header.prev_blockhash, SCRIPT_FILTER) {
-                        let script_filter = BlockFilter::compute_script_filter(&block, chaindb.get_script_accessor(block))?;
-                        chaindb.store_calculated_filter(&prev_script.filter_id(), &script_filter)?;
+                    if let Some(prev_script) = chaindb.get_block_filter(&block.header.prev_blockhash, SCRIPT_FILTER) {
+                        let script_filter;
+                        {
+                            let accessor = chaindb.get_script_accessor(&block);
+                            script_filter = BlockFilter::new_script_filter(&block, |coin| accessor.resolve(coin))?;
+                        }
+                        chaindb.add_calculated_filter(&prev_script.filter_id(), &script_filter)?;
                     }
-                    if let Some(prev_coin) = chaindb.get_block_filter_header(&block.header.prev_blockhash, COIN_FILTER) {
-                        let coin_filter = BlockFilter::compute_coin_filter(&block)?;
-                        chaindb.store_calculated_filter(&prev_coin.filter_id(), &coin_filter)?;
-                    }
-                    if let Some(prev_coin) = chaindb.get_block_filter_header(&block.header.prev_blockhash, WALLET_FILTER) {
-                        let coin_filter = BlockFilter::compute_wallet_filter(&block)?;
-                        chaindb.store_calculated_filter(&prev_coin.filter_id(), &coin_filter)?;
+                    if let Some(prev_tx) = chaindb.get_block_filter(&block.header.prev_blockhash, TXID_FILTER) {
+                        chaindb.add_calculated_filter(&prev_tx.filter_id(), &Self::tx_filter(block)?)?;
                     }
                     chaindb.store_block(block)?;
                     self.p2p.send(P2PControl::Broadcast(NetworkMessage::Inv(vec!(Inventory{inv_type: InvType::Block, hash:block_id}))));
@@ -225,5 +226,15 @@ impl FilterCalculator {
             debug!("received unwanted block {}", block.bitcoin_hash());
         }
         Ok(())
+    }
+
+    fn tx_filter(block: &Block) -> Result<BlockFilter, MurmelError> {
+        let mut content = Vec::new();
+        let mut writer = BlockFilterWriter::new(&mut content, block);
+        for tx in &block.txdata {
+            writer.add_element(&tx.bitcoin_hash()[..])
+        }
+        writer.finish()?;
+        Ok(BlockFilter::new(block.bitcoin_hash(), TXID_FILTER, content.as_slice()))
     }
 }

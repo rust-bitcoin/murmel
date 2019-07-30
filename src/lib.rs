@@ -29,7 +29,6 @@
 
 extern crate bitcoin;
 extern crate bitcoin_hashes;
-extern crate lightning;
 extern crate byteorder;
 extern crate futures;
 extern crate futures_timer;
@@ -39,11 +38,11 @@ extern crate log;
 extern crate lru_cache;
 extern crate mio;
 extern crate rand;
-extern crate rayon;
-extern crate rusqlite;
 extern crate siphasher;
 
+#[cfg(feature="lightning")] extern crate lightning;
 mod connector;
+mod bip158;
 mod filtered;
 mod ping;
 mod timeout;
@@ -55,10 +54,8 @@ mod headercache;
 mod filtercache;
 mod filtercalculator;
 mod dispatcher;
-mod blockfilter;
 mod p2p;
 mod dns;
 pub mod error;
 pub mod chaindb;
-pub mod configdb;
 pub mod constructor;
