@@ -93,13 +93,13 @@ pub fn main() {
         SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs()
     };
 
-    let (configdb, chaindb) =
+    let chaindb =
         if let Some(path) = find_arg("db") {
             Constructor::open_db(Some(&Path::new(path.as_str())), network, false, cache, birth).unwrap()
         } else {
             Constructor::open_db(Some(&Path::new("client.db")), network, false, cache, birth).unwrap()
         };
-    let mut spv = Constructor::new("/Murmel:0.1.0/".to_string(), network, listen, true, configdb, chaindb).unwrap();
+    let mut spv = Constructor::new("/Murmel:0.1.0/".to_string(), network, listen, true, chaindb).unwrap();
     spv.run(peers, connections, true).expect("can not start node");
 }
 

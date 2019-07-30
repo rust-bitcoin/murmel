@@ -21,8 +21,8 @@
 
 use bitcoin::consensus::encode;
 use bitcoin::util;
+use bip158;
 use hammersbald::HammersbaldError;
-use rusqlite;
 use std::convert;
 use std::error::Error;
 use std::fmt;
@@ -30,6 +30,8 @@ use std::io;
 
 /// An error class to offer a unified error interface upstream
 pub enum MurmelError {
+    /// the block's work target is not correct
+    SpvBadTarget,
     /// bad proof of work
     SpvBadProofOfWork,
     /// unconnected header chain detected
@@ -46,8 +48,6 @@ pub enum MurmelError {
     Downstream(String),
     /// Network IO error
     IO(io::Error),
-    /// Database error
-    DB(rusqlite::Error),
     /// Bitcoin util error
     Util(util::Error),
     /// Bitcoin serialize error
@@ -59,6 +59,7 @@ pub enum MurmelError {
 impl Error for MurmelError {
     fn description(&self) -> &str {
         match *self {
+            MurmelError::SpvBadTarget => "bad proof of work target",
             MurmelError::SpvBadProofOfWork => "bad proof of work",
             MurmelError::UnconnectedHeader => "unconnected header",
             MurmelError::NoTip => "no chain tip found",
@@ -67,7 +68,6 @@ impl Error for MurmelError {
             MurmelError::BadMerkleRoot => "merkle root of header does not match transaction list",
             MurmelError::Downstream(ref s) => s,
             MurmelError::IO(ref err) => err.description(),
-            MurmelError::DB(ref err) => err.description(),
             MurmelError::Util(ref err) => err.description(),
             MurmelError::Hammersbald(ref err) => err.description(),
             MurmelError::Serialize(ref err) => err.description()
@@ -76,6 +76,7 @@ impl Error for MurmelError {
 
     fn cause(&self) -> Option<&Error> {
         match *self {
+            MurmelError::SpvBadTarget => None,
             MurmelError::SpvBadProofOfWork => None,
             MurmelError::UnconnectedHeader => None,
             MurmelError::NoTip => None,
@@ -84,7 +85,6 @@ impl Error for MurmelError {
             MurmelError::Downstream(_) => None,
             MurmelError::BadMerkleRoot => None,
             MurmelError::IO(ref err) => Some(err),
-            MurmelError::DB(ref err) => Some(err),
             MurmelError::Util(ref err) => Some(err),
             MurmelError::Hammersbald(ref err) => Some(err),
             MurmelError::Serialize(ref err) => Some(err)
@@ -97,6 +97,7 @@ impl fmt::Display for MurmelError {
         match *self {
             // Both underlying errors already impl `Display`, so we defer to
             // their implementations.
+            MurmelError::SpvBadTarget |
             MurmelError::SpvBadProofOfWork |
             MurmelError::UnconnectedHeader |
             MurmelError::NoTip |
@@ -104,7 +105,6 @@ impl fmt::Display for MurmelError {
             MurmelError::UnknownUTXO => write!(f, "{}", self.description()),
             MurmelError::Downstream(ref s) => write!(f, "{}", s),
             MurmelError::IO(ref err) => write!(f, "IO error: {}", err),
-            MurmelError::DB(ref err) => write!(f, "DB error: {}", err),
             MurmelError::Util(ref err) => write!(f, "Util error: {}", err),
             MurmelError::Hammersbald(ref err) => write!(f, "Hammersbald error: {}", err),
             MurmelError::Serialize(ref err) => write!(f, "Serialize error: {}", err),
@@ -140,12 +140,6 @@ impl convert::From<util::Error> for MurmelError {
     }
 }
 
-impl convert::From<rusqlite::Error> for MurmelError {
-    fn from(err: rusqlite::Error) -> MurmelError {
-        MurmelError::DB(err)
-    }
-}
-
 impl convert::From<HammersbaldError> for MurmelError {
     fn from(err: HammersbaldError) -> MurmelError {
         MurmelError::Hammersbald(err)
@@ -161,5 +155,14 @@ impl convert::From<encode::Error> for MurmelError {
 impl convert::From<Box<Error>> for MurmelError {
     fn from(err: Box<Error>) -> Self {
         MurmelError::Downstream(err.description().to_owned())
+    }
+}
+
+impl convert::From<bip158::Error> for MurmelError {
+    fn from(err: bip158::Error) -> Self {
+        match err {
+            bip158::Error::Io(io) => MurmelError::IO(io),
+            bip158::Error::UtxoMissing(_) => MurmelError::UnknownUTXO
+        }
     }
 }

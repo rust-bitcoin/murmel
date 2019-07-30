@@ -26,18 +26,90 @@ use bitcoin::{
     },
 };
 use bitcoin_hashes::sha256d::Hash as Sha256dHash;
+use bitcoin_hashes::Hash;
 use chaindb::StoredHeader;
 use error::MurmelError;
 use std::{
     collections::HashMap,
-    sync::Arc
+    sync::Arc,
+    cell::Cell
 };
+
+#[derive(Clone)]
+pub struct CachedHeader {
+    pub stored : StoredHeader,
+    id: Sha256dHash
+}
+
+impl CachedHeader {
+    pub fn new (header: StoredHeader) -> CachedHeader {
+        let id = header.bitcoin_hash();
+        CachedHeader{ stored: header, id }
+    }
+
+    /// Computes the target [0, T] that a blockhash must land in to be valid
+    pub fn target(&self) -> Uint256 {
+        // This is a floating-point "compact" encoding originally used by
+        // OpenSSL, which satoshi put into consensus code, so we're stuck
+        // with it. The exponent needs to have 3 subtracted from it, hence
+        // this goofy decoding code:
+        let (mant, expt) = {
+            let unshifted_expt = self.stored.header.bits >> 24;
+            if unshifted_expt <= 3 {
+                ((self.stored.header.bits & 0xFFFFFF) >> (8 * (3 - unshifted_expt as usize)), 0)
+            } else {
+                (self.stored.header.bits & 0xFFFFFF, 8 * ((self.stored.header.bits >> 24) - 3))
+            }
+        };
+
+        // The mantissa is signed but may not be negative
+        if mant > 0x7FFFFF {
+            Default::default()
+        } else {
+            Uint256::from_u64(mant as u64).unwrap() << (expt as usize)
+        }
+    }
+
+    /// Performs an SPV validation of a block, which confirms that the proof-of-work
+    /// is correct, but does not verify that the transactions are valid or encoded
+    /// correctly.
+    pub fn spv_validate(&self, required_target: &Uint256) -> Result<(), MurmelError> {
+        use byteorder::{ByteOrder, LittleEndian};
+
+        let target = &self.target();
+        if target != required_target {
+            return Err(MurmelError::SpvBadTarget);
+        }
+        let data: [u8; 32] = self.bitcoin_hash().into_inner();
+        let mut ret = [0u64; 4];
+        LittleEndian::read_u64_into(&data, &mut ret);
+        let hash = &Uint256(ret);
+        if hash <= target { Ok(()) } else { Err(MurmelError::SpvBadProofOfWork) }
+    }
+
+    /// Returns the total work of the block
+    pub fn work(&self) -> Uint256 {
+        // 2**256 / (target + 1) == ~target / (target+1) + 1    (eqn shamelessly stolen from bitcoind)
+        let mut ret = !self.target();
+        let mut ret1 = self.target();
+        ret1.increment();
+        ret = ret / ret1;
+        ret.increment();
+        ret
+    }
+}
+
+impl BitcoinHash for CachedHeader {
+    fn bitcoin_hash(&self) -> Sha256dHash {
+        self.id
+    }
+}
 
 pub struct HeaderCache {
     // network
     network: Network,
     // all known headers
-    headers: HashMap<Arc<Sha256dHash>, StoredHeader>,
+    headers: HashMap<Arc<Sha256dHash>, CachedHeader>,
     // header chain with most work
     trunk: Vec<Arc<Sha256dHash>>,
 }
@@ -56,12 +128,12 @@ impl HeaderCache {
 
     pub fn add_header_unchecked(&mut self, stored: &StoredHeader) {
         let id = Arc::new(stored.bitcoin_hash());
-        self.headers.insert(id.clone(), stored.clone());
+        self.headers.insert(id.clone(), CachedHeader::new(stored.clone()));
         self.trunk.push(id);
     }
 
     /// add a Bitcoin header
-    pub fn add_header(&mut self, header: &BlockHeader) -> Result<Option<(StoredHeader, Option<Vec<Sha256dHash>>, Option<Vec<Sha256dHash>>)>, MurmelError> {
+    pub fn add_header(&mut self, header: &BlockHeader) -> Result<Option<(CachedHeader, Option<Vec<Sha256dHash>>, Option<Vec<Sha256dHash>>)>, MurmelError> {
         if self.headers.get(&header.bitcoin_hash()).is_some() {
             // ignore already known header
             return Ok(None);
@@ -80,11 +152,11 @@ impl HeaderCache {
         } else {
             // insert genesis
             let new_tip = Arc::new(header.bitcoin_hash());
-            let stored = StoredHeader {
+            let stored = CachedHeader::new(StoredHeader {
                 header: header.clone(),
                 height: 0,
                 log2work: Self::log2(header.work())
-            };
+            });
             self.trunk.push(new_tip.clone());
             self.headers.insert(new_tip.clone(), stored.clone());
             return Ok(Some((stored, None, Some(vec!(*new_tip)))));
@@ -112,22 +184,22 @@ impl HeaderCache {
     }
 
     // add header to tree, return stored, optional list of unwinds, optional list of extensions
-    fn add_header_to_tree(&mut self, prev: &StoredHeader, next: &BlockHeader) -> Result<(StoredHeader, Option<Vec<Sha256dHash>>, Option<Vec<Sha256dHash>>), MurmelError> {
+    fn add_header_to_tree(&mut self, prev: &CachedHeader, next: &BlockHeader) -> Result<(CachedHeader, Option<Vec<Sha256dHash>>, Option<Vec<Sha256dHash>>), MurmelError> {
         const DIFFCHANGE_INTERVAL: u32 = 2016;
         const DIFFCHANGE_TIMESPAN: u32 = 14 * 24 * 3600;
         const TARGET_BLOCK_SPACING: u32 = 600;
 
         let required_work =
         // Compute required difficulty if this is a diffchange block
-            if (prev.height + 1) % DIFFCHANGE_INTERVAL == 0 {
+            if (prev.stored.height + 1) % DIFFCHANGE_INTERVAL == 0 {
                 let timespan = {
                     // Scan back DIFFCHANGE_INTERVAL blocks
                     let mut scan = prev.clone();
-                    if self.tip_hash() == Some(scan.header.prev_blockhash) {
+                    if self.tip_hash() == Some(scan.stored.header.prev_blockhash) {
                         scan = self.headers.get(&self.trunk[self.trunk.len() - DIFFCHANGE_INTERVAL as usize - 2]).unwrap().clone();
                     } else {
                         for _ in 0..(DIFFCHANGE_INTERVAL - 1) {
-                            if let Some(header) = self.headers.get(&scan.header.prev_blockhash) {
+                            if let Some(header) = self.headers.get(&scan.stored.header.prev_blockhash) {
                                 scan = header.clone();
                             } else {
                                 return Err(MurmelError::UnconnectedHeader);
@@ -135,14 +207,14 @@ impl HeaderCache {
                         }
                     }
                     // Get clamped timespan between first and last blocks
-                    match prev.header.time - scan.header.time {
+                    match prev.stored.header.time - scan.stored.header.time {
                         n if n < DIFFCHANGE_TIMESPAN / 4 => DIFFCHANGE_TIMESPAN / 4,
                         n if n > DIFFCHANGE_TIMESPAN * 4 => DIFFCHANGE_TIMESPAN * 4,
                         n => n
                     }
                 };
                 // Compute new target
-                let mut target = prev.header.target();
+                let mut target = prev.stored.header.target();
                 target = target.mul_u32(timespan);
                 target = target / Uint256::from_u64(DIFFCHANGE_TIMESPAN as u64).unwrap();
                 // Clamp below MAX_TARGET (difficulty 1)
@@ -153,7 +225,7 @@ impl HeaderCache {
                 // On non-diffchange blocks, Testnet has a rule that any 20-minute-long
                 // block interval resets the difficulty to 1
             } else if self.network == Network::Testnet &&
-                prev.header.time > prev.header.time + 2 * TARGET_BLOCK_SPACING {
+                prev.stored.header.time > prev.stored.header.time + 2 * TARGET_BLOCK_SPACING {
                 Self::max_target()
                 // On the other hand, if we are in Testnet and the block interval is less
                 // than 20 minutes, we need to scan backward to find a block for which the
@@ -161,38 +233,39 @@ impl HeaderCache {
             } else if self.network == Network::Testnet {
                 // Scan back DIFFCHANGE_INTERVAL blocks
                 let mut scan = prev.clone();
-                let mut height = prev.height + 1;
+                let mut height = prev.stored.height + 1;
                 let max_target = Self::max_target();
-                while height % DIFFCHANGE_INTERVAL != 0 && scan.header.target() == max_target {
-                    if let Some(header) = self.headers.get(&scan.header.prev_blockhash) {
+                while height % DIFFCHANGE_INTERVAL != 0 && scan.stored.header.target() == max_target {
+                    if let Some(header) = self.headers.get(&scan.stored.header.prev_blockhash) {
                         scan = header.clone();
-                        height = header.height;
+                        height = header.stored.height;
                     } else {
                         return Err(MurmelError::UnconnectedHeader);
                     }
                 }
-                scan.header.target()
+                scan.stored.header.target()
                 // Otherwise just use the last block's difficulty
             } else {
-                prev.header.target()
+                prev.stored.header.target()
             };
 
-        if next.spv_validate(&required_work).is_err() {
+        let cached = CachedHeader::new(StoredHeader {
+            header: next.clone(),
+            height: prev.stored.height + 1,
+            log2work: Self::log2(next.work() + Self::exp2(prev.stored.log2work))
+        });
+
+        // Check POW
+        if cached.spv_validate(&required_work).is_err() {
             return Err(MurmelError::SpvBadProofOfWork);
         }
-        // POW is sufficient
-        let stored = StoredHeader {
-            header: next.clone(),
-            height: prev.height + 1,
-            log2work: Self::log2(next.work() + Self::exp2(prev.log2work))
-        };
-        let next_hash = Arc::new(next.bitcoin_hash());
+
+        let next_hash = Arc::new(cached.bitcoin_hash());
 
         // store header in cache
-        self.headers.insert(next_hash.clone(), stored.clone());
-
+        self.headers.insert(next_hash.clone(), cached.clone());
         if let Some(tip) = self.tip() {
-            if tip.log2work < stored.log2work {
+            if tip.stored.log2work < cached.stored.log2work {
                 // higher POW than previous tip
 
                 // compute path to new tip
@@ -200,7 +273,7 @@ impl HeaderCache {
                 let mut path_to_new_tip = Vec::new();
                 while self.pos_on_trunk(&forks_at).is_none() {
                     if let Some(h) = self.headers.get(&forks_at) {
-                        forks_at = h.header.prev_blockhash;
+                        forks_at = h.stored.header.prev_blockhash;
                         path_to_new_tip.push(forks_at);
                     } else {
                         return Err(MurmelError::UnconnectedHeader);
@@ -224,15 +297,13 @@ impl HeaderCache {
                         return Err(MurmelError::UnconnectedHeader);
                     }
                     self.trunk.extend(path_to_new_tip.iter().map(|h| { Arc::new(*h) }));
-
-                    return Ok((stored, Some(unwinds), Some(path_to_new_tip)));
+                    return Ok((cached, Some(unwinds), Some(path_to_new_tip)));
                 } else {
                     self.trunk.extend(path_to_new_tip.iter().map(|h| { Arc::new(*h) }));
-
-                    return Ok((stored, None, Some(path_to_new_tip)));
+                    return Ok((cached, None, Some(path_to_new_tip)));
                 }
             } else {
-                return Ok((stored, None, None));
+                return Ok((cached, None, None));
             }
         } else {
             return Err(MurmelError::NoTip);
@@ -245,7 +316,7 @@ impl HeaderCache {
     }
 
     /// retrieve the id of the block/header with most work
-    pub fn tip(&self) -> Option<StoredHeader> {
+    pub fn tip(&self) -> Option<CachedHeader> {
         if let Some(id) = self.tip_hash() {
             return self.get_header(&id);
         }
@@ -278,14 +349,14 @@ impl HeaderCache {
     }
 
     /// Fetch a header by its id from cache
-    pub fn get_header(&self, id: &Sha256dHash) -> Option<StoredHeader> {
+    pub fn get_header(&self, id: &Sha256dHash) -> Option<CachedHeader> {
         if let Some(header) = self.headers.get(id) {
             return Some(header.clone());
         }
         None
     }
 
-    pub fn get_header_for_height(&self, height: u32) -> Option<StoredHeader> {
+    pub fn get_header_for_height(&self, height: u32) -> Option<CachedHeader> {
         if height < self.trunk.len() as u32 {
             self.headers.get(&self.trunk[height as usize]).cloned()
         }
@@ -294,11 +365,11 @@ impl HeaderCache {
         }
     }
 
-    pub fn iter_trunk<'a> (&'a self, from: u32) -> Box<Iterator<Item=&'a StoredHeader> +'a> {
+    pub fn iter_trunk<'a> (&'a self, from: u32) -> Box<Iterator<Item=&'a CachedHeader> +'a> {
         Box::new(self.trunk.iter().skip(from as usize).map(move |a| self.headers.get(&*a).unwrap()))
     }
 
-    pub fn iter_trunk_rev<'a> (&'a self, from: Option<u32>) -> Box<Iterator<Item=&'a StoredHeader> +'a> {
+    pub fn iter_trunk_rev<'a> (&'a self, from: Option<u32>) -> Box<Iterator<Item=&'a CachedHeader> +'a> {
         let len = self.trunk.len();
         if let Some(from) = from {
             Box::new(self.trunk.iter().rev().skip(len - from as usize).map(move |a| self.headers.get(&*a).unwrap()))

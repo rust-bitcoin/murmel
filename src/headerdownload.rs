@@ -151,7 +151,7 @@ impl HeaderDownload {
                 let chaindb = self.chaindb.read().unwrap();
 
                 if let Some(tip) = chaindb.header_tip() {
-                    height = tip.height;
+                    height = tip.stored.height;
                 } else {
                     return Err(MurmelError::NoTip);
                 }
@@ -177,7 +177,7 @@ impl HeaderDownload {
 
                                 if let Some(unwinds) = unwinds {
                                     disconnected_headers.extend(unwinds.iter()
-                                        .map(|h| chaindb.get_header(h).unwrap().header));
+                                        .map(|h| chaindb.get_header(h).unwrap().stored.header));
                                     break;
                                 }
                             }
