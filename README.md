@@ -26,42 +26,8 @@ spent outpoints allow checking the UTXO based on its immutable store. In contras
 does not have to re-compute anything on a re-org (switch of fork with most work).
 
 ## Status
-Not yet for serious use. Murmel is able to support it's own and [rust-lightning](https://github.com/rust-bitcoin/rust-lightning) development. 
-
-## How to run a filter server
-Murmel supports client development as a BIP157 filter server. For this it needs to build up a complete Bitcoin blockchain
-and compute filters. Run the server as follows:
-
-```$xslt
-cargo build --release
-target/release/server --utxo-cache 65 
-```
-
-Execute server with --help option to get further hints. It is recommended to point with --peer to a bitcoin node 
-that will answer quickly. Bootstrap will use about 12GB of memory for the UTXO cache and finish within 6 hours, building
-a 210 GiB [Hammersbald]((https://github.com/rust-bitcoin/hammersbald)) database of the Bitcoin blockchain and filters
-(block height: 562316).
-
-A lower cache setting is not recommended for bootstrap as finding spent coins via filters is magnitudes slower, but 
-fast enough to keep up with the chain once bootstrapped. Cache is not needed after bootstrap, the memory requirement 
-is 0.7 GB without cache.
+Under refactoring.
 
 ## How to run Murmel
-Murmel does not do anything useful yet, but demonstrates how it would load block headers and filtered blocks.
-```
-cargo buld --release
-target/release/client
-```
-Above assumes that a filter server is running locally. Murmel will download block and filter headers within 
-6 Minutes and build a [Hammersbald]((https://github.com/rust-bitcoin/hammersbald)) dabase of 250MB. Its memory 
-footprint is around 400MB
-
-## Uses
-Murmel uses and supports below projects:
-
-* [Rust language bindings for Bitcoin secp256k1 library.](https://github.com/rust-bitcoin/rust-secp256k1)
-* [Rust Bitcoin library](https://github.com/rust-bitcoin/rust-bitcoin)
-* [Bitcoin's libbitcoinconsenus.a with Rust binding.](https://github.com/rust-bitcoin/rust-bitcoinconsensus)
-* [Rust-Lightning, not Rusty's Lightning](https://github.com/rust-bitcoin/rust-lightning)
-* [Hammersbald](https://github.com/rust-bitcoin/hammersbald)
+Murmel does not do anything useful yet.
 
