@@ -50,7 +50,7 @@ mod filterserver;
 mod headercache;
 mod filtercache;
 mod filtercalculator;
-mod dns;
+pub mod dns;
 pub mod timeout;
 pub mod headerdownload;
 pub mod downstream;
