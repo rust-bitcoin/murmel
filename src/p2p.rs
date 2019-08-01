@@ -60,8 +60,11 @@ const EVENT_BUFFER_SIZE:usize = 1024;
 const CONNECT_TIMEOUT_SECONDS: u64 = 30;
 const BAN :u32 = 100;
 
+/// do we serve blocks?
 pub const SERVICE_BLOCKS:u64 = 1;
+/// requires segwit support
 pub const SERVICE_WITNESS:u64 =  1 << 3;
+/// require filters
 pub const SERVICE_FILTERS:u64 = 1 << 6;
 /// A peer's Id
 #[derive(Hash, Eq, PartialEq, Copy, Clone)]
@@ -78,6 +81,7 @@ impl fmt::Display for PeerId {
 }
 type PeerMap = HashMap<PeerId, Mutex<Peer>>;
 
+/// A message from network to downstream
 #[derive(Clone)]
 pub enum PeerMessage {
     Message(PeerId, NetworkMessage),

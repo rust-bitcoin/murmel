@@ -26,7 +26,6 @@ use bitcoin::{
 };
 use blockserver::BlockServer;
 use chaindb::{ChainDB, SharedChainDB};
-use connector::{LightningConnector, SharedLightningConnector};
 use dispatcher::Dispatcher;
 use dns::dns_seed;
 use error::MurmelError;
@@ -49,6 +48,8 @@ use std::{
     sync::{Arc, mpsc, Mutex, RwLock},
 };
 use timeout::Timeout;
+use downstream::DownStreamDummy;
+use downstream::SharedDownstream;
 
 const MAX_PROTOCOL_VERSION: u32 = 70001;
 
@@ -56,7 +57,7 @@ const MAX_PROTOCOL_VERSION: u32 = 70001;
 pub struct Constructor {
     p2p: Arc<P2P>,
     /// this should be accessed by Lightning
-    pub lightning: SharedLightningConnector,
+    pub downstream: SharedDownstream,
     /// message dispatcher
     dispatcher: Dispatcher,
     server: bool,
@@ -67,9 +68,9 @@ impl Constructor {
     pub fn open_db(path: Option<&Path>, network: Network, server: bool, script_cache_size: usize, birth: u64) -> Result<SharedChainDB, MurmelError> {
         let mut chaindb =
         if let Some(path) = path {
-            ChainDB::new(path, network, server, script_cache_size, birth)?
+            ChainDB::new(path, network, script_cache_size)?
         } else {
-            ChainDB::mem(network, server, script_cache_size, birth)?
+            ChainDB::mem(network, script_cache_size)?
         };
         chaindb.init(server)?;
         Ok(Arc::new(RwLock::new(chaindb)))
@@ -89,7 +90,8 @@ impl Constructor {
             P2P::new(user_agent.clone(), network, 0, MAX_PROTOCOL_VERSION, server,
                      PeerMessageSender::new(to_dispatcher), back_pressure);
 
-        let lightning = Arc::new(Mutex::new(LightningConnector::new(network, p2p_control.clone())));
+        #[cfg(feature="lightning")] let lightning = Arc::new(Mutex::new(LightningConnector::new(network, p2p_control.clone())));
+        #[cfg(not(feature="lightning"))] let lightning = Arc::new(Mutex::new(DownStreamDummy{}));
 
 
         let timeout = Arc::new(Mutex::new(Timeout::new(p2p_control.clone())));
@@ -103,7 +105,7 @@ impl Constructor {
             dispatcher.add_listener(FilterServer::new(chaindb.clone(), p2p_control.clone()));
             dispatcher.add_listener(BlockServer::new(chaindb.clone(), p2p_control.clone()));
         } else {
-            dispatcher.add_listener(Filtered::new(chaindb.clone(), p2p_control.clone(), timeout.clone(), lightning.clone()));
+            dispatcher.add_listener(Filtered::new(chaindb.clone(), p2p_control.clone(), timeout.clone(), lightning.clone(), None));
         }
 
 
@@ -111,7 +113,7 @@ impl Constructor {
             p2p_control.send(P2PControl::Bind(addr.clone()));
         }
 
-        Ok(Constructor { p2p, dispatcher, server, lightning })
+        Ok(Constructor { p2p, dispatcher, server, downstream: lightning })
     }
 
     /// Run the stack. This should be called AFTER registering listener of the ChainWatchInterface,

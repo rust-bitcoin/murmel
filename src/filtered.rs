@@ -34,7 +34,6 @@ use bip158::{BlockFilterReader, SCRIPT_FILTER};
 use bitcoin_hashes::sha256d::Hash as Sha256dHash;
 use bitcoin_hashes::Hash;
 
-use connector::SharedLightningConnector;
 use chaindb::SharedChainDB;
 use chaindb::StoredFilter;
 use error::MurmelError;
@@ -46,20 +45,22 @@ use std::{
     io::Cursor
 };
 use timeout::{ExpectedReply, SharedTimeout};
+use downstream::SharedDownstream;
 
 pub struct Filtered {
     p2p: P2PControlSender,
     chaindb: SharedChainDB,
     timeout: SharedTimeout,
+    birth_height: Option<u32>,
     #[allow(unused)] // TODO send blocks
-    lightning: SharedLightningConnector
+    downstream: SharedDownstream
 }
 
 impl Filtered {
-    pub fn new(chaindb: SharedChainDB, p2p: P2PControlSender, timeout: SharedTimeout, lightning: SharedLightningConnector) -> PeerMessageSender {
+    pub fn new(chaindb: SharedChainDB, p2p: P2PControlSender, timeout: SharedTimeout, downstream: SharedDownstream, birth_height: Option<u32>) -> PeerMessageSender {
         let (sender, receiver) = mpsc::sync_channel(p2p.back_pressure);
 
-        let mut filterdownload = Filtered { chaindb, p2p, timeout, lightning };
+        let mut filterdownload = Filtered { chaindb, p2p, timeout, downstream, birth_height };
 
         thread::spawn(move || { filterdownload.run(receiver) });
 
@@ -248,7 +249,6 @@ impl Filtered {
             self.timeout.lock().unwrap().received(peer, 1, ExpectedReply::FilterHeader);
 
             let mut chaindb = self.chaindb.write().unwrap();
-            let birth_height = chaindb.birth_height();
             let mut ask_filters = Vec::new();
             let mut previous = headers.previous_filter;
             let id_pairs = chaindb.iter_trunk(trunk_pos).cloned().zip(headers.filter_hashes.iter().cloned()).collect::<Vec<_>>();
@@ -260,7 +260,7 @@ impl Filtered {
                 if chaindb.get_filter(&filter.filter_id()).is_none() {
                     stored += 1;
                     chaindb.add_filter(filter)?;
-                    if let Some(birth_height) = birth_height {
+                    if let Some(birth_height) = self.birth_height {
                         if birth_height <= header.stored.height {
                             ask_filters.push(header);
                         }
