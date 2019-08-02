@@ -45,21 +45,24 @@ use std::{
     collections::HashSet,
     net::SocketAddr,
     path::Path,
-    sync::{Arc, mpsc, Mutex, RwLock},
+    sync::{Arc, mpsc, Mutex, RwLock, atomic::AtomicUsize},
 };
 use timeout::Timeout;
 use downstream::DownStreamDummy;
 use downstream::SharedDownstream;
+use bitcoin::network::message::NetworkMessage;
+use bitcoin::network::message::RawNetworkMessage;
+use p2p::BitcoinP2PConfig;
 
 const MAX_PROTOCOL_VERSION: u32 = 70001;
 
 /// The complete stack
 pub struct Constructor {
-    p2p: Arc<P2P>,
+    p2p: Arc<P2P<NetworkMessage, RawNetworkMessage, BitcoinP2PConfig>>,
     /// this should be accessed by Lightning
     pub downstream: SharedDownstream,
     /// message dispatcher
-    dispatcher: Dispatcher,
+    dispatcher: Dispatcher<NetworkMessage>,
     server: bool,
 }
 
@@ -86,9 +89,18 @@ impl Constructor {
 
         let (to_dispatcher, from_p2p) = mpsc::sync_channel(back_pressure);
 
+
+        let p2pconfig = BitcoinP2PConfig {
+            network,
+            nonce: thread_rng().next_u64(),
+            max_protocol_version: 7001,
+            user_agent: "murmel: 0.1.0".to_owned(),
+            height: AtomicUsize::new(0),
+            server: !listen.is_empty()
+        };
+
         let (p2p, p2p_control) =
-            P2P::new(user_agent.clone(), network, 0, MAX_PROTOCOL_VERSION, server,
-                     PeerMessageSender::new(to_dispatcher), back_pressure);
+            P2P::new(p2pconfig, PeerMessageSender::new(to_dispatcher), back_pressure);
 
         #[cfg(feature="lightning")] let lightning = Arc::new(Mutex::new(LightningConnector::new(network, p2p_control.clone())));
         #[cfg(not(feature="lightning"))] let lightning = Arc::new(Mutex::new(DownStreamDummy{}));
@@ -121,7 +133,7 @@ impl Constructor {
     /// * peers - connect to these peers at startup (might be empty)
     /// * min_connections - keep connections with at least this number of peers. Peers will be randomly chosen
     /// from those discovered in earlier runs
-    pub fn run(&mut self, peers: Vec<SocketAddr>, min_connections: usize, nodns: bool) -> Result<(), MurmelError> {
+    pub fn run(&mut self, network: Network, peers: Vec<SocketAddr>, min_connections: usize, nodns: bool) -> Result<(), MurmelError> {
         let needed_services = if self.server {
             0
         } else {
@@ -141,11 +153,11 @@ impl Constructor {
 
         // the task that keeps us connected
         // note that this call does not return
-        thread_pool.run(self.keep_connected(self.p2p.clone(), peers, min_connections, nodns)).unwrap();
+        thread_pool.run(self.keep_connected(network,self.p2p.clone(), peers, min_connections, nodns)).unwrap();
         Ok(())
     }
 
-    fn keep_connected(&self, p2p: Arc<P2P>, peers: Vec<SocketAddr>, min_connections: usize, nodns: bool) -> Box<Future<Item=(), Error=Never> + Send> {
+    fn keep_connected(&self, network: Network, p2p: Arc<P2P<NetworkMessage, RawNetworkMessage, BitcoinP2PConfig>>, peers: Vec<SocketAddr>, min_connections: usize, nodns: bool) -> Box<Future<Item=(), Error=Never> + Send> {
 
         // add initial peers if any
         let mut added = Vec::new();
@@ -154,9 +166,10 @@ impl Constructor {
         }
 
         struct KeepConnected {
+            network: Network,
             min_connections: usize,
             connections: Vec<Box<Future<Item=SocketAddr, Error=MurmelError> + Send>>,
-            p2p: Arc<P2P>,
+            p2p: Arc<P2P<NetworkMessage, RawNetworkMessage, BitcoinP2PConfig>>,
             dns: Vec<SocketAddr>,
             earlier: HashSet<SocketAddr>,
             nodns: bool,
@@ -213,7 +226,7 @@ impl Constructor {
             fn dns_lookup(&mut self) {
                 while self.connections.len() < self.min_connections {
                     if self.dns.len() == 0 {
-                        self.dns = dns_seed(self.p2p.network);
+                        self.dns = dns_seed(self.network);
                     }
                     if self.dns.len() > 0 {
                         let mut rng = thread_rng();
@@ -224,6 +237,6 @@ impl Constructor {
             }
         }
 
-        Box::new(KeepConnected { min_connections, connections: added, p2p, dns: Vec::new(), nodns, earlier: HashSet::new() })
+        Box::new(KeepConnected { network, min_connections, connections: added, p2p, dns: Vec::new(), nodns, earlier: HashSet::new() })
     }
 }

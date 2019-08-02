@@ -100,7 +100,7 @@ pub fn main() {
             Constructor::open_db(Some(&Path::new("client.db")), network, false, cache, birth).unwrap()
         };
     let mut spv = Constructor::new("/Murmel:0.1.0/".to_string(), network, listen, true, chaindb).unwrap();
-    spv.run(peers, connections, true).expect("can not start node");
+    spv.run(network, peers, connections, true).expect("can not start node");
 }
 
 fn get_peers() -> Vec<SocketAddr> {

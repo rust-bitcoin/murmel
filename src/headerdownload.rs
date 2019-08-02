@@ -41,14 +41,14 @@ use timeout::{ExpectedReply, SharedTimeout};
 use downstream::SharedDownstream;
 
 pub struct HeaderDownload {
-    p2p: P2PControlSender,
+    p2p: P2PControlSender<NetworkMessage>,
     chaindb: SharedChainDB,
-    timeout: SharedTimeout,
+    timeout: SharedTimeout<NetworkMessage>,
     downstream: SharedDownstream
 }
 
 impl HeaderDownload {
-    pub fn new(chaindb: SharedChainDB, p2p: P2PControlSender, timeout: SharedTimeout, downstream: SharedDownstream) -> PeerMessageSender {
+    pub fn new(chaindb: SharedChainDB, p2p: P2PControlSender<NetworkMessage>, timeout: SharedTimeout<NetworkMessage>, downstream: SharedDownstream) -> PeerMessageSender<NetworkMessage> {
         let (sender, receiver) = mpsc::sync_channel(p2p.back_pressure);
 
         let mut headerdownload = HeaderDownload { chaindb, p2p, timeout, downstream: downstream };
@@ -58,7 +58,7 @@ impl HeaderDownload {
         PeerMessageSender::new(sender)
     }
 
-    fn run(&mut self, receiver: PeerMessageReceiver) {
+    fn run(&mut self, receiver: PeerMessageReceiver<NetworkMessage>) {
         loop {
             while let Ok(msg) = receiver.recv_timeout(Duration::from_millis(1000)) {
                 if let Err(e) = match msg {

@@ -25,7 +25,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH}
 };
 
-pub type SharedTimeout = Arc<Mutex<Timeout>>;
+pub type SharedTimeout<Message> = Arc<Mutex<Timeout<Message>>>;
 
 const TIMEOUT:u64 = 60;
 
@@ -39,14 +39,14 @@ pub enum ExpectedReply {
     Filter
 }
 
-pub struct Timeout {
+pub struct Timeout<Message: Send + Sync + Clone> {
     timeouts: HashMap<PeerId, u64>,
     expected: HashMap<PeerId, HashMap<ExpectedReply, usize>>,
-    p2p: P2PControlSender
+    p2p: P2PControlSender<Message>
 }
 
-impl Timeout {
-    pub fn new (p2p: P2PControlSender) -> Timeout {
+impl<Message: Send + Sync + Clone> Timeout<Message> {
+    pub fn new (p2p: P2PControlSender<Message>) -> Timeout<Message> {
         Timeout{p2p, timeouts: HashMap::new(), expected: HashMap::new()}
     }
 
