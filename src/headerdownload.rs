@@ -27,10 +27,10 @@ use bitcoin::{
     }
 };
 use bitcoin_hashes::sha256d::Hash as Sha256dHash;
-use connector::SharedLightningConnector;
 use chaindb::SharedChainDB;
 use error::MurmelError;
 use p2p::{P2PControl, P2PControlSender, PeerId, PeerMessage, PeerMessageReceiver, PeerMessageSender, SERVICE_BLOCKS};
+use downstream::Downstream;
 use std::{
     collections::VecDeque,
     sync::mpsc,
@@ -38,31 +38,33 @@ use std::{
     time::Duration,
 };
 use timeout::{ExpectedReply, SharedTimeout};
+use downstream::SharedDownstream;
 
 pub struct HeaderDownload {
-    p2p: P2PControlSender,
+    p2p: P2PControlSender<NetworkMessage>,
     chaindb: SharedChainDB,
-    timeout: SharedTimeout,
-    lightning: SharedLightningConnector
+    timeout: SharedTimeout<NetworkMessage>,
+    downstream: SharedDownstream
 }
 
 impl HeaderDownload {
-    pub fn new(chaindb: SharedChainDB, p2p: P2PControlSender, timeout: SharedTimeout, lightning: SharedLightningConnector) -> PeerMessageSender {
+    pub fn new(chaindb: SharedChainDB, p2p: P2PControlSender<NetworkMessage>, timeout: SharedTimeout<NetworkMessage>, downstream: SharedDownstream) -> PeerMessageSender<NetworkMessage> {
         let (sender, receiver) = mpsc::sync_channel(p2p.back_pressure);
 
-        let mut headerdownload = HeaderDownload { chaindb, p2p, timeout, lightning };
+        let mut headerdownload = HeaderDownload { chaindb, p2p, timeout, downstream: downstream };
 
         thread::spawn(move || { headerdownload.run(receiver) });
 
         PeerMessageSender::new(sender)
     }
 
-    fn run(&mut self, receiver: PeerMessageReceiver) {
+    fn run(&mut self, receiver: PeerMessageReceiver<NetworkMessage>) {
         loop {
             while let Ok(msg) = receiver.recv_timeout(Duration::from_millis(1000)) {
                 if let Err(e) = match msg {
                     PeerMessage::Connected(pid) => {
                         if self.is_serving_blocks(pid) {
+                            trace!("serving blocks peer={}", pid);
                             self.get_headers(pid)
                         } else {
                             Ok(())
@@ -167,6 +169,7 @@ impl HeaderDownload {
                         // add to blockchain - this also checks proof of work
                         match chaindb.add_header(&header.header) {
                             Ok(Some((stored, unwinds, forwards))) => {
+                                self.downstream.lock().unwrap().header_connected(&stored.header, stored.height);
                                 // POW is ok, stored top chaindb
                                 some_new = true;
 
@@ -197,7 +200,7 @@ impl HeaderDownload {
                 }
 
                 for header in &disconnected_headers {
-                    self.lightning.lock().unwrap().block_disconnected(header);
+                    self.downstream.lock().unwrap().block_disconnected(header);
                 }
             }
 

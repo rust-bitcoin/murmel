@@ -53,15 +53,18 @@ use std::{
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH}
 };
-
+use std::marker::PhantomData;
 
 const IO_BUFFER_SIZE:usize = 1024*1024;
 const EVENT_BUFFER_SIZE:usize = 1024;
 const CONNECT_TIMEOUT_SECONDS: u64 = 30;
 const BAN :u32 = 100;
 
+/// do we serve blocks?
 pub const SERVICE_BLOCKS:u64 = 1;
+/// requires segwit support
 pub const SERVICE_WITNESS:u64 =  1 << 3;
+/// require filters
 pub const SERVICE_FILTERS:u64 = 1 << 6;
 /// A peer's Id
 #[derive(Hash, Eq, PartialEq, Copy, Clone)]
@@ -76,16 +79,17 @@ impl fmt::Display for PeerId {
         Ok(())
     }
 }
-type PeerMap = HashMap<PeerId, Mutex<Peer>>;
+type PeerMap<Message> = HashMap<PeerId, Mutex<Peer<Message>>>;
 
+/// A message from network to downstream
 #[derive(Clone)]
-pub enum PeerMessage {
-    Message(PeerId, NetworkMessage),
+pub enum PeerMessage<Message: Send + Sync + Clone> {
+    Message(PeerId, Message),
     Connected(PeerId),
     Disconnected(PeerId)
 }
 
-impl PeerMessage {
+impl<Message: Send + Sync + Clone> PeerMessage<Message> {
     pub fn peer_id (&self) -> PeerId {
         match self {
             PeerMessage::Message(pid, _) |
@@ -95,37 +99,37 @@ impl PeerMessage {
     }
 }
 
-pub enum P2PControl {
-    Send(PeerId, NetworkMessage),
-    Broadcast(NetworkMessage),
+pub enum P2PControl<Message: Clone> {
+    Send(PeerId, Message),
+    Broadcast(Message),
     Ban(PeerId, u32),
     Height(u32),
     Bind(SocketAddr)
 }
 
-type P2PControlReceiver = mpsc::Receiver<P2PControl>;
+type P2PControlReceiver<Message> = mpsc::Receiver<P2PControl<Message>>;
 
 #[derive(Clone)]
-pub struct P2PControlSender {
-    sender: Arc<Mutex<mpsc::Sender<P2PControl>>>,
-    peers: Arc<RwLock<PeerMap>>,
+pub struct P2PControlSender<Message: Clone> {
+    sender: Arc<Mutex<mpsc::Sender<P2PControl<Message>>>>,
+    peers: Arc<RwLock<PeerMap<Message>>>,
     pub back_pressure: usize
 }
 
-impl P2PControlSender {
-    fn new (sender: mpsc::Sender<P2PControl>, peers: Arc<RwLock<PeerMap>>, back_pressure: usize) -> P2PControlSender {
+impl<Message: Send + Sync + Clone> P2PControlSender<Message> {
+    fn new (sender: mpsc::Sender<P2PControl<Message>>, peers: Arc<RwLock<PeerMap<Message>>>, back_pressure: usize) -> P2PControlSender<Message> {
         P2PControlSender { sender: Arc::new(Mutex::new(sender)), peers, back_pressure }
     }
 
-    pub fn send (&self, control: P2PControl) {
+    pub fn send (&self, control: P2PControl<Message>) {
         self.sender.lock().unwrap().send(control).expect("P2P control send failed");
     }
 
-    pub fn send_network (&self, peer: PeerId, msg: NetworkMessage) {
+    pub fn send_network (&self, peer: PeerId, msg: Message) {
         self.send(P2PControl::Send(peer, msg))
     }
 
-    pub fn broadcast (&self, msg: NetworkMessage) {
+    pub fn broadcast (&self, msg: Message) {
         self.send(P2PControl::Broadcast(msg))
     }
 
@@ -133,7 +137,7 @@ impl P2PControlSender {
         self.send(P2PControl::Ban(peer, increment))
     }
 
-    pub fn peer_version (&self, peer: PeerId) -> Option<VersionMessage> {
+    pub fn peer_version (&self, peer: PeerId) -> Option<VersionCarrier> {
         if let Some(peer) = self.peers.read().unwrap().get(&peer) {
             let locked_peer = peer.lock().unwrap();
             return locked_peer.version.clone();
@@ -153,50 +157,243 @@ pub enum PeerSource {
 }
 
 /// a map of peer id to peers
-pub type PeerMessageReceiver = mpsc::Receiver<PeerMessage>;
+pub type PeerMessageReceiver<Message: Send + Sync> = mpsc::Receiver<PeerMessage<Message>>;
 
 #[derive(Clone)]
-pub struct PeerMessageSender {
-    sender: Option<Arc<Mutex<mpsc::SyncSender<PeerMessage>>>>
+pub struct PeerMessageSender<Message: Send + Sync + Clone> {
+    sender: Option<Arc<Mutex<mpsc::SyncSender<PeerMessage<Message>>>>>
 }
 
-impl PeerMessageSender {
-    pub fn new (sender: mpsc::SyncSender<PeerMessage>) -> PeerMessageSender {
+impl<Message: Send + Sync + Clone> PeerMessageSender<Message> {
+    pub fn new (sender: mpsc::SyncSender<PeerMessage<Message>>) -> PeerMessageSender<Message> {
         PeerMessageSender { sender: Some(Arc::new(Mutex::new(sender))) }
     }
 
-    pub fn dummy () -> PeerMessageSender {
+    pub fn dummy () -> PeerMessageSender<Message> {
         PeerMessageSender{ sender: None }
     }
 
-    pub fn send (&self, msg: PeerMessage) {
+    pub fn send (&self, msg: PeerMessage<Message>) {
         if let Some(ref sender) = self.sender {
             sender.lock().unwrap().send(msg).expect("P2P message send failed");
         }
     }
 
-    pub fn send_network(&self, peer: PeerId, msg: NetworkMessage) {
+    pub fn send_network(&self, peer: PeerId, msg: Message) {
         if let Some(ref sender) = self.sender {
             sender.lock().unwrap().send(PeerMessage::Message(peer, msg)).expect("P2P message send failed");
         }
     }
 }
 
-/// The P2P network layer
-pub struct P2P {
+pub trait Command {
+    fn command(&self)->String;
+}
+
+impl Command for RawNetworkMessage {
+    fn command(&self) -> String {
+        self.command()
+    }
+}
+
+pub trait Version {
+    fn is_verack(&self) ->bool;
+    fn is_version(&self) -> Option<VersionCarrier>;
+}
+
+#[derive(Clone)]
+pub struct VersionCarrier {
+    /// The P2P network protocol version
+    pub version: u32,
+    /// A bitmask describing the services supported by this node
+    pub services: u64,
+    /// The time at which the `version` message was sent
+    pub timestamp: i64,
+    /// The network address of the peer receiving the message
+    pub receiver: Address,
+    /// The network address of the peer sending the message
+    pub sender: Address,
+    /// A random nonce used to detect loops in the network
+    pub nonce: u64,
+    /// A string describing the peer's software
+    pub user_agent: String,
+    /// The height of the maximum-work blockchain that the peer is aware of
+    pub start_height: i32,
+    /// Whether the receiving peer should relay messages to the sender; used
+    /// if the sender is bandwidth-limited and would like to support bloom
+    /// filtering. Defaults to true.
+    pub relay: bool
+}
+
+impl Version for NetworkMessage {
+    fn is_version(&self) -> Option<VersionCarrier> {
+        match self {
+            NetworkMessage::Version(v) => {
+                Some(VersionCarrier {
+                    version: v.version,
+                    services: v.services,
+                    timestamp: v.timestamp,
+                    receiver: v.receiver.clone(),
+                    sender: v.sender.clone(),
+                    nonce: v.nonce,
+                    user_agent: v.user_agent.clone(),
+                    start_height: v.start_height,
+                    relay: v.relay
+                })
+            },
+            _ => None
+        }
+    }
+
+    fn is_verack(&self) -> bool {
+        match self {
+            NetworkMessage::Verack => true,
+            _ => false
+        }
+    }
+
+}
+
+pub trait P2PConfig<Message: Version + Send + Sync + 'static, Envelope: Command + Send + Sync + 'static> {
+    fn version (&self, remote: &SocketAddr, max_protocol_version: u32) -> Message;
+    fn nonce(&self) -> u64;
+    fn magic(&self) -> u32;
+    fn user_agent(&self) -> &str;
+    fn get_height(&self) -> u32;
+    fn set_height(&self, u32);
+    fn max_protocol_version(&self) -> u32;
+    fn verack(&self) -> Message;
+    fn wrap(&self, m: Message) -> Envelope;
+    fn unwrap(&self, e: Envelope) -> Message;
+    fn encode(&self, item: &Envelope, dst: &mut Buffer) -> Result<(), io::Error>;
+    fn decode(&self, src: &mut Buffer) -> Result<Option<Envelope>, io::Error>;
+}
+
+pub struct BitcoinP2PConfig {
     pub network: Network,
-    // sender to the dispatcher of incoming messages
-    dispatcher: PeerMessageSender,
-    // network specific message prefix
-    magic: u32,
     // This node's identifier on the network (random)
-    nonce: u64,
+    pub nonce: u64,
     // height of the blockchain tree trunk
-    height: AtomicUsize,
+    pub height: AtomicUsize,
     // This node's human readable type identification
-    user_agent: String,
+    pub user_agent: String,
+    // this node's maximum protocol version
+    pub max_protocol_version: u32,
+    // serving others
+    pub server: bool,
+}
+
+impl P2PConfig<NetworkMessage, RawNetworkMessage> for BitcoinP2PConfig {
+    // compile this node's version message for outgoing connections
+    fn version (&self, remote: &SocketAddr, max_protocol_version: u32) -> NetworkMessage {
+        // now in unix time
+        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
+
+        let services = if !self.server {
+            0
+        } else {
+            SERVICE_BLOCKS + SERVICE_WITNESS +
+                // announce that this node is capable of serving BIP157 messages
+                SERVICE_FILTERS
+        };
+
+        // build message
+        NetworkMessage::Version(VersionMessage {
+            version: min(max_protocol_version, self.max_protocol_version),
+            services,
+            timestamp,
+            receiver: Address::new(remote, 1),
+            // sender is only dummy
+            sender: Address::new(remote, 1),
+            nonce: self.nonce,
+            user_agent: self.user_agent.clone(),
+            start_height: self.height.load(Ordering::Relaxed) as i32,
+            relay: false, // there is no mempool here therefore no use for inv's of transactions
+        })
+    }
+
+    fn nonce(&self) -> u64 {
+        self.nonce
+    }
+
+    fn magic(&self) -> u32 {
+        self.network.magic()
+    }
+
+    fn user_agent(&self) -> &str {
+        self.user_agent.as_str()
+    }
+
+    fn get_height(&self) -> u32 {
+        self.height.load(Ordering::Relaxed) as u32
+    }
+
+    fn set_height(&self, height: u32) {
+        self.height.store (height as usize, Ordering::Relaxed)
+    }
+
+    fn max_protocol_version(&self) -> u32 {
+        self.max_protocol_version
+    }
+
+    fn verack(&self) -> NetworkMessage {
+        NetworkMessage::Verack
+    }
+
+    fn wrap(&self, m: NetworkMessage) -> RawNetworkMessage {
+        RawNetworkMessage{magic: self.network.magic(), payload: m}
+    }
+
+    fn unwrap(&self, e: RawNetworkMessage) -> NetworkMessage {
+        e.payload
+    }
+
+    // encode a message in Bitcoin's wire format extending the given buffer
+    fn encode(&self, item: &RawNetworkMessage, mut dst: &mut Buffer) -> Result<(), io::Error> {
+        match item.consensus_encode(&mut dst) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(io::Error::new(io::ErrorKind::WriteZero, e))
+        }
+    }
+
+    // decode a message from the buffer if possible
+    fn decode(&self, src: &mut Buffer) -> Result<Option<RawNetworkMessage>, io::Error> {
+        // attempt to decode
+        let decode: Result<RawNetworkMessage, encode::Error> =
+            Decodable::consensus_decode(src);
+
+        match decode {
+            Ok(m) => {
+                // success: free the read data in buffer and return the message
+                src.commit();
+                Ok(Some(m))
+            }
+            Err(encode::Error::Io(e)) => {
+                if e.kind() == io::ErrorKind::UnexpectedEof {
+                    // need more data, rollback and retry after additional read
+                    src.rollback();
+                    return Ok(None)
+                } else {
+                    return Err(e);
+                }
+            },
+            Err(e) => {
+                Err(io::Error::new(io::ErrorKind::InvalidData, e))
+            }
+        }
+    }
+}
+
+/// The P2P network layer
+pub struct P2P<Message: Version + Send + Sync + Clone + 'static,
+    Envelope: Command + Send + Sync + 'static,
+    Config: P2PConfig<Message, Envelope> + Send + Sync + 'static> {
+    // sender to the dispatcher of incoming messages
+    dispatcher: PeerMessageSender<Message>,
+    // network specific conf
+    pub config: Config,
     // The collection of connected peers
-    peers: Arc<RwLock<PeerMap>>,
+    peers: Arc<RwLock<PeerMap<Message>>>,
     // The poll object of the async IO layer (mio)
     // access to this is shared by P2P and Peer
     poll: Arc<Poll>,
@@ -207,36 +404,27 @@ pub struct P2P {
     waker: Arc<Mutex<HashMap<PeerId, Waker>>>,
     // server
     listener: Arc<Mutex<HashMap<Token, Arc<TcpListener>>>>,
-    // this node's maximum protocol version
-    max_protocol_version: u32,
-    // is this a filter (BIP157) server?
-    filter_server: bool
+    e: PhantomData<Envelope>
 }
 
-impl P2P {
+impl<Message: Version + Send + Sync + Clone,
+    Envelope: Command + Send + Sync,
+    Config: P2PConfig<Message, Envelope> + Send + Sync> P2P<Message, Envelope, Config> {
     /// create a new P2P network controller
-    pub fn new(user_agent: String, network: Network, height: u32, max_protocol_version: u32, filter_server: bool, dispatcher: PeerMessageSender, back_pressure: usize) -> (Arc<P2P>, P2PControlSender) {
+    pub fn new(config: Config, dispatcher: PeerMessageSender<Message>, back_pressure: usize) -> (Arc<P2P<Message, Envelope, Config>>, P2PControlSender<Message>) {
         let (control_sender, control_receiver) = mpsc::channel();
-
-        let mut rng =  thread_rng();
-        let magic = network.magic();
 
         let peers = Arc::new(RwLock::new(PeerMap::new()));
 
         let p2p = Arc::new(P2P {
-            network: network,
             dispatcher,
-            magic,
-            nonce: rng.next_u64(),
-            height: AtomicUsize::new(height as usize),
-            user_agent,
+            config,
             peers: peers.clone(),
             poll: Arc::new(Poll::new().unwrap()),
             next_peer_id: AtomicUsize::new(0),
             waker: Arc::new(Mutex::new(HashMap::new())),
             listener: Arc::new(Mutex::new(HashMap::new())),
-            max_protocol_version: max_protocol_version,
-            filter_server
+            e: PhantomData{}
         });
 
         let p2p2 = p2p.clone();
@@ -246,14 +434,14 @@ impl P2P {
         (p2p, P2PControlSender::new(control_sender, peers, back_pressure))
     }
 
-    fn control_loop (&self, receiver: P2PControlReceiver) {
+    fn control_loop (&self, receiver: P2PControlReceiver<Message>) {
         while let Ok(control) = receiver.recv() {
             match control {
                 P2PControl::Ban(peer_id, score) => {
                     self.ban(peer_id, score);
                 },
                 P2PControl::Height(height) => {
-                    self.height.store (height as usize, Ordering::Relaxed);
+                    self.config.set_height(height);
                 }
                 P2PControl::Bind(addr) => {
                     match self.add_listener(&addr) {
@@ -392,42 +580,10 @@ impl P2P {
         }
         if outgoing {
             // send this node's version message to peer
-            peers.get(&pid).unwrap().lock().unwrap().send(self.version(&addr, self.max_protocol_version))?;
+            peers.get(&pid).unwrap().lock().unwrap().send(self.config.version(&addr, self.config.max_protocol_version()))?;
         }
 
         Ok(addr)
-    }
-
-    // compile this node's version message for outgoing connections
-    fn version (&self, remote: &SocketAddr, max_protocol_version: u32) -> NetworkMessage {
-        // now in unix time
-        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
-
-        let services = if self.listener.lock().unwrap().is_empty() {
-            0
-        } else {
-            SERVICE_BLOCKS + SERVICE_WITNESS + if self.filter_server {
-                // announce that this node is capable of serving BIP157 messages
-                SERVICE_FILTERS
-            }
-            else {
-                0
-            }
-        };
-
-        // build message
-        NetworkMessage::Version(VersionMessage {
-            version: min(max_protocol_version, self.max_protocol_version),
-            services,
-            timestamp,
-            receiver: Address::new(remote, 1),
-            // sender is only dummy
-            sender: Address::new(remote, 1),
-            nonce: self.nonce,
-            user_agent: self.user_agent.clone(),
-            start_height: self.height.load(Ordering::Relaxed) as i32,
-            relay: false, // there is no mempool here therefore no use for inv's of transactions
-        })
     }
 
     fn disconnect (&self, pid: PeerId) {
@@ -515,10 +671,10 @@ impl P2P {
                             // get an outgoing message from the channel (if any)
                             if let Some(msg) = locked_peer.try_receive() {
                                 // serialize the message
-                                let raw = RawNetworkMessage { magic: self.magic, payload: msg };
+                                let raw = self.config.wrap(msg);
                                 trace!("next message {} to peer={}", raw.command(), pid);
                                 // refill write buffer
-                                encode(&raw, &mut locked_peer.write_buffer)?;
+                                self.config.encode(&raw, &mut locked_peer.write_buffer)?;
                             } else {
                                 // no unfinished write and no outgoing message
                                 // keep registered only for read events
@@ -551,7 +707,7 @@ impl P2P {
                         // accumulate in a buffer
                         locked_peer.read_buffer.write_all(&iobuf[0..len])?;
                         // extract messages from the buffer
-                        while let Some(msg) = decode(&mut locked_peer.read_buffer)? {
+                        while let Some(msg) = self.config.decode(&mut locked_peer.read_buffer)? {
                             trace!("received {} peer={}", msg.command(), pid);
                             if locked_peer.connected {
                                 // regular processing after handshake
@@ -561,59 +717,57 @@ impl P2P {
                                 // have to get both version and verack to complete handhsake
                                 if !(locked_peer.version.is_some() && locked_peer.got_verack) {
                                     // before handshake complete
-                                    match msg.payload {
-                                        NetworkMessage::Version(ref version) => {
-                                            if locked_peer.version.is_some() {
-                                                // repeated version
-                                                disconnect = true;
-                                                break;
-                                            }
-                                            if version.nonce == self.nonce {
-                                                // connect to myself
-                                                disconnect = true;
-                                                break;
-                                            } else {
-                                                if version.version < 70001 || (needed_services & version.services) != needed_services {
-                                                    debug!("rejecting peer of version {} and services {:b} peer={}", version.version, version.services, pid);
-                                                    disconnect = true;
-                                                    break;
-                                                } else {
-                                                    if !locked_peer.outgoing {
-                                                        // send own version message to incoming peer
-                                                        let addr = locked_peer.stream.peer_addr()?;
-                                                        trace!("send version to incoming connection {}", addr);
-                                                        // do not show higher version than the peer speaks
-                                                        let version = self.version (&addr, version.version);
-                                                        locked_peer.send(version)?;
-                                                    }
-                                                    debug!("accepting peer of version {} and services {:b} peer={}", version.version, version.services, pid);
-                                                    // acknowledge version message received
-                                                    locked_peer.send(NetworkMessage::Verack)?;
-                                                    // all right, remember this peer
-                                                    info!("client {} height: {} peer={}", version.user_agent, version.start_height, pid);
-                                                    let mut vm = version.clone();
-                                                    // reduce protocol version to our capabilities
-                                                    vm.version = min (vm.version, self.max_protocol_version);
-                                                    locked_peer.version = Some(vm);
-                                                }
-                                            }
-                                        }
-                                        NetworkMessage::Verack => {
-                                            if locked_peer.got_verack {
-                                                // repeated verack
-                                                disconnect = true;
-                                                break;
-                                            }
-                                            trace!("got verack peer={}", pid);
-                                            locked_peer.got_verack = true;
-                                        }
-                                        _ => {
-                                            trace!("misbehaving peer={}", pid);
-                                            // some other message before handshake
+                                    let msg = self.config.unwrap(msg);
+                                    if let Some(version) = msg.is_version() {
+                                        if locked_peer.version.is_some() {
+                                            // repeated version
                                             disconnect = true;
                                             break;
                                         }
-                                    };
+                                        if version.nonce == self.config.nonce() {
+                                            // connect to myself
+                                            disconnect = true;
+                                            break;
+                                        } else {
+                                            if version.version < 70001 || (needed_services & version.services) != needed_services {
+                                                debug!("rejecting peer of version {} and services {:b} peer={}", version.version, version.services, pid);
+                                                disconnect = true;
+                                                break;
+                                            } else {
+                                                if !locked_peer.outgoing {
+                                                    // send own version message to incoming peer
+                                                    let addr = locked_peer.stream.peer_addr()?;
+                                                    trace!("send version to incoming connection {}", addr);
+                                                    // do not show higher version than the peer speaks
+                                                    let version = self.config.version (&addr, version.version);
+                                                    locked_peer.send(version)?;
+                                                }
+                                                debug!("accepting peer of version {} and services {:b} peer={}", version.version, version.services, pid);
+                                                // acknowledge version message received
+                                                locked_peer.send(self.config.verack())?;
+                                                // all right, remember this peer
+                                                info!("client {} height: {} peer={}", version.user_agent, version.start_height, pid);
+                                                let mut vm = version.clone();
+                                                // reduce protocol version to our capabilities
+                                                vm.version = min (vm.version, self.config.max_protocol_version());
+                                                locked_peer.version = Some(vm);
+                                            }
+                                        }
+                                    }
+                                    else if msg.is_verack() {
+                                        if locked_peer.got_verack {
+                                            // repeated verack
+                                            disconnect = true;
+                                            break;
+                                        }
+                                        trace!("got verack peer={}", pid);
+                                        locked_peer.got_verack = true;
+                                    } else {
+                                        trace!("misbehaving peer={}", pid);
+                                        // some other message before handshake
+                                        disconnect = true;
+                                        break;
+                                    }
                                     if locked_peer.version.is_some() && locked_peer.got_verack {
                                         locked_peer.connected = true;
                                         handshake = true;
@@ -643,7 +797,7 @@ impl P2P {
                     // as process could call back to P2P
                     for msg in incoming {
                         trace!("processing {} for peer={}", msg.command(), pid);
-                        self.dispatcher.send(PeerMessage::Message(pid, msg.payload));
+                        self.dispatcher.send(PeerMessage::Message(pid, self.config.unwrap(msg)));
                     }
                 }
             }
@@ -698,7 +852,7 @@ impl P2P {
 }
 
 /// a peer
-struct Peer {
+struct Peer<Message> {
     /// the peer's id for log messages
     pub pid: PeerId,
     // the event poller, shared with P2P, needed here to register for events
@@ -712,11 +866,11 @@ struct Peer {
     // did the remote peer already sent a verack?
     got_verack: bool,
     /// the version message the peer sent to us at connect
-    pub version: Option<VersionMessage>,
+    pub version: Option<VersionCarrier>,
     // channel into the event processing loop for outgoing messages
-    sender: mpsc::Sender<NetworkMessage>,
+    sender: mpsc::Sender<Message>,
     // channel into the event processing loop for outgoing messages
-    receiver: mpsc::Receiver<NetworkMessage>,
+    receiver: mpsc::Receiver<Message>,
     // is registered for write?
     writeable: AtomicBool,
     // connected and handshake complete?
@@ -727,9 +881,9 @@ struct Peer {
     outgoing: bool
 }
 
-impl Peer {
+impl<Message> Peer<Message> {
     /// create a new peer
-    pub fn new (pid: PeerId, stream: TcpStream, poll: Arc<Poll>, outgoing: bool) -> Result<Peer, MurmelError> {
+    pub fn new (pid: PeerId, stream: TcpStream, poll: Arc<Poll>, outgoing: bool) -> Result<Peer<Message>, MurmelError> {
         let (sender, receiver) = mpsc::channel();
         let peer = Peer{pid, poll: poll.clone(), stream, read_buffer: Buffer::new(), write_buffer: Buffer::new(),
             got_verack: false, version: None, sender, receiver, writeable: AtomicBool::new(false),
@@ -755,7 +909,7 @@ impl Peer {
     }
 
     /// send a message to P2P network
-    pub fn send (&self, msg: NetworkMessage) -> Result<(), MurmelError> {
+    pub fn send (&self, msg: Message) -> Result<(), MurmelError> {
         // send to outgoing message channel
         self.sender.send(msg).map_err(| _ | MurmelError::Downstream("can not send to peer queue".to_owned()))?;
         // register for writable peer events since we have outgoing message
@@ -782,7 +936,7 @@ impl Peer {
 
 
     // try to receive a message from the outgoing message channel
-    fn try_receive (&self) -> Option<NetworkMessage> {
+    fn try_receive (&self) -> Option<Message> {
         if let Ok (msg) = self.receiver.try_recv() {
             Some (msg)
         } else {
@@ -795,7 +949,7 @@ impl Peer {
 // * rolled back and re-read from last commit
 // * read ahead without moving read position
 // * advance position
-struct Buffer {
+pub struct Buffer {
     // a deque of chunks
     chunks: VecDeque<Vec<u8>>,
     // pos.0 - current chunk
@@ -968,37 +1122,4 @@ impl Read for Buffer {
     }
 }
 
-// encode a message in Bitcoin's wire format extending the given buffer
-fn encode(item: &RawNetworkMessage, mut dst: &mut Buffer) -> Result<(), io::Error> {
-    match item.consensus_encode(&mut dst) {
-        Ok(_) => Ok(()),
-        Err(e) => Err(io::Error::new(io::ErrorKind::WriteZero, e))
-    }
-}
 
-// decode a message from the buffer if possible
-fn decode(src: &mut Buffer) -> Result<Option<RawNetworkMessage>, io::Error> {
-    // attempt to decode
-    let decode: Result<RawNetworkMessage, encode::Error> =
-        Decodable::consensus_decode(src);
-
-    match decode {
-        Ok(m) => {
-            // success: free the read data in buffer and return the message
-            src.commit();
-            Ok(Some(m))
-        }
-        Err(encode::Error::Io(e)) => {
-            if e.kind() == io::ErrorKind::UnexpectedEof {
-                // need more data, rollback and retry after additional read
-                src.rollback();
-                return Ok(None)
-            } else {
-                return Err(e);
-            }
-        },
-        Err(e) => {
-            Err(io::Error::new(io::ErrorKind::InvalidData, e))
-        }
-    }
-}

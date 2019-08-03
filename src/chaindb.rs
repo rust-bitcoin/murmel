@@ -62,30 +62,28 @@ pub struct ChainDB {
     headercache: HeaderCache,
     filtercache: FilterCache,
     scriptcache: Mutex<ScriptCache>,
-    network: Network,
-    birth: u64,
-    server: bool
+    network: Network
 }
 
 impl ChainDB {
     /// Create an in-memory database instance
-    pub fn mem(network: Network, server: bool, script_cache_size: usize, birth: u64) -> Result<ChainDB, MurmelError> {
+    pub fn mem(network: Network, script_cache_size: usize) -> Result<ChainDB, MurmelError> {
         info!("working with in memory chain db");
         let db = BitcoinAdaptor::new(transient(2)?);
         let headercache = HeaderCache::new(network);
         let filtercache = FilterCache::new();
         let scriptcache = Mutex::new(ScriptCache::new(script_cache_size));
-        Ok(ChainDB { db, server, network, headercache, filtercache, scriptcache, birth })
+        Ok(ChainDB { db, network, headercache, filtercache, scriptcache })
     }
 
     /// Create or open a persistent database instance identified by the path
-    pub fn new(path: &Path, network: Network, server: bool, script_cache_size: usize, birth: u64) -> Result<ChainDB, MurmelError> {
+    pub fn new(path: &Path, network: Network, script_cache_size: usize) -> Result<ChainDB, MurmelError> {
         let basename = path.to_str().unwrap().to_string();
         let db = BitcoinAdaptor::new(persistent((basename.clone()).as_str(), 100, 2)?);
         let headercache = HeaderCache::new(network);
         let filtercache = FilterCache::new();
         let scriptcache = Mutex::new(ScriptCache::new(script_cache_size));
-        Ok(ChainDB { db, server, network, headercache, filtercache, scriptcache, birth})
+        Ok(ChainDB { db, network, headercache, filtercache, scriptcache})
     }
 
     /// Initialize caches
@@ -103,16 +101,6 @@ impl ChainDB {
     pub fn batch(&mut self) -> Result<(), MurmelError> {
         self.db.batch()?;
         Ok(())
-    }
-
-    /// Block height where history for this node
-    pub fn birth_height(&self) -> Option<u32> {
-        for header in self.iter_trunk(0) {
-            if header.stored.header.time as u64 >= self.birth {
-                return Some (header.stored.height)
-            }
-        }
-        None
     }
 
     fn init_headers(&mut self, server: bool) -> Result<(), MurmelError> {
@@ -155,7 +143,7 @@ impl ChainDB {
                 if let Some(filter) = self.fetch_block_filter(&block_id, SCRIPT_FILTER)? {
                     self.filtercache.add_filter_header(filter);
                 }
-                if self.server {
+                if server {
                     if let Some(filter) = self.fetch_block_filter(&block_id, TXID_FILTER)? {
                         self.filtercache.add_filter(filter);
                     }

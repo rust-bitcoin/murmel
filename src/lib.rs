@@ -23,7 +23,6 @@
 #![deny(non_camel_case_types)]
 #![deny(non_snake_case)]
 #![deny(unused_mut)]
-#![deny(missing_docs)]
 #![deny(unused_must_use)]
 #![forbid(unsafe_code)]
 
@@ -41,21 +40,22 @@ extern crate rand;
 extern crate siphasher;
 
 #[cfg(feature="lightning")] extern crate lightning;
-mod connector;
+#[cfg(feature="lightning")] mod lightning;
 mod bip158;
 mod filtered;
 mod ping;
-mod timeout;
 mod blockserver;
 mod scriptcache;
 mod filterserver;
-mod headerdownload;
 mod headercache;
 mod filtercache;
 mod filtercalculator;
-mod dispatcher;
-mod p2p;
-mod dns;
+pub mod dns;
+pub mod timeout;
+pub mod headerdownload;
+pub mod downstream;
+pub mod dispatcher;
+pub mod p2p;
 pub mod error;
 pub mod chaindb;
 pub mod constructor;
