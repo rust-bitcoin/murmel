@@ -218,7 +218,7 @@ pub struct VersionCarrier {
     /// A string describing the peer's software
     pub user_agent: String,
     /// The height of the maximum-work blockchain that the peer is aware of
-    pub start_height: i32,
+    pub start_height: u32,
     /// Whether the receiving peer should relay messages to the sender; used
     /// if the sender is bandwidth-limited and would like to support bloom
     /// filtering. Defaults to true.
@@ -237,7 +237,7 @@ impl Version for NetworkMessage {
                     sender: v.sender.clone(),
                     nonce: v.nonce,
                     user_agent: v.user_agent.clone(),
-                    start_height: v.start_height,
+                    start_height: v.start_height as u32,
                     relay: v.relay
                 })
             },
