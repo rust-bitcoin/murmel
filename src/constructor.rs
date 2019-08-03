@@ -93,7 +93,7 @@ impl Constructor {
         let p2pconfig = BitcoinP2PConfig {
             network,
             nonce: thread_rng().next_u64(),
-            max_protocol_version: 7001,
+            max_protocol_version: MAX_PROTOCOL_VERSION,
             user_agent: "murmel: 0.1.0".to_owned(),
             height: AtomicUsize::new(0),
             server: !listen.is_empty()
