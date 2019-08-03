@@ -43,7 +43,7 @@ impl BlockServer {
 
         let mut block_server = BlockServer { chaindb, p2p };
 
-        thread::spawn(move || { block_server.run(receiver) });
+        thread::Builder::new().name("block server".to_string()).spawn(move || { block_server.run(receiver) }).unwrap();
 
         PeerMessageSender::new(sender)
     }

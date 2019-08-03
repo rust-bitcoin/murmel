@@ -46,7 +46,7 @@ impl FilterServer {
 
         let mut filterserver = FilterServer { chaindb, p2p };
 
-        thread::spawn(move || { filterserver.run(receiver) });
+        thread::Builder::new().name("filter server".to_string()).spawn(move || { filterserver.run(receiver) }).unwrap();
 
         PeerMessageSender::new(sender)
     }

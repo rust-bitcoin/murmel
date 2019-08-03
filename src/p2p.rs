@@ -429,7 +429,7 @@ impl<Message: Version + Send + Sync + Clone,
 
         let p2p2 = p2p.clone();
 
-        thread::spawn(move || p2p2.control_loop(control_receiver));
+        thread::Builder::new().name("P2P control loop".to_string()).spawn(move || p2p2.control_loop(control_receiver)).unwrap();
 
         (p2p, P2PControlSender::new(control_sender, peers, back_pressure))
     }

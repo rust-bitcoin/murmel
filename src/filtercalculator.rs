@@ -63,7 +63,7 @@ impl FilterCalculator {
 
         let mut filtercalculator = FilterCalculator { network, chaindb, p2p, peer: None, peers: HashSet::new(), want: HashSet::new(), missing: Vec::new(), timeout };
 
-        thread::spawn(move || { filtercalculator.run(receiver) });
+        thread::Builder::new().name("filter calculator".to_string()).spawn(move || { filtercalculator.run(receiver) }).unwrap();
 
         PeerMessageSender::new(sender)
     }

@@ -62,7 +62,7 @@ impl Filtered {
 
         let mut filterdownload = Filtered { chaindb, p2p, timeout, downstream, birth_height };
 
-        thread::spawn(move || { filterdownload.run(receiver) });
+        thread::Builder::new().name("filter download".to_string()).spawn(move || { filterdownload.run(receiver) }).unwrap();
 
         PeerMessageSender::new(sender)
     }

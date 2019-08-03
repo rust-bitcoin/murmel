@@ -33,7 +33,7 @@ impl<Message: Send + Sync + Clone + 'static> Dispatcher<Message> {
     pub fn new(incoming: PeerMessageReceiver<Message>) -> Dispatcher<Message> {
         let listener = Arc::new(Mutex::new(Vec::new()));
         let l2 = listener.clone();
-        thread::spawn( move || { Self::incoming_messages_loop (incoming, l2) });
+        thread::Builder::new().name("dispatcher".to_string()).spawn( move || { Self::incoming_messages_loop (incoming, l2) }).unwrap();
         Dispatcher{listener}
     }
 

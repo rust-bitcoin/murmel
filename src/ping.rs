@@ -45,7 +45,7 @@ impl Ping {
         let (sender, receiver) = mpsc::sync_channel(p2p.back_pressure);
         let mut ping = Ping { p2p, timeout, asked: HashMap::new() };
 
-        thread::spawn(move || { ping.run(receiver) });
+        thread::Builder::new().name("ping".to_string()).spawn(move || { ping.run(receiver) }).unwrap();
 
         PeerMessageSender::new(sender)
     }

@@ -53,7 +53,7 @@ impl HeaderDownload {
 
         let mut headerdownload = HeaderDownload { chaindb, p2p, timeout, downstream: downstream };
 
-        thread::spawn(move || { headerdownload.run(receiver) });
+        thread::Builder::new().name("header download".to_string()).spawn(move || { headerdownload.run(receiver) }).unwrap();
 
         PeerMessageSender::new(sender)
     }
