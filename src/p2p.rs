@@ -965,13 +965,13 @@ impl Buffer {
         Buffer{ chunks: VecDeque::new(), pos: (0, 0), checkpoint: (0, 0) }
     }
 
-    // rollback to last commit
-    fn rollback (&mut self) {
+    /// rollback to last commit
+    pub fn rollback (&mut self) {
         self.pos = self.checkpoint;
     }
 
-    // checkpoint and drop already read content
-    fn commit (&mut self) {
+    /// checkpoint and drop already read content
+    pub fn commit (&mut self) {
         // drop read chunks
         self.chunks.drain(0 .. self.pos.0);
         // current chunk is now the first
