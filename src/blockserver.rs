@@ -33,12 +33,12 @@ use std::{
 };
 
 pub struct BlockServer {
-    p2p: P2PControlSender,
+    p2p: P2PControlSender<NetworkMessage>,
     chaindb: SharedChainDB,
 }
 
 impl BlockServer {
-    pub fn new(chaindb: SharedChainDB, p2p: P2PControlSender) -> PeerMessageSender {
+    pub fn new(chaindb: SharedChainDB, p2p: P2PControlSender<NetworkMessage>) -> PeerMessageSender<NetworkMessage> {
         let (sender, receiver) = mpsc::sync_channel(p2p.back_pressure);
 
         let mut block_server = BlockServer { chaindb, p2p };
@@ -48,7 +48,7 @@ impl BlockServer {
         PeerMessageSender::new(sender)
     }
 
-    fn run(&mut self, receiver: PeerMessageReceiver) {
+    fn run(&mut self, receiver: PeerMessageReceiver<NetworkMessage>) {
         while let Ok(msg) = receiver.recv() {
             if let Err(e) = match msg {
                 PeerMessage::Message(pid, msg) => {

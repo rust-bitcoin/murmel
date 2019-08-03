@@ -34,14 +34,14 @@ use timeout::{ExpectedReply, SharedTimeout};
 const SECS: u64 = 60;
 
 pub struct Ping {
-    p2p: P2PControlSender,
-    timeout: SharedTimeout,
+    p2p: P2PControlSender<NetworkMessage>,
+    timeout: SharedTimeout<NetworkMessage>,
     asked: HashMap<PeerId, u64>
 }
 
 
 impl Ping {
-    pub fn new(p2p: P2PControlSender, timeout: SharedTimeout) -> PeerMessageSender  {
+    pub fn new(p2p: P2PControlSender<NetworkMessage>, timeout: SharedTimeout<NetworkMessage>) -> PeerMessageSender<NetworkMessage>  {
         let (sender, receiver) = mpsc::sync_channel(p2p.back_pressure);
         let mut ping = Ping { p2p, timeout, asked: HashMap::new() };
 
@@ -50,7 +50,7 @@ impl Ping {
         PeerMessageSender::new(sender)
     }
 
-    fn run(&mut self, receiver: PeerMessageReceiver) {
+    fn run(&mut self, receiver: PeerMessageReceiver<NetworkMessage>) {
         loop {
             while let Ok(msg) = receiver.recv_timeout(Duration::from_millis(SECS*1000)) {
                 match msg {

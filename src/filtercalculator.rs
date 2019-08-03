@@ -49,16 +49,16 @@ pub const TXID_FILTER:u8 = 'c' as u8;
 pub struct FilterCalculator {
     network: Network,
     chaindb: SharedChainDB,
-    p2p: P2PControlSender,
+    p2p: P2PControlSender<NetworkMessage>,
     peer: Option<PeerId>,
     peers: HashSet<PeerId>,
     want: HashSet<Sha256dHash>,
     missing: Vec<Sha256dHash>,
-    timeout: SharedTimeout
+    timeout: SharedTimeout<NetworkMessage>
 }
 
 impl FilterCalculator {
-    pub fn new(network: Network, chaindb: SharedChainDB, p2p: P2PControlSender, timeout: SharedTimeout) -> PeerMessageSender {
+    pub fn new(network: Network, chaindb: SharedChainDB, p2p: P2PControlSender<NetworkMessage>, timeout: SharedTimeout<NetworkMessage>) -> PeerMessageSender<NetworkMessage> {
         let (sender, receiver) = mpsc::sync_channel(p2p.back_pressure);
 
         let mut filtercalculator = FilterCalculator { network, chaindb, p2p, peer: None, peers: HashSet::new(), want: HashSet::new(), missing: Vec::new(), timeout };
@@ -68,7 +68,7 @@ impl FilterCalculator {
         PeerMessageSender::new(sender)
     }
 
-    fn run(&mut self, receiver: PeerMessageReceiver) {
+    fn run(&mut self, receiver: PeerMessageReceiver<NetworkMessage>) {
         let mut re_check = true;
         loop {
             self.timeout.lock().unwrap().check(vec!(ExpectedReply::Block));
