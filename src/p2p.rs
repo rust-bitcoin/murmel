@@ -157,7 +157,7 @@ pub enum PeerSource {
 }
 
 /// a map of peer id to peers
-pub type PeerMessageReceiver<Message: Send + Sync> = mpsc::Receiver<PeerMessage<Message>>;
+pub type PeerMessageReceiver<Message> = mpsc::Receiver<PeerMessage<Message>>;
 
 #[derive(Clone)]
 pub struct PeerMessageSender<Message: Send + Sync + Clone> {
@@ -208,7 +208,7 @@ pub struct VersionCarrier {
     /// A bitmask describing the services supported by this node
     pub services: u64,
     /// The time at which the `version` message was sent
-    pub timestamp: i64,
+    pub timestamp: u64,
     /// The network address of the peer receiving the message
     pub receiver: Address,
     /// The network address of the peer sending the message
@@ -232,7 +232,7 @@ impl Version for NetworkMessage {
                 Some(VersionCarrier {
                     version: v.version,
                     services: v.services,
-                    timestamp: v.timestamp,
+                    timestamp: v.timestamp as u64,
                     receiver: v.receiver.clone(),
                     sender: v.sender.clone(),
                     nonce: v.nonce,
