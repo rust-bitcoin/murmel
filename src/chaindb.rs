@@ -30,8 +30,7 @@ use bitcoin::{
 };
 use bip158;
 use bip158::{BlockFilter, SCRIPT_FILTER, BlockFilterReader};
-use bitcoin_hashes::sha256d::Hash as Sha256dHash;
-use bitcoin_hashes::Hash;
+use bitcoin_hashes::{Hash, sha256d};
 use byteorder::{BigEndian, ByteOrder};
 use error::MurmelError;
 use filtercache::FilterCache;
@@ -117,7 +116,7 @@ impl ChainDB {
                 let mut h = tip;
                 while let Some(stored) = self.fetch_header(&h)? {
                     sl.push_front(stored.clone());
-                    if stored.header.prev_blockhash != Sha256dHash::default() {
+                    if stored.header.prev_blockhash != sha256d::Hash::default() {
                         h = stored.header.prev_blockhash;
                     } else {
                         break;
@@ -189,7 +188,7 @@ impl ChainDB {
     }
 
     /// Store a header
-    pub fn add_header(&mut self, header: &BlockHeader) -> Result<Option<(StoredHeader, Option<Vec<Sha256dHash>>, Option<Vec<Sha256dHash>>)>, MurmelError> {
+    pub fn add_header(&mut self, header: &BlockHeader) -> Result<Option<(StoredHeader, Option<Vec<sha256d::Hash>>, Option<Vec<sha256d::Hash>>)>, MurmelError> {
         if let Some((cached, unwinds, forward)) = self.headercache.add_header(header)? {
             self.db.put_hash_keyed(&cached.stored)?;
             if let Some(forward) = forward.clone() {
@@ -203,7 +202,7 @@ impl ChainDB {
     }
 
     /// return position of hash on trunk if hash is on trunk
-    pub fn pos_on_trunk(&self, hash: &Sha256dHash) -> Option<u32> {
+    pub fn pos_on_trunk(&self, hash: &sha256d::Hash) -> Option<u32> {
         self.headercache.pos_on_trunk(hash)
     }
 
@@ -223,7 +222,7 @@ impl ChainDB {
     }
 
     /// Fetch a header by its id from cache
-    pub fn get_header(&self, id: &Sha256dHash) -> Option<CachedHeader> {
+    pub fn get_header(&self, id: &sha256d::Hash) -> Option<CachedHeader> {
         self.headercache.get_header(id)
     }
 
@@ -233,7 +232,7 @@ impl ChainDB {
     }
 
     /// locator for getheaders message
-    pub fn header_locators(&self) -> Vec<Sha256dHash> {
+    pub fn header_locators(&self) -> Vec<sha256d::Hash> {
         self.headercache.locator_hashes()
     }
 
@@ -252,35 +251,35 @@ impl ChainDB {
     }
 
     /// Get a filter header from cache by filter id
-    pub fn get_filter(&self, filter_id: &Sha256dHash) -> Option<Arc<StoredFilter>> {
+    pub fn get_filter(&self, filter_id: &sha256d::Hash) -> Option<Arc<StoredFilter>> {
         self.filtercache.get_filter(filter_id)
     }
 
     /// Get a filter header from cache by its block id and type
-    pub fn get_block_filter(&self, block_id: &Sha256dHash, filter_type: u8) -> Option<Arc<StoredFilter>> {
+    pub fn get_block_filter(&self, block_id: &sha256d::Hash, filter_type: u8) -> Option<Arc<StoredFilter>> {
         self.filtercache.get_block_filter(block_id, filter_type)
     }
 
     /// Store the header id with most work
-    pub fn store_header_tip(&mut self, tip: &Sha256dHash) -> Result<(), MurmelError> {
+    pub fn store_header_tip(&mut self, tip: &sha256d::Hash) -> Result<(), MurmelError> {
         self.db.put_keyed_encodable(HEADER_TIP_KEY, tip)?;
         Ok(())
     }
 
     /// Find header id with most work
-    pub fn fetch_header_tip(&self) -> Result<Option<Sha256dHash>, MurmelError> {
-        Ok(self.db.get_keyed_decodable::<Sha256dHash>(HEADER_TIP_KEY)?.map(|(_, h)| h.clone()))
+    pub fn fetch_header_tip(&self) -> Result<Option<sha256d::Hash>, MurmelError> {
+        Ok(self.db.get_keyed_decodable::<sha256d::Hash>(HEADER_TIP_KEY)?.map(|(_, h)| h.clone()))
     }
 
     /// Read header from the DB
-    pub fn fetch_header(&self, id: &Sha256dHash) -> Result<Option<StoredHeader>, MurmelError> {
+    pub fn fetch_header(&self, id: &sha256d::Hash) -> Result<Option<StoredHeader>, MurmelError> {
         Ok(self.db.get_hash_keyed::<StoredHeader>(id)?.map(|(_, header)| header))
     }
 
     /// Store a calculated filter
-    pub fn add_calculated_filter(&mut self, previous: &Sha256dHash, filter: &BlockFilter) -> Result<(), MurmelError> {
+    pub fn add_calculated_filter(&mut self, previous: &sha256d::Hash, filter: &BlockFilter) -> Result<(), MurmelError> {
         let stored_filter = StoredFilter{block_id: filter.block_hash, previous: previous.clone(),
-            filter_hash: Sha256dHash::hash(filter.content.as_slice()), filter: Some(filter.content.clone()), filter_type: filter.filter_type };
+            filter_hash: sha256d::Hash::hash(filter.content.as_slice()), filter: Some(filter.content.clone()), filter_type: filter.filter_type };
         if filter.filter_type == TXID_FILTER {
             self.db.put_hash_keyed(&stored_filter)?;
             self.filtercache.add_filter(stored_filter);
@@ -293,17 +292,17 @@ impl ChainDB {
     }
 
     /// Read filter from DB
-    pub fn fetch_block_filter(&self, block_id: &Sha256dHash, filter_type: u8) -> Result<Option<StoredFilter>, MurmelError> {
+    pub fn fetch_block_filter(&self, block_id: &sha256d::Hash, filter_type: u8) -> Result<Option<StoredFilter>, MurmelError> {
         Ok(self.db.get_hash_keyed::<StoredFilter>(&StoredFilter::storage_id(block_id, filter_type))?.map(|(_, filter)| filter))
     }
 
     /// Check if the DB may have a block. This might return false positive but is really quick.
-    pub fn may_have_block (&self, block_id: &Sha256dHash) -> Result<bool, MurmelError> {
+    pub fn may_have_block (&self, block_id: &sha256d::Hash) -> Result<bool, MurmelError> {
         Ok(self.db.may_have_hash_key (block_id)?)
     }
 
     /// read a block from DB
-    pub fn fetch_stored_block(&self, block_id: &Sha256dHash) -> Result<Option<StoredBlock>, MurmelError> {
+    pub fn fetch_stored_block(&self, block_id: &sha256d::Hash) -> Result<Option<StoredBlock>, MurmelError> {
         if let Some((_, block)) = self.db.get_hash_keyed::<StoredBlock>(block_id)? {
             return Ok(Some(block));
         }
@@ -311,7 +310,7 @@ impl ChainDB {
     }
 
     /// read transactions of a block
-    pub fn fetch_txdata(&self, block_id: &Sha256dHash) -> Result<Option<Vec<Transaction>>, MurmelError> {
+    pub fn fetch_txdata(&self, block_id: &sha256d::Hash) -> Result<Option<Vec<Transaction>>, MurmelError> {
         let mut txdata = Vec::new();
         if let Some((_, block)) = self.db.get_hash_keyed::<StoredBlock>(block_id)? {
             for txref in block.txrefs {
@@ -440,6 +439,7 @@ impl ChainDB {
     }
 }
 
+
 /// an object capable of retrieving spent scripts of a block
 pub struct DBScriptAccessor<'a> {
     db: &'a mut ChainDB,
@@ -495,7 +495,7 @@ pub struct StoredHeader {
 
 // need to implement if put_hash_keyed and get_hash_keyed should be used
 impl BitcoinHash for StoredHeader {
-    fn bitcoin_hash(&self) -> Sha256dHash {
+    fn bitcoin_hash(&self) -> sha256d::Hash {
         self.header.bitcoin_hash()
     }
 }
@@ -535,36 +535,36 @@ pub struct StoredFilter {
     /// filter type
     pub filter_type: u8,
     /// block
-    pub block_id: Sha256dHash,
+    pub block_id: sha256d::Hash,
     /// hash of the filter content
-    pub filter_hash: Sha256dHash,
+    pub filter_hash: sha256d::Hash,
     /// previous filter id
-    pub previous: Sha256dHash,
+    pub previous: sha256d::Hash,
     /// filter content
     pub filter: Option<Vec<u8>>,
 }
 
 impl StoredFilter {
     /// the filter's unique id
-    pub fn filter_id(&self) -> Sha256dHash {
+    pub fn filter_id(&self) -> sha256d::Hash {
         let mut id_data = [0u8; 64];
         id_data[0..32].copy_from_slice(&self.filter_hash[..]);
         id_data[32..].copy_from_slice(&self.previous[..]);
-        Sha256dHash::hash(&id_data)
+        sha256d::Hash::hash(&id_data)
     }
 
     /// compute the id used to store this filter
-    pub fn storage_id (block_id: &Sha256dHash, filter_type: u8) -> Sha256dHash {
+    pub fn storage_id (block_id: &sha256d::Hash, filter_type: u8) -> sha256d::Hash {
         let mut id_data = [0u8; 33];
         id_data[0..32].copy_from_slice(&block_id[..]);
         id_data[32] = filter_type;
-        Sha256dHash::hash(&id_data)
+        sha256d::Hash::hash(&id_data)
     }
 }
 
 // stored with a key derivable from block_id and filter type
 impl BitcoinHash for StoredFilter {
-    fn bitcoin_hash(&self) -> Sha256dHash {
+    fn bitcoin_hash(&self) -> sha256d::Hash {
         Self::storage_id(&self.block_id, self.filter_type)
     }
 }
@@ -610,13 +610,13 @@ pub struct StoredBlock {
     /// the block's unique id
     pub header: StoredHeader,
     /// ids of transaction within the block
-    pub txids: Vec<Sha256dHash>,
+    pub txids: Vec<sha256d::Hash>,
     /// persistent references to stored transactions
     pub txrefs: Vec<PRef>
 }
 
 impl BitcoinHash for StoredBlock {
-    fn bitcoin_hash(&self) -> Sha256dHash {
+    fn bitcoin_hash(&self) -> sha256d::Hash {
         self.header.bitcoin_hash()
     }
 }
