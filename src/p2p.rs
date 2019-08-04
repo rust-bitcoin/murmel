@@ -76,7 +76,7 @@ pub struct PeerId {
 
 impl fmt::Display for PeerId {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        write!(f, "{}[{}]", self.network, self.token.0)?;
+        write!(f, "{}-{}", self.network, self.token.0)?;
         Ok(())
     }
 }
@@ -263,6 +263,7 @@ pub trait P2PConfig<Message: Version + Send + Sync + 'static, Envelope: Command 
     fn get_height(&self) -> u32;
     fn set_height(&self, u32);
     fn max_protocol_version(&self) -> u32;
+    fn min_protocol_version(&self) -> u32;
     fn verack(&self) -> Message;
     fn wrap(&self, m: Message) -> Envelope;
     fn unwrap(&self, e: Envelope) -> Message;
@@ -336,6 +337,11 @@ impl P2PConfig<NetworkMessage, RawNetworkMessage> for BitcoinP2PConfig {
     fn max_protocol_version(&self) -> u32 {
         self.max_protocol_version
     }
+
+    fn min_protocol_version(&self) -> u32 {
+        70001
+    }
+
 
     fn verack(&self) -> NetworkMessage {
         NetworkMessage::Verack
@@ -733,7 +739,7 @@ impl<Message: Version + Send + Sync + Clone,
                                             disconnect = true;
                                             break;
                                         } else {
-                                            if version.version < 70001 || (needed_services & version.services) != needed_services {
+                                            if version.version < self.config.min_protocol_version() || (needed_services & version.services) != needed_services {
                                                 debug!("rejecting peer of version {} and services {:b} peer={}", version.version, version.services, pid);
                                                 disconnect = true;
                                                 break;
