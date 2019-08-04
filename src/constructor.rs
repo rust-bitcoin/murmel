@@ -142,7 +142,7 @@ impl Constructor {
 
         let p2p2 = self.p2p.clone();
         let p2p_task = Box::new(future::poll_fn(move |ctx| {
-            p2p2.run(needed_services, ctx).unwrap();
+            p2p2.run("bitcoin", needed_services, ctx).unwrap();
             Ok(Async::Ready(()))
         }));
 
@@ -162,7 +162,7 @@ impl Constructor {
         // add initial peers if any
         let mut added = Vec::new();
         for addr in &peers {
-            added.push(p2p.add_peer(PeerSource::Outgoing(addr.clone())));
+            added.push(p2p.add_peer("bitcoin",PeerSource::Outgoing(addr.clone())));
         }
 
         struct KeepConnected {
@@ -231,7 +231,7 @@ impl Constructor {
                     if self.dns.len() > 0 {
                         let mut rng = thread_rng();
                         let addr = self.dns[(rng.next_u64() as usize) % self.dns.len()];
-                        self.connections.push(self.p2p.add_peer(PeerSource::Outgoing(addr)));
+                        self.connections.push(self.p2p.add_peer("bitcoin", PeerSource::Outgoing(addr)));
                     }
                     else {
                         break;

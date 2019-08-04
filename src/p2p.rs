@@ -69,13 +69,14 @@ pub const SERVICE_FILTERS:u64 = 1 << 6;
 /// A peer's Id
 #[derive(Hash, Eq, PartialEq, Copy, Clone)]
 pub struct PeerId {
+    network: &'static str,
     // mio token used in networking
     token: Token
 }
 
 impl fmt::Display for PeerId {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        write!(f, "{}", self.token.0)?;
+        write!(f, "{}[{}]", self.network, self.token.0)?;
         Ok(())
     }
 }
@@ -473,11 +474,11 @@ impl<Message: Version + Send + Sync + Clone,
     }
 
     /// return a future that does not complete until the peer is connected
-    pub fn add_peer (&self, source: PeerSource) -> Box<Future<Item=SocketAddr, Error=MurmelError> + Send> {
+    pub fn add_peer (&self, network: &'static str, source: PeerSource) -> Box<Future<Item=SocketAddr, Error=MurmelError> + Send> {
         // new token, never re-using previously connected peer's id
         // so log messages are easier to follow
         let token = Token(self.next_peer_id.fetch_add(1, Ordering::Relaxed));
-        let pid = PeerId{token};
+        let pid = PeerId{network, token};
 
         let connect = self.connect_peer_with_timeout(pid,CONNECT_TIMEOUT_SECONDS, source.clone());
 
@@ -811,7 +812,7 @@ impl<Message: Version + Send + Sync + Clone,
     /// run the message dispatcher loop
     /// this method does not return unless there is an error obtaining network events
     /// run in its own thread, which will process all network events
-    pub fn run(&self, needed_services: u64, ctx: &mut Context) -> Result<(), io::Error>{
+    pub fn run(&self, network: &'static str, needed_services: u64, ctx: &mut Context) -> Result<(), io::Error>{
         trace!("start mio event loop");
         loop {
             // events buffer
@@ -828,13 +829,13 @@ impl<Message: Version + Send + Sync + Clone,
                 if let Some(server) = self.is_listener(event.token()) {
                     trace!("incoming connection request");
                     ctx.executor().spawn(
-                        Box::new(self.add_peer(PeerSource::Incoming(server))
+                        Box::new(self.add_peer(network, PeerSource::Incoming(server))
                         .map(|_|()).or_else(|_|Ok(()))))
                         .expect("can not spawn task for incoming connection");
                 }
                 else {
                     // construct the id of the peer the event concerns
-                    let pid = PeerId { token: event.token() };
+                    let pid = PeerId { network, token: event.token() };
                     if let Err(error) = self.event_processor(event, pid, needed_services, iobuf.as_mut_slice()) {
                         use std::error::Error;
 
