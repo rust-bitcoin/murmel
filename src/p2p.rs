@@ -146,6 +146,16 @@ impl<Message: Send + Sync + Clone> P2PControlSender<Message> {
         None
     }
 
+    pub fn peer_address(&self, peer: PeerId) -> Option<SocketAddr> {
+        if let Some(peer) = self.peers.read().unwrap().get(&peer) {
+            let locked_peer = peer.lock().unwrap();
+            if let Ok(addr) = locked_peer.stream.peer_addr() {
+                return Some(addr);
+            }
+        }
+        None
+    }
+
     pub fn peers (&self) -> Vec<PeerId> {
         self.peers.read().unwrap().keys().cloned().collect::<Vec<_>>()
     }
