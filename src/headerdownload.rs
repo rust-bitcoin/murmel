@@ -103,14 +103,14 @@ impl HeaderDownload {
             // only care for blocks
             if inventory.inv_type == InvType::Block {
                 let chaindb = self.chaindb.read().unwrap();
-                debug!("received inv for block {}", inventory.hash);
                 if chaindb.get_header(&inventory.hash).is_none() {
+                    debug!("received inv for new block {} peer={}", inventory.hash, peer);
                     // ask for header(s) if observing a new block
                     ask_for_headers = true;
                 }
             } else {
                 // do not spam us with transactions
-                debug!("received unwanted inv {:?} peer={}", inventory.inv_type, peer);
+                debug!("received unsolicited inv {:?} peer={}", inventory.inv_type, peer);
                 self.p2p.ban(peer, 10);
                 return Ok(());
             }

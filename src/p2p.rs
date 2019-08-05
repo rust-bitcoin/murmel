@@ -135,6 +135,7 @@ impl<Message: Send + Sync + Clone> P2PControlSender<Message> {
     }
 
     pub fn ban(&self, peer: PeerId, increment: u32) {
+        debug!("increase ban score with {} peer={}", increment, peer);
         self.send(P2PControl::Ban(peer, increment))
     }
 
