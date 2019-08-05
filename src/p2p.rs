@@ -87,7 +87,7 @@ type PeerMap<Message> = HashMap<PeerId, Mutex<Peer<Message>>>;
 pub enum PeerMessage<Message: Send + Sync + Clone> {
     Message(PeerId, Message),
     Connected(PeerId),
-    Disconnected(PeerId)
+    Disconnected(PeerId, bool) // true if banned
 }
 
 impl<Message: Send + Sync + Clone> PeerMessage<Message> {
@@ -95,7 +95,7 @@ impl<Message: Send + Sync + Clone> PeerMessage<Message> {
         match self {
             PeerMessage::Message(pid, _) |
             PeerMessage::Connected(pid) |
-            PeerMessage::Disconnected(pid) => pid.clone()
+            PeerMessage::Disconnected(pid,_) => pid.clone()
         }
     }
 }
@@ -603,7 +603,7 @@ impl<Message: Version + Send + Sync + Clone,
         Ok(addr)
     }
 
-    fn disconnect (&self, pid: PeerId) {
+    fn disconnect (&self, pid: PeerId, banned: bool) {
         {
             let mut wakers = self.waker.lock().unwrap();
             if let Some(waker) = wakers.get(&pid) {
@@ -619,7 +619,7 @@ impl<Message: Version + Send + Sync + Clone,
             }
             peers.remove(&pid);
         }
-        self.dispatcher.send(PeerMessage::Disconnected(pid));
+        self.dispatcher.send(PeerMessage::Disconnected(pid, banned));
     }
 
     fn connected(&self, pid: PeerId) {
@@ -637,7 +637,7 @@ impl<Message: Version + Send + Sync + Clone,
             }
         }
         if disconnect {
-            self.disconnect(pid);
+            self.disconnect(pid, true);
         }
     }
 
@@ -646,7 +646,7 @@ impl<Message: Version + Send + Sync + Clone,
         // check for error first
         if readiness.is_hup() || readiness.is_error() {
             info!("left us peer={}", pid);
-            self.disconnect(pid);
+            self.disconnect(pid, false);
         } else {
             // check for ability to write before read, to get rid of data before buffering more read
             // token should only be registered for write if there is a need to write
@@ -802,7 +802,7 @@ impl<Message: Version + Send + Sync + Clone,
                 }
                 if disconnect {
                     info!("left us peer={}", pid);
-                    self.disconnect(pid);
+                    self.disconnect(pid, false);
                 }
                 else {
                     if handshake {

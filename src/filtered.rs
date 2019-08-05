@@ -78,7 +78,7 @@ impl Filtered {
                             Ok(())
                         }
                     }
-                    PeerMessage::Disconnected(_) => {
+                    PeerMessage::Disconnected(_, _) => {
                         Ok(())
                     }
                     PeerMessage::Message(pid, msg) => {
