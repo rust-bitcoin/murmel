@@ -714,6 +714,8 @@ impl<Message: Version + Send + Sync + Clone,
                 let mut incoming = Vec::new();
                 // disconnect if set
                 let mut disconnect = false;
+                // how to disconnect
+                let mut ban = false;
                 // new handshake if set
                 let mut handshake = false;
                 // read lock peer map and retrieve peer
@@ -744,11 +746,13 @@ impl<Message: Version + Send + Sync + Clone,
                                         if locked_peer.version.is_some() {
                                             // repeated version
                                             disconnect = true;
+                                            ban = true;
                                             break;
                                         }
                                         if version.nonce == self.config.nonce() {
                                             // connect to myself
                                             disconnect = true;
+                                            ban = true;
                                             break;
                                         } else {
                                             if version.version < self.config.min_protocol_version() || (needed_services & version.services) != needed_services {
@@ -780,6 +784,7 @@ impl<Message: Version + Send + Sync + Clone,
                                         if locked_peer.got_verack {
                                             // repeated verack
                                             disconnect = true;
+                                            ban = true;
                                             break;
                                         }
                                         trace!("got verack peer={}", pid);
@@ -788,6 +793,7 @@ impl<Message: Version + Send + Sync + Clone,
                                         trace!("misbehaving peer={}", pid);
                                         // some other message before handshake
                                         disconnect = true;
+                                        ban = true;
                                         break;
                                     }
                                     if locked_peer.version.is_some() && locked_peer.got_verack {
@@ -804,7 +810,7 @@ impl<Message: Version + Send + Sync + Clone,
                 }
                 if disconnect {
                     info!("left us peer={}", pid);
-                    self.disconnect(pid, false);
+                    self.disconnect(pid, ban);
                 }
                 else {
                     if handshake {
