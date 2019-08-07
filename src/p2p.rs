@@ -747,12 +747,14 @@ impl<Message: Version + Send + Sync + Clone,
                                             // repeated version
                                             disconnect = true;
                                             ban = true;
+                                            debug!("misbehaving peer, repeated version peer={}", pid);
                                             break;
                                         }
                                         if version.nonce == self.config.nonce() {
                                             // connect to myself
                                             disconnect = true;
                                             ban = true;
+                                            debug!("rejecting to connect to myself peer={}", pid);
                                             break;
                                         } else {
                                             if version.version < self.config.min_protocol_version() || (needed_services & version.services) != needed_services {
@@ -785,12 +787,13 @@ impl<Message: Version + Send + Sync + Clone,
                                             // repeated verack
                                             disconnect = true;
                                             ban = true;
+                                            debug!("misbehaving peer, repeated version peer={}", pid);
                                             break;
                                         }
                                         trace!("got verack peer={}", pid);
                                         locked_peer.got_verack = true;
                                     } else {
-                                        trace!("misbehaving peer={}", pid);
+                                        debug!("misbehaving peer unexpected message before handshake peer={}", pid);
                                         // some other message before handshake
                                         disconnect = true;
                                         ban = true;
