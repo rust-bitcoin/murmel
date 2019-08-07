@@ -638,6 +638,7 @@ impl<Message: Version + Send + Sync + Clone,
             }
         }
         if disconnect {
+            debug!("ban peer={}", pid);
             self.disconnect(pid, true);
         }
     }
