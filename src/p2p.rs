@@ -769,6 +769,14 @@ impl<Message: Version + Send + Sync + Clone,
                                                     let version = self.config.version (&addr, version.version);
                                                     locked_peer.send(version)?;
                                                 }
+                                                else {
+                                                    // outgoing connects should not be behind this
+                                                    if version.start_height < self.config.get_height() {
+                                                        debug!("rejecting to connect with height {} peer={}", version.start_height, pid);
+                                                        disconnect = true;
+                                                        break;
+                                                    }
+                                                }
                                                 debug!("accepting peer of version {} and services {:b} peer={}", version.version, version.services, pid);
                                                 // acknowledge version message received
                                                 locked_peer.send(self.config.verack())?;
