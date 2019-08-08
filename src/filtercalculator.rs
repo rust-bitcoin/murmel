@@ -75,7 +75,7 @@ impl FilterCalculator {
             // wait some time for incoming block messages, process them if available
             while let Ok(msg) = receiver.recv_timeout(Duration::from_millis(1000)) {
                 match msg {
-                    PeerMessage::Connected(pid) => {
+                    PeerMessage::Connected(pid,_) => {
                         if self.peer.is_none() {
                             debug!("block download from peer={}", pid);
                             self.peer = Some(pid);

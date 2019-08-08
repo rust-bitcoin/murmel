@@ -62,7 +62,7 @@ impl HeaderDownload {
         loop {
             while let Ok(msg) = receiver.recv_timeout(Duration::from_millis(1000)) {
                 if let Err(e) = match msg {
-                    PeerMessage::Connected(pid) => {
+                    PeerMessage::Connected(pid,_) => {
                         if self.is_serving_blocks(pid) {
                             trace!("serving blocks peer={}", pid);
                             self.get_headers(pid)

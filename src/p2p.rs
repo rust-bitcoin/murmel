@@ -86,7 +86,7 @@ type PeerMap<Message> = HashMap<PeerId, Mutex<Peer<Message>>>;
 #[derive(Clone)]
 pub enum PeerMessage<Message: Send + Sync + Clone> {
     Message(PeerId, Message),
-    Connected(PeerId),
+    Connected(PeerId, Option<SocketAddr>),
     Disconnected(PeerId, bool) // true if banned
 }
 
@@ -94,7 +94,7 @@ impl<Message: Send + Sync + Clone> PeerMessage<Message> {
     pub fn peer_id (&self) -> PeerId {
         match self {
             PeerMessage::Message(pid, _) |
-            PeerMessage::Connected(pid) |
+            PeerMessage::Connected(pid,_) |
             PeerMessage::Disconnected(pid,_) => pid.clone()
         }
     }
@@ -143,16 +143,6 @@ impl<Message: Send + Sync + Clone> P2PControlSender<Message> {
         if let Some(peer) = self.peers.read().unwrap().get(&peer) {
             let locked_peer = peer.lock().unwrap();
             return locked_peer.version.clone();
-        }
-        None
-    }
-
-    pub fn peer_address(&self, peer: PeerId) -> Option<SocketAddr> {
-        if let Some(peer) = self.peers.read().unwrap().get(&peer) {
-            let locked_peer = peer.lock().unwrap();
-            if let Ok(addr) = locked_peer.stream.peer_addr() {
-                return Some(addr);
-            }
         }
         None
     }
@@ -623,8 +613,8 @@ impl<Message: Version + Send + Sync + Clone,
         }
     }
 
-    fn connected(&self, pid: PeerId) {
-        self.dispatcher.send(PeerMessage::Connected(pid));
+    fn connected(&self, pid: PeerId, address: Option<SocketAddr>) {
+        self.dispatcher.send(PeerMessage::Connected(pid, address));
     }
 
     fn ban (&self, pid: PeerId, increment: u32) {
@@ -718,6 +708,8 @@ impl<Message: Version + Send + Sync + Clone,
                 let mut ban = false;
                 // new handshake if set
                 let mut handshake = false;
+                // peer address
+                let mut address = None;
                 // read lock peer map and retrieve peer
                 if let Some(peer) = self.peers.read().unwrap().get(&pid) {
                     // lock the peer from the peer
@@ -802,6 +794,12 @@ impl<Message: Version + Send + Sync + Clone,
                                     if locked_peer.version.is_some() && locked_peer.got_verack {
                                         locked_peer.connected = true;
                                         handshake = true;
+                                        address = if let Ok(addr) = locked_peer.stream.peer_addr() {
+                                            Some(addr)
+                                        }
+                                        else {
+                                            None
+                                        }
                                     }
                                 }
                             }
@@ -818,7 +816,7 @@ impl<Message: Version + Send + Sync + Clone,
                 else {
                     if handshake {
                         info!("handshake peer={}", pid);
-                        self.connected (pid);
+                        self.connected (pid, address);
                         if let Some(w) = self.waker.lock().unwrap().get(&pid) {
                             trace!("waking for handshake");
                             w.wake();
