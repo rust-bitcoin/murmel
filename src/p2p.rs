@@ -274,7 +274,7 @@ pub trait P2PConfig<Message: Version + Send + Sync + 'static, Envelope: Command 
     fn min_protocol_version(&self) -> u32;
     fn verack(&self) -> Message;
     fn wrap(&self, m: Message) -> Envelope;
-    fn unwrap(&self, e: Envelope) -> Message;
+    fn unwrap(&self, e: Envelope) -> Result<Message, io::Error>;
     fn encode(&self, item: &Envelope, dst: &mut Buffer) -> Result<(), io::Error>;
     fn decode(&self, src: &mut Buffer) -> Result<Option<Envelope>, io::Error>;
 }
@@ -359,8 +359,8 @@ impl P2PConfig<NetworkMessage, RawNetworkMessage> for BitcoinP2PConfig {
         RawNetworkMessage{magic: self.network.magic(), payload: m}
     }
 
-    fn unwrap(&self, e: RawNetworkMessage) -> NetworkMessage {
-        e.payload
+    fn unwrap(&self, e: RawNetworkMessage) -> Result<NetworkMessage, io::Error> {
+        Ok(e.payload)
     }
 
     // encode a message in Bitcoin's wire format extending the given buffer
@@ -740,81 +740,85 @@ impl<Message: Version + Send + Sync + Clone,
                                 // have to get both version and verack to complete handhsake
                                 if !(locked_peer.version.is_some() && locked_peer.got_verack) {
                                     // before handshake complete
-                                    let msg = self.config.unwrap(msg);
-                                    if let Some(version) = msg.is_version() {
-                                        if locked_peer.version.is_some() {
-                                            // repeated version
-                                            disconnect = true;
-                                            ban = true;
-                                            debug!("misbehaving peer, repeated version peer={}", pid);
-                                            break;
-                                        }
-                                        if version.nonce == self.config.nonce() {
-                                            // connect to myself
-                                            disconnect = true;
-                                            ban = true;
-                                            debug!("rejecting to connect to myself peer={}", pid);
-                                            break;
-                                        } else {
-                                            if version.version < self.config.min_protocol_version() || (needed_services & version.services) != needed_services {
-                                                debug!("rejecting peer of version {} and services {:b} peer={}", version.version, version.services, pid);
+                                    if let Ok(msg) = self.config.unwrap(msg) {
+                                        if let Some(version) = msg.is_version() {
+                                            if locked_peer.version.is_some() {
+                                                // repeated version
                                                 disconnect = true;
+                                                ban = true;
+                                                debug!("misbehaving peer, repeated version peer={}", pid);
+                                                break;
+                                            }
+                                            if version.nonce == self.config.nonce() {
+                                                // connect to myself
+                                                disconnect = true;
+                                                ban = true;
+                                                debug!("rejecting to connect to myself peer={}", pid);
                                                 break;
                                             } else {
-                                                if !locked_peer.outgoing {
-                                                    // send own version message to incoming peer
-                                                    let addr = locked_peer.stream.peer_addr()?;
-                                                    trace!("send version to incoming connection {}", addr);
-                                                    // do not show higher version than the peer speaks
-                                                    let version = self.config.version (&addr, version.version);
-                                                    locked_peer.send(version)?;
-                                                }
-                                                else {
-                                                    // outgoing connects should not be behind this
-                                                    if version.start_height < self.config.get_height() {
-                                                        debug!("rejecting to connect with height {} peer={}", version.start_height, pid);
-                                                        disconnect = true;
-                                                        break;
+                                                if version.version < self.config.min_protocol_version() || (needed_services & version.services) != needed_services {
+                                                    debug!("rejecting peer of version {} and services {:b} peer={}", version.version, version.services, pid);
+                                                    disconnect = true;
+                                                    break;
+                                                } else {
+                                                    if !locked_peer.outgoing {
+                                                        // send own version message to incoming peer
+                                                        let addr = locked_peer.stream.peer_addr()?;
+                                                        trace!("send version to incoming connection {}", addr);
+                                                        // do not show higher version than the peer speaks
+                                                        let version = self.config.version(&addr, version.version);
+                                                        locked_peer.send(version)?;
+                                                    } else {
+                                                        // outgoing connects should not be behind this
+                                                        if version.start_height < self.config.get_height() {
+                                                            debug!("rejecting to connect with height {} peer={}", version.start_height, pid);
+                                                            disconnect = true;
+                                                            break;
+                                                        }
                                                     }
+                                                    debug!("accepting peer of version {} and services {:b} peer={}", version.version, version.services, pid);
+                                                    // acknowledge version message received
+                                                    locked_peer.send(self.config.verack())?;
+                                                    // all right, remember this peer
+                                                    info!("client {} height: {} peer={}", version.user_agent, version.start_height, pid);
+                                                    let mut vm = version.clone();
+                                                    // reduce protocol version to our capabilities
+                                                    vm.version = min(vm.version, self.config.max_protocol_version());
+                                                    locked_peer.version = Some(vm);
                                                 }
-                                                debug!("accepting peer of version {} and services {:b} peer={}", version.version, version.services, pid);
-                                                // acknowledge version message received
-                                                locked_peer.send(self.config.verack())?;
-                                                // all right, remember this peer
-                                                info!("client {} height: {} peer={}", version.user_agent, version.start_height, pid);
-                                                let mut vm = version.clone();
-                                                // reduce protocol version to our capabilities
-                                                vm.version = min (vm.version, self.config.max_protocol_version());
-                                                locked_peer.version = Some(vm);
+                                            }
+                                        } else if msg.is_verack() {
+                                            if locked_peer.got_verack {
+                                                // repeated verack
+                                                disconnect = true;
+                                                ban = true;
+                                                debug!("misbehaving peer, repeated version peer={}", pid);
+                                                break;
+                                            }
+                                            trace!("got verack peer={}", pid);
+                                            locked_peer.got_verack = true;
+                                        } else {
+                                            debug!("misbehaving peer unexpected message before handshake peer={}", pid);
+                                            // some other message before handshake
+                                            disconnect = true;
+                                            ban = true;
+                                            break;
+                                        }
+                                        if locked_peer.version.is_some() && locked_peer.got_verack {
+                                            locked_peer.connected = true;
+                                            handshake = true;
+                                            address = if let Ok(addr) = locked_peer.stream.peer_addr() {
+                                                Some(addr)
+                                            } else {
+                                                None
                                             }
                                         }
                                     }
-                                    else if msg.is_verack() {
-                                        if locked_peer.got_verack {
-                                            // repeated verack
-                                            disconnect = true;
-                                            ban = true;
-                                            debug!("misbehaving peer, repeated version peer={}", pid);
-                                            break;
-                                        }
-                                        trace!("got verack peer={}", pid);
-                                        locked_peer.got_verack = true;
-                                    } else {
-                                        debug!("misbehaving peer unexpected message before handshake peer={}", pid);
-                                        // some other message before handshake
+                                    else {
+                                        debug!("Ban for malformed message peer={}", pid);
                                         disconnect = true;
                                         ban = true;
                                         break;
-                                    }
-                                    if locked_peer.version.is_some() && locked_peer.got_verack {
-                                        locked_peer.connected = true;
-                                        handshake = true;
-                                        address = if let Ok(addr) = locked_peer.stream.peer_addr() {
-                                            Some(addr)
-                                        }
-                                        else {
-                                            None
-                                        }
                                     }
                                 }
                             }
@@ -841,7 +845,13 @@ impl<Message: Version + Send + Sync + Clone,
                     // as process could call back to P2P
                     for msg in incoming {
                         trace!("processing {} for peer={}", msg.command(), pid);
-                        self.dispatcher.send(PeerMessage::Message(pid, self.config.unwrap(msg)));
+                        if let Ok(m) = self.config.unwrap(msg) {
+                            self.dispatcher.send(PeerMessage::Message(pid, m));
+                        }
+                        else {
+                            debug!("Ban for malformed message peer={}", pid);
+                            self.disconnect(pid, true);
+                        }
                     }
                 }
             }
