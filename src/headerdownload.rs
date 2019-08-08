@@ -70,9 +70,6 @@ impl HeaderDownload {
                             Ok(())
                         }
                     }
-                    PeerMessage::Disconnected(_,_) => {
-                        Ok(())
-                    }
                     PeerMessage::Message(pid, msg) => {
                         match msg {
                             NetworkMessage::Headers(ref headers) => if self.is_serving_blocks(pid) { self.headers(headers, pid) } else { Ok(()) },
@@ -80,7 +77,8 @@ impl HeaderDownload {
                             NetworkMessage::Ping(_) => { Ok(()) }
                             _ => { Ok(()) }
                         }
-                    }
+                    },
+                    _ => Ok(())
                 } {
                     error!("Error processing headers: {}", e);
                 }

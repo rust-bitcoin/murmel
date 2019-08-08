@@ -83,7 +83,7 @@ impl FilterCalculator {
                         }
                         self.peers.insert(pid);
                     },
-                    PeerMessage::Disconnected(pid,_) => {
+                    PeerMessage::Disconnected(pid) => {
                         self.peers.remove(&pid);
                         if self.peer.is_some() {
                             if self.peer.unwrap() == pid {
@@ -112,6 +112,7 @@ impl FilterCalculator {
                             _ => {}
                         }
                     }
+                    _ => {}
                 }
             }
 
