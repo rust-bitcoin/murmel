@@ -87,8 +87,7 @@ type PeerMap<Message> = HashMap<PeerId, Mutex<Peer<Message>>>;
 pub enum PeerMessage<Message: Send + Sync + Clone> {
     Message(PeerId, Message),
     Connected(PeerId),
-    Disconnected(PeerId),
-    Ban(PeerId, SocketAddr)
+    Disconnected(PeerId, bool) // true if banned
 }
 
 impl<Message: Send + Sync + Clone> PeerMessage<Message> {
@@ -96,9 +95,7 @@ impl<Message: Send + Sync + Clone> PeerMessage<Message> {
         match self {
             PeerMessage::Message(pid, _) |
             PeerMessage::Connected(pid) |
-            PeerMessage::Disconnected(pid) |
-            PeerMessage::Ban(pid, _)
-            => pid.clone()
+            PeerMessage::Disconnected(pid,_) => pid.clone()
         }
     }
 }
@@ -146,6 +143,16 @@ impl<Message: Send + Sync + Clone> P2PControlSender<Message> {
         if let Some(peer) = self.peers.read().unwrap().get(&peer) {
             let locked_peer = peer.lock().unwrap();
             return locked_peer.version.clone();
+        }
+        None
+    }
+
+    pub fn peer_address(&self, peer: PeerId) -> Option<SocketAddr> {
+        if let Some(peer) = self.peers.read().unwrap().get(&peer) {
+            let locked_peer = peer.lock().unwrap();
+            if let Ok(addr) = locked_peer.stream.peer_addr() {
+                return Some(addr);
+            }
         }
         None
     }
@@ -598,7 +605,7 @@ impl<Message: Version + Send + Sync + Clone,
     }
 
     fn disconnect (&self, pid: PeerId, banned: bool) {
-        self.dispatcher.send(PeerMessage::Disconnected(pid));
+        self.dispatcher.send(PeerMessage::Disconnected(pid, banned));
         {
             let mut wakers = self.waker.lock().unwrap();
             if let Some(waker) = wakers.get(&pid) {
@@ -610,13 +617,7 @@ impl<Message: Version + Send + Sync + Clone,
         {
             let mut peers = self.peers.write().unwrap();
             if let Some(peer) = peers.get(&pid) {
-                let peer = peer.lock().unwrap();
-                if banned {
-                    self.dispatcher.send(PeerMessage::Ban(pid, peer.stream.peer_addr().expect(
-                        "do not know connected peer's address?"
-                    )));
-                }
-                peer.stream.shutdown(Shutdown::Both).unwrap_or(());
+                peer.lock().unwrap().stream.shutdown(Shutdown::Both).unwrap_or(());
             }
             peers.remove(&pid);
         }

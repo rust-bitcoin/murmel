@@ -78,6 +78,9 @@ impl Filtered {
                             Ok(())
                         }
                     }
+                    PeerMessage::Disconnected(_, _) => {
+                        Ok(())
+                    }
                     PeerMessage::Message(pid, msg) => {
                         if self.is_serving_filters(pid) {
                             match msg {
@@ -94,7 +97,6 @@ impl Filtered {
                             Ok(())
                         }
                     }
-                    _ => Ok(())
                 } {
                     error!("Error processing filters: {}", e);
                 }
