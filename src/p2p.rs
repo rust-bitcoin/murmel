@@ -606,7 +606,6 @@ impl<Message: Version + Send + Sync + Clone,
 
     fn disconnect (&self, pid: PeerId, banned: bool) {
         self.dispatcher.send(PeerMessage::Disconnected(pid, banned));
-        thread::yield_now(); // give a chance to process disconnect before removing peer references
         {
             let mut wakers = self.waker.lock().unwrap();
             if let Some(waker) = wakers.get(&pid) {

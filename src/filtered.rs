@@ -50,14 +50,14 @@ use downstream::SharedDownstream;
 pub struct Filtered {
     p2p: P2PControlSender<NetworkMessage>,
     chaindb: SharedChainDB,
-    timeout: SharedTimeout<NetworkMessage>,
+    timeout: SharedTimeout<NetworkMessage, ExpectedReply>,
     birth_height: Option<u32>,
     #[allow(unused)] // TODO send blocks
     downstream: SharedDownstream
 }
 
 impl Filtered {
-    pub fn new(chaindb: SharedChainDB, p2p: P2PControlSender<NetworkMessage>, timeout: SharedTimeout<NetworkMessage>, downstream: SharedDownstream, birth_height: Option<u32>) -> PeerMessageSender<NetworkMessage> {
+    pub fn new(chaindb: SharedChainDB, p2p: P2PControlSender<NetworkMessage>, timeout: SharedTimeout<NetworkMessage, ExpectedReply>, downstream: SharedDownstream, birth_height: Option<u32>) -> PeerMessageSender<NetworkMessage> {
         let (sender, receiver) = mpsc::sync_channel(p2p.back_pressure);
 
         let mut filterdownload = Filtered { chaindb, p2p, timeout, downstream, birth_height };

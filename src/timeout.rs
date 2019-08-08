@@ -24,8 +24,9 @@ use std::{
     sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH}
 };
+use std::hash::Hash;
 
-pub type SharedTimeout<Message> = Arc<Mutex<Timeout<Message>>>;
+pub type SharedTimeout<Message, Reply> = Arc<Mutex<Timeout<Message, Reply>>>;
 
 const TIMEOUT:u64 = 60;
 
@@ -39,14 +40,14 @@ pub enum ExpectedReply {
     Filter
 }
 
-pub struct Timeout<Message: Send + Sync + Clone> {
+pub struct Timeout<Message: Send + Sync + Clone, Reply : Eq + Hash + std::fmt::Debug> {
     timeouts: HashMap<PeerId, u64>,
-    expected: HashMap<PeerId, HashMap<ExpectedReply, usize>>,
+    expected: HashMap<PeerId, HashMap<Reply, usize>>,
     p2p: P2PControlSender<Message>
 }
 
-impl<Message: Send + Sync + Clone> Timeout<Message> {
-    pub fn new (p2p: P2PControlSender<Message>) -> Timeout<Message> {
+impl<Message: Send + Sync + Clone, Reply: Eq + Hash + std::fmt::Debug> Timeout<Message, Reply> {
+    pub fn new (p2p: P2PControlSender<Message>) -> Timeout<Message, Reply> {
         Timeout{p2p, timeouts: HashMap::new(), expected: HashMap::new()}
     }
 
@@ -55,12 +56,12 @@ impl<Message: Send + Sync + Clone> Timeout<Message> {
         self.expected.remove(&peer);
     }
 
-    pub fn expect (&mut self, peer: PeerId, n: usize, what: ExpectedReply) {
+    pub fn expect (&mut self, peer: PeerId, n: usize, what: Reply) {
         self.timeouts.insert(peer, Self::now() + TIMEOUT);
         *self.expected.entry(peer).or_insert(HashMap::new()).entry(what).or_insert(0) += n;
     }
 
-    pub fn received (&mut self, peer: PeerId, n: usize, what:ExpectedReply) {
+    pub fn received (&mut self, peer: PeerId, n: usize, what: Reply) {
         if let Some(expected) = self.expected.get(&peer) {
             if let Some(m) = expected.get(&what) {
                 if *m > 0 {
@@ -83,7 +84,7 @@ impl<Message: Send + Sync + Clone> Timeout<Message> {
         self.timeouts.contains_key(&peer)
     }
 
-    pub fn is_busy_with (&self, peer: PeerId, what: ExpectedReply) -> bool {
+    pub fn is_busy_with (&self, peer: PeerId, what: Reply) -> bool {
         if self.timeouts.contains_key(&peer) {
             if let Some(expected) = self.expected.get(&peer) {
                 if let Some(n) = expected.get(&what) {
@@ -95,7 +96,7 @@ impl<Message: Send + Sync + Clone> Timeout<Message> {
     }
 
 
-    pub fn check (&mut self, expected: Vec<ExpectedReply>) {
+    pub fn check (&mut self, expected: Vec<Reply>) {
         let mut banned = Vec::new();
         for (peer, timeout) in &self.timeouts {
             if *timeout < Self::now () {

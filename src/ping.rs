@@ -35,13 +35,13 @@ const SECS: u64 = 60;
 
 pub struct Ping {
     p2p: P2PControlSender<NetworkMessage>,
-    timeout: SharedTimeout<NetworkMessage>,
+    timeout: SharedTimeout<NetworkMessage, ExpectedReply>,
     asked: HashMap<PeerId, u64>
 }
 
 
 impl Ping {
-    pub fn new(p2p: P2PControlSender<NetworkMessage>, timeout: SharedTimeout<NetworkMessage>) -> PeerMessageSender<NetworkMessage>  {
+    pub fn new(p2p: P2PControlSender<NetworkMessage>, timeout: SharedTimeout<NetworkMessage, ExpectedReply>) -> PeerMessageSender<NetworkMessage>  {
         let (sender, receiver) = mpsc::sync_channel(p2p.back_pressure);
         let mut ping = Ping { p2p, timeout, asked: HashMap::new() };
 

@@ -54,11 +54,11 @@ pub struct FilterCalculator {
     peers: HashSet<PeerId>,
     want: HashSet<Sha256dHash>,
     missing: Vec<Sha256dHash>,
-    timeout: SharedTimeout<NetworkMessage>
+    timeout: SharedTimeout<NetworkMessage, ExpectedReply>
 }
 
 impl FilterCalculator {
-    pub fn new(network: Network, chaindb: SharedChainDB, p2p: P2PControlSender<NetworkMessage>, timeout: SharedTimeout<NetworkMessage>) -> PeerMessageSender<NetworkMessage> {
+    pub fn new(network: Network, chaindb: SharedChainDB, p2p: P2PControlSender<NetworkMessage>, timeout: SharedTimeout<NetworkMessage, ExpectedReply>) -> PeerMessageSender<NetworkMessage> {
         let (sender, receiver) = mpsc::sync_channel(p2p.back_pressure);
 
         let mut filtercalculator = FilterCalculator { network, chaindb, p2p, peer: None, peers: HashSet::new(), want: HashSet::new(), missing: Vec::new(), timeout };

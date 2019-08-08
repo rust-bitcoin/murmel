@@ -43,12 +43,12 @@ use downstream::SharedDownstream;
 pub struct HeaderDownload {
     p2p: P2PControlSender<NetworkMessage>,
     chaindb: SharedChainDB,
-    timeout: SharedTimeout<NetworkMessage>,
+    timeout: SharedTimeout<NetworkMessage, ExpectedReply>,
     downstream: SharedDownstream
 }
 
 impl HeaderDownload {
-    pub fn new(chaindb: SharedChainDB, p2p: P2PControlSender<NetworkMessage>, timeout: SharedTimeout<NetworkMessage>, downstream: SharedDownstream) -> PeerMessageSender<NetworkMessage> {
+    pub fn new(chaindb: SharedChainDB, p2p: P2PControlSender<NetworkMessage>, timeout: SharedTimeout<NetworkMessage, ExpectedReply>, downstream: SharedDownstream) -> PeerMessageSender<NetworkMessage> {
         let (sender, receiver) = mpsc::sync_channel(p2p.back_pressure);
 
         let mut headerdownload = HeaderDownload { chaindb, p2p, timeout, downstream: downstream };
