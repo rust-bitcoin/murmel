@@ -1019,6 +1019,11 @@ impl Buffer {
         Buffer{ chunks: VecDeque::new(), pos: (0, 0), checkpoint: (0, 0) }
     }
 
+    /// not yet consumed length of the buffer
+    pub fn len(&self) -> usize {
+        self.chunks.iter().skip(self.pos.0).map(|c| c.len()).sum::<usize>() - self.pos.1
+    }
+
     /// rollback to last commit
     pub fn rollback (&mut self) {
         self.pos = self.checkpoint;
