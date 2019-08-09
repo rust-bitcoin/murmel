@@ -130,11 +130,14 @@ impl<Message: Send + Sync + Clone> P2PControlSender<Message> {
         self.send(P2PControl::Send(peer, msg))
     }
 
-    pub fn send_random_network (&self, msg: Message) -> PeerId {
+    pub fn send_random_network (&self, msg: Message) -> Option<PeerId> {
         let peers = self.peers.read().unwrap().keys().cloned().collect::<Vec<PeerId>>();
-        let peer = peers[(thread_rng().next_u32()%peers.len() as u32) as usize];
-        self.send(P2PControl::Send(peer, msg));
-        peer
+        if peers.len() > 0 {
+            let peer = peers[(thread_rng().next_u32() % peers.len() as u32) as usize];
+            self.send(P2PControl::Send(peer, msg));
+            return Some(peer);
+        }
+        None
     }
 
     pub fn broadcast (&self, msg: Message) {
