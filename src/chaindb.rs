@@ -131,6 +131,7 @@ impl ChainDB {
             let genesis = genesis_block(self.network).header;
             if let Some((cached, _, _)) = self.headercache.add_header(&genesis)? {
                 self.db.put_hash_keyed(&cached.stored)?;
+                self.db.batch()?;
                 self.store_header_tip(&cached.bitcoin_hash())?;
             }
         } else {
