@@ -610,18 +610,19 @@ impl<Message: Version + Send + Sync + Clone,
     fn disconnect (&self, pid: PeerId, banned: bool) {
         self.dispatcher.send(PeerMessage::Disconnected(pid, banned));
         {
-            let mut wakers = self.waker.lock().unwrap();
-            if let Some(waker) = wakers.remove(&pid) {
-                trace!("waking for disconnect");
-                waker.wake();
-            }
-        }
-        {
+            // remove from peers before waking up, so disconnect is recognized
             let mut peers = self.peers.write().unwrap();
             if let Some(peer) = peers.get(&pid) {
                 peer.lock().unwrap().stream.shutdown(Shutdown::Both).unwrap_or(());
             }
             peers.remove(&pid);
+        }
+        {
+            let mut wakers = self.waker.lock().unwrap();
+            if let Some(waker) = wakers.remove(&pid) {
+                trace!("waking for disconnect");
+                waker.wake();
+            }
         }
     }
 
