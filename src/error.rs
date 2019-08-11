@@ -54,6 +54,10 @@ pub enum MurmelError {
     Serialize(encode::Error),
     /// Hammersbald error
     Hammersbald(HammersbaldError),
+    /// Handshake failure
+    Handshake,
+    /// lost connection
+    Lost(String)
 }
 
 impl Error for MurmelError {
@@ -70,7 +74,9 @@ impl Error for MurmelError {
             MurmelError::IO(ref err) => err.description(),
             MurmelError::Util(ref err) => err.description(),
             MurmelError::Hammersbald(ref err) => err.description(),
-            MurmelError::Serialize(ref err) => err.description()
+            MurmelError::Serialize(ref err) => err.description(),
+            MurmelError::Handshake => "handshake",
+            MurmelError::Lost(ref s) => s
         }
     }
 
@@ -87,7 +93,9 @@ impl Error for MurmelError {
             MurmelError::IO(ref err) => Some(err),
             MurmelError::Util(ref err) => Some(err),
             MurmelError::Hammersbald(ref err) => Some(err),
-            MurmelError::Serialize(ref err) => Some(err)
+            MurmelError::Serialize(ref err) => Some(err),
+            MurmelError::Handshake => None,
+            MurmelError::Lost(_) => None
         }
     }
 }
@@ -102,7 +110,9 @@ impl fmt::Display for MurmelError {
             MurmelError::UnconnectedHeader |
             MurmelError::NoTip |
             MurmelError::NoPeers | MurmelError::BadMerkleRoot |
+            MurmelError::Handshake |
             MurmelError::UnknownUTXO => write!(f, "{}", self.description()),
+            MurmelError::Lost(ref s) |
             MurmelError::Downstream(ref s) => write!(f, "{}", s),
             MurmelError::IO(ref err) => write!(f, "IO error: {}", err),
             MurmelError::Util(ref err) => write!(f, "Util error: {}", err),

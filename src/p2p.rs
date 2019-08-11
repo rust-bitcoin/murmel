@@ -517,7 +517,7 @@ impl<Message: Version + Send + Sync + Clone,
                     Err(ref e) => {
                         peers.write().unwrap().remove(&pid);
                         debug!("finised with error peer={}", pid);
-                        Err(MurmelError::Downstream(format!("{:?}", e)))
+                        Err(MurmelError::Lost(format!("{:?}", e)))
                     }
                 }
             }))}))
@@ -541,22 +541,19 @@ impl<Message: Version + Send + Sync + Clone,
             Ok(addr) => Box::new(
                 future::poll_fn (move |ctx|
                     {
+                        waker.lock().unwrap().insert(pid, ctx.waker().clone());
                         // retrieve peer from peer map
                         if let Some(peer) = peers.read().unwrap().get(&pid) {
                             // return pid if peer is connected (handshake perfect)
                             if peer.lock().unwrap().connected {
                                 trace!("woke up to handshake");
-                                //next wakeup is for disconnect
-                                waker.lock().unwrap().insert(pid, ctx.waker().clone());
                                 Ok(Async::Ready(addr))
                             } else {
-                                waker.lock().unwrap().insert(pid, ctx.waker().clone());
                                 Ok(Async::Pending)
                             }
                         } else {
-                            // timeout will pick up
-                            waker.lock().unwrap().insert(pid, ctx.waker().clone());
-                            Ok(Async::Pending)
+                            // rejected or failed handshake
+                            Err(MurmelError::Handshake)
                         }
                     })),
             // resolve to an error returning future if initiation fails
