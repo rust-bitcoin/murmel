@@ -53,7 +53,7 @@ pub enum MurmelError {
     /// Bitcoin serialize error
     Serialize(encode::Error),
     /// Hammersbald error
-    Hammersbald(HammersbaldError)
+    Hammersbald(HammersbaldError),
 }
 
 impl Error for MurmelError {

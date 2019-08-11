@@ -502,24 +502,20 @@ impl<Message: Version + Send + Sync + Clone,
         let peers = self.peers.clone();
         let peers2 = self.peers.clone();
 
-        Box::new(connect
-            .map_err (move |e| {
-                // remove peers and candidates entry
-                info!("timeout on handshake peer={}", pid);
-                peers2.write().unwrap().remove(&pid);
-                e
-            })
-            .and_then (move|address| {
-            Box::new(future::poll_fn (move | _ | {
-                // retrieve peer from peer map
-                if let Some(_) = peers.read().unwrap().get(&pid) {
-                    Ok(Async::Pending)
-                } else {
-                    trace!("peer {:?} finished", address);
-                    Ok(Async::Ready(address))
+        Box::new(connect.then (move |r| {
+            Box::new(future::poll_fn(move |ctx| {
+                match r {
+                    Ok(addr) => {
+                        debug!("finished orderly peer={}", pid);
+                        Ok(Async::Ready(addr))
+                    }
+                    Err(ref e) => {
+                        peers.write().unwrap().remove(&pid);
+                        debug!("finised with error peer={}", pid);
+                        Err(MurmelError::Downstream(format!("{:?}", e)))
+                    }
                 }
-            }
-            ))}))
+            }))}))
     }
 
     /// return a future that resolves to a connected (handshake perfect) peer or timeout
