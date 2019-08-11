@@ -53,6 +53,7 @@ use downstream::SharedDownstream;
 use bitcoin::network::message::NetworkMessage;
 use bitcoin::network::message::RawNetworkMessage;
 use p2p::BitcoinP2PConfig;
+use futures::task::Waker;
 
 const MAX_PROTOCOL_VERSION: u32 = 70001;
 
@@ -70,11 +71,11 @@ impl Constructor {
     /// open DBs
     pub fn open_db(path: Option<&Path>, network: Network, server: bool, script_cache_size: usize, birth: u64) -> Result<SharedChainDB, MurmelError> {
         let mut chaindb =
-        if let Some(path) = path {
-            ChainDB::new(path, network, script_cache_size)?
-        } else {
-            ChainDB::mem(network, script_cache_size)?
-        };
+            if let Some(path) = path {
+                ChainDB::new(path, network, script_cache_size)?
+            } else {
+                ChainDB::mem(network, script_cache_size)?
+            };
         chaindb.init(server)?;
         Ok(Arc::new(RwLock::new(chaindb)))
     }
@@ -102,8 +103,8 @@ impl Constructor {
         let (p2p, p2p_control) =
             P2P::new(p2pconfig, PeerMessageSender::new(to_dispatcher), back_pressure);
 
-        #[cfg(feature="lightning")] let lightning = Arc::new(Mutex::new(LightningConnector::new(network, p2p_control.clone())));
-        #[cfg(not(feature="lightning"))] let lightning = Arc::new(Mutex::new(DownStreamDummy{}));
+        #[cfg(feature = "lightning")] let lightning = Arc::new(Mutex::new(LightningConnector::new(network, p2p_control.clone())));
+        #[cfg(not(feature = "lightning"))] let lightning = Arc::new(Mutex::new(DownStreamDummy {}));
 
 
         let timeout = Arc::new(Mutex::new(Timeout::new(p2p_control.clone())));
@@ -153,93 +154,94 @@ impl Constructor {
 
         // the task that keeps us connected
         // note that this call does not return
-        thread_pool.run(self.keep_connected(network,self.p2p.clone(), peers, min_connections, nodns)).unwrap();
+        thread_pool.run(Self::keep_connected(network, self.p2p.clone(), peers, min_connections, nodns)).unwrap();
         Ok(())
     }
 
-    fn keep_connected(&self, network: Network, p2p: Arc<P2P<NetworkMessage, RawNetworkMessage, BitcoinP2PConfig>>, peers: Vec<SocketAddr>, min_connections: usize, nodns: bool) -> Box<Future<Item=(), Error=Never> + Send> {
-
+    fn keep_connected(network: Network, p2p: Arc<P2P<NetworkMessage, RawNetworkMessage, BitcoinP2PConfig>>, peers: Vec<SocketAddr>, min_connections: usize, nodns: bool) -> KeepConnected {
         // add initial peers if any
         let mut added = Vec::new();
         for addr in &peers {
-            added.push(p2p.add_peer("bitcoin",PeerSource::Outgoing(addr.clone())));
+            added.push(p2p.add_peer("bitcoin", PeerSource::Outgoing(addr.clone())));
         }
 
-        struct KeepConnected {
-            network: Network,
-            min_connections: usize,
-            connections: Vec<Box<Future<Item=SocketAddr, Error=MurmelError> + Send>>,
-            p2p: Arc<P2P<NetworkMessage, RawNetworkMessage, BitcoinP2PConfig>>,
-            dns: Vec<SocketAddr>,
-            earlier: HashSet<SocketAddr>,
-            nodns: bool,
-        }
+        return KeepConnected {
+            network,
+            min_connections,
+            connections: added,
+            p2p,
+            dns: Vec::new(),
+            earlier: HashSet::new(),
+            nodns,
+            waker: Arc::new(Mutex::new(None))
+        };
+    }
+}
+struct KeepConnected {
+    network: Network,
+    min_connections: usize,
+    connections: Vec<Box<dyn Future<Item=SocketAddr, Error=MurmelError> + Send>>,
+    p2p: Arc<P2P<NetworkMessage, RawNetworkMessage, BitcoinP2PConfig>>,
+    dns: Vec<SocketAddr>,
+    earlier: HashSet<SocketAddr>,
+    nodns: bool,
+    waker: Arc<Mutex<Option<Waker>>>
+}
 
-        // this task runs until it runs out of peers
-        impl Future for KeepConnected {
-            type Item = ();
-            type Error = Never;
+// this task runs until it runs out of peers
+impl Future for KeepConnected {
+    type Item = ();
+    type Error = Never;
 
-            fn poll(&mut self, cx: &mut task::Context) -> Poll<Self::Item, Self::Error> {
-                // return from this loop with 'pending' if enough peers are connected
-                loop {
-                    // add further peers from db if needed
-                    self.peers_from_db();
-                    if !self.nodns {
-                        self.dns_lookup();
-                    }
-
-                    if self.connections.len() == 0 {
-                        // run out of peers. this is fatal
-                        error!("no more peers to connect");
-                        return Ok(Async::Ready(()));
-                    }
-                    // find a finished peer
-                    let finished = self.connections.iter_mut().enumerate().filter_map(|(i, f)| {
-                        // if any of them finished
-                        // note that poll is reusing context of this poll, so wakeups come here
-                        match f.poll(cx) {
-                            Ok(Async::Pending) => None,
-                            Ok(Async::Ready(e)) => {
-                                trace!("woke up to lost peer");
-                                Some((i, Ok(e)))
-                            }
-                            Err(e) => {
-                                trace!("woke up to peer error");
-                                Some((i, Err(e)))
-                            }
-                        }
-                    }).next();
-                    match finished {
-                        Some((i, _)) => self.connections.remove(i),
-                        None => return Ok(Async::Pending)
-                    };
+    fn poll(&mut self, cx: &mut task::Context) -> Poll<Self::Item, Self::Error> {
+        // find a finished peers
+        let finished = self.connections.iter_mut().enumerate().filter_map(|(i, c)| {
+            match c.poll(cx) {
+                Ok(Async::Pending) => None,
+                Ok(Async::Ready(address)) => {
+                    debug!("keep connected woke up to lost peer at {}", address);
+                    Some(i)
+                },
+                Err(e) => {
+                    debug!("keep connected woke up to error {:?}", e);
+                    Some(i)
                 }
             }
+        }).collect::<Vec<_>>();
+        let mut n = 0;
+        for i in finished.iter() {
+            self.connections.remove(*i - n);
+            n += 1;
         }
-
-        impl KeepConnected {
-            fn peers_from_db(&mut self) {
-                // TODO
+        while self.connections.len() < self.min_connections {
+            if let Some(addr) = self.get_an_address() {
+                self.connections.push(self.p2p.add_peer("bitcoin", PeerSource::Outgoing(addr)));
             }
-
-            fn dns_lookup(&mut self) {
-                while self.connections.len() < self.min_connections {
-                    if self.dns.len() == 0 {
-                        self.dns = dns_seed(self.network);
-                    }
-                    if self.dns.len() > 0 {
-                        let mut rng = thread_rng();
-                        let addr = self.dns[(rng.next_u64() as usize) % self.dns.len()];
-                        self.connections.push(self.p2p.add_peer("bitcoin", PeerSource::Outgoing(addr)));
-                    }
-                    else {
-                        break;
-                    }
-                }
+            else {
+                warn!("no more bitcoin peers to connect, currently have {}", self.connections.len());
+                break;
             }
         }
+        let mut waker = self.waker.lock().unwrap();
+        *waker = Some(cx.waker().clone());
+        return Ok(Async::Pending);
+    }
+}
 
-        Box::new(KeepConnected { network, min_connections, connections: added, p2p, dns: Vec::new(), nodns, earlier: HashSet::new() })
+impl KeepConnected {
+    fn get_an_address(&mut self) -> Option<SocketAddr> {
+        if !self.nodns && self.dns.len() == 0 {
+            self.dns = dns_seed(self.network);
+        }
+        if self.dns.len() > 0 {
+            let eligible = self.dns.iter().filter(|a| !self.earlier.contains(a)).cloned().collect::<Vec<_>>();
+            if eligible.len() > 0 {
+                let mut rng = thread_rng();
+                let choice = eligible[(rng.next_u32() as usize) % eligible.len()];
+                self.earlier.insert(choice.clone());
+                return Some(choice);
+            }
+        }
+        None
     }
 }
