@@ -506,8 +506,13 @@ impl<Message: Version + Send + Sync + Clone,
             Box::new(future::poll_fn(move |ctx| {
                 match r {
                     Ok(addr) => {
-                        debug!("finished orderly peer={}", pid);
-                        Ok(Async::Ready(addr))
+                        if peers.read().unwrap().get(&pid).is_some() {
+                            Ok(Async::Pending)
+                        }
+                        else {
+                            debug!("finished orderly peer={}", pid);
+                            Ok(Async::Ready(addr))
+                        }
                     }
                     Err(ref e) => {
                         peers.write().unwrap().remove(&pid);
