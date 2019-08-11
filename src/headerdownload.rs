@@ -163,13 +163,14 @@ impl HeaderDownload {
             headers_queue.extend(headers.iter());
             while !headers_queue.is_empty() {
                 let mut disconnected_headers = Vec::new();
+                let mut connected_headers = Vec::new();
                 {
                     let mut chaindb = self.chaindb.write().unwrap();
                     while let Some(header) = headers_queue.pop_front() {
                         // add to blockchain - this also checks proof of work
                         match chaindb.add_header(&header.header) {
                             Ok(Some((stored, unwinds, forwards))) => {
-                                self.downstream.lock().unwrap().header_connected(&stored.header, stored.height);
+                                connected_headers.push((stored.header.clone(), stored.height));
                                 // POW is ok, stored top chaindb
                                 some_new = true;
 
@@ -198,9 +199,13 @@ impl HeaderDownload {
                     }
                     chaindb.batch()?;
                 }
-
+                // must call downstream outside of chaindb lock as it might also lock chaindb
+                let mut downstream = self.downstream.lock().unwrap();
                 for header in &disconnected_headers {
-                    self.downstream.lock().unwrap().block_disconnected(header);
+                    downstream.block_disconnected(header);
+                }
+                for (header, height) in &connected_headers {
+                    downstream.header_connected(header, *height);
                 }
             }
 
