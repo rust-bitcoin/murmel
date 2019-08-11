@@ -545,6 +545,8 @@ impl<Message: Version + Send + Sync + Clone,
                             // return pid if peer is connected (handshake perfect)
                             if peer.lock().unwrap().connected {
                                 trace!("woke up to handshake");
+                                //next wakeup is for disconnect
+                                waker.lock().unwrap().insert(pid, ctx.waker().clone());
                                 Ok(Async::Ready(addr))
                             } else {
                                 waker.lock().unwrap().insert(pid, ctx.waker().clone());
@@ -552,6 +554,7 @@ impl<Message: Version + Send + Sync + Clone,
                             }
                         } else {
                             // timeout will pick up
+                            waker.lock().unwrap().insert(pid, ctx.waker().clone());
                             Ok(Async::Pending)
                         }
                     })),
@@ -608,11 +611,10 @@ impl<Message: Version + Send + Sync + Clone,
         self.dispatcher.send(PeerMessage::Disconnected(pid, banned));
         {
             let mut wakers = self.waker.lock().unwrap();
-            if let Some(waker) = wakers.get(&pid) {
+            if let Some(waker) = wakers.remove(&pid) {
                 trace!("waking for disconnect");
                 waker.wake();
             }
-            wakers.remove(&pid);
         }
         {
             let mut peers = self.peers.write().unwrap();
@@ -839,7 +841,7 @@ impl<Message: Version + Send + Sync + Clone,
                     if handshake {
                         info!("handshake peer={}", pid);
                         self.connected (pid, address);
-                        if let Some(w) = self.waker.lock().unwrap().get(&pid) {
+                        if let Some(w) = self.waker.lock().unwrap().remove(&pid) {
                             trace!("waking for handshake");
                             w.wake();
                         }
