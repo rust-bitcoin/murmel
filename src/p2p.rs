@@ -501,12 +501,14 @@ impl<Message: Version + Send + Sync + Clone,
 
         let peers = self.peers.clone();
         let peers2 = self.peers.clone();
+        let waker = self.waker.clone();
 
         Box::new(connect.then (move |r| {
             Box::new(future::poll_fn(move |ctx| {
                 match r {
                     Ok(addr) => {
                         if peers.read().unwrap().get(&pid).is_some() {
+                            waker.lock().unwrap().insert(pid, ctx.waker().clone());
                             Ok(Async::Pending)
                         }
                         else {
