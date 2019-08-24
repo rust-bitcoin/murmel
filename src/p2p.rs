@@ -296,6 +296,16 @@ pub struct BitcoinP2PConfig {
     pub server: bool,
 }
 
+struct PassThroughBufferReader<'a> {
+    buffer: &'a mut Buffer
+}
+
+impl<'a> io::Read for PassThroughBufferReader<'a> {
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize, io::Error> {
+        self.buffer.read(buf)
+    }
+}
+
 impl P2PConfig<NetworkMessage, RawNetworkMessage> for BitcoinP2PConfig {
     // compile this node's version message for outgoing connections
     fn version (&self, remote: &SocketAddr, max_protocol_version: u32) -> NetworkMessage {
@@ -377,8 +387,9 @@ impl P2PConfig<NetworkMessage, RawNetworkMessage> for BitcoinP2PConfig {
     // decode a message from the buffer if possible
     fn decode(&self, src: &mut Buffer) -> Result<Option<RawNetworkMessage>, io::Error> {
         // attempt to decode
+        let passthrough = PassThroughBufferReader{buffer: src};
         let decode: Result<RawNetworkMessage, encode::Error> =
-            Decodable::consensus_decode(src);
+            Decodable::consensus_decode(passthrough);
 
         match decode {
             Ok(m) => {

@@ -25,13 +25,12 @@ use bitcoin::{
         script::Script,
         transaction::{OutPoint, Transaction},
     },
-    consensus::{Decodable, Decoder, Encodable, encode, Encoder},
+    consensus::{Decodable, Encodable},
     network::constants::Network
 };
 use bip158;
 use bip158::{BlockFilter, SCRIPT_FILTER, BlockFilterReader};
 use bitcoin_hashes::{Hash, sha256d};
-use byteorder::{BigEndian, ByteOrder};
 use error::MurmelError;
 use filtercache::FilterCache;
 use filtercalculator::TXID_FILTER;
@@ -315,7 +314,7 @@ impl ChainDB {
         let mut txdata = Vec::new();
         if let Some((_, block)) = self.db.get_hash_keyed::<StoredBlock>(block_id)? {
             for txref in block.txrefs {
-                txdata.push(self.db.get_decodable::<Transaction>(txref)?.1);
+                txdata.push(self.db.get_decodable::<Transaction>(PRef::from(txref))?.1);
             }
             return Ok(Some(txdata));
         }
@@ -335,7 +334,7 @@ impl ChainDB {
             let txids = block.txdata.iter().map(|tx| tx.txid()).collect::<Vec<_>>();
             let mut txrefs = Vec::with_capacity(txids.len());
             for tx in &block.txdata {
-                txrefs.push(self.db.put_encodable(tx)?);
+                txrefs.push(self.db.put_encodable(tx)?.as_u64());
             }
             let pref = self.db.put_hash_keyed(&StoredBlock { header: header.stored, txids, txrefs })?;
             return Ok(pref);
@@ -404,7 +403,7 @@ impl ChainDB {
                                         // a transaction that we are interested in
                                         let coin = OutPoint::consensus_decode(&mut Cursor::new(remains[pos].as_slice())).unwrap();
                                         // get the script
-                                        let tx = self.fetch_transaction(block.txrefs[txpos]).unwrap();
+                                        let tx = self.fetch_transaction(PRef::from(block.txrefs[txpos])).unwrap();
                                         sofar.push((tx.output[coin.vout as usize].script_pubkey.clone(), header.stored.height));
                                         // one less to worry about
                                         remains.remove(pos);
@@ -484,7 +483,7 @@ impl<'a> DBScriptAccessor<'a> {
 }
 
 /// A header enriched with information about its position on the blockchain
-#[derive(Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredHeader {
     /// header
     pub header: BlockHeader,
@@ -501,37 +500,10 @@ impl BitcoinHash for StoredHeader {
     }
 }
 
-// implement encoder. tedious just repeat the consensus_encode lines
-impl<S: Encoder> Encodable<S> for StoredHeader {
-    fn consensus_encode(&self, s: &mut S) -> Result<(), encode::Error> {
-        self.header.consensus_encode(s)?;
-        self.height.consensus_encode(s)?;
-        let mut buf = [0u8; 4];
-        BigEndian::write_f32(&mut buf, self.log2work);
-        buf.consensus_encode(s)?;
-        0u16.consensus_encode(s)?;
-        Ok(())
-    }
-}
-
-// implement decoder. tedious just repeat the consensus_encode lines
-impl<D: Decoder> Decodable<D> for StoredHeader {
-    fn consensus_decode(d: &mut D) -> Result<StoredHeader, encode::Error> {
-        Ok(StoredHeader {
-            header: Decodable::consensus_decode(d)?,
-            height: Decodable::consensus_decode(d)?,
-            log2work: {
-                let buf: [u8; 4] = Decodable::consensus_decode(d)?;
-                BigEndian::read_f32(&buf)
-            }
-        })
-    }
-}
-
 const HEADER_TIP_KEY: &[u8] = &[0u8; 1];
 
 /// Filter stored
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StoredFilter {
     /// filter type
     pub filter_type: u8,
@@ -570,88 +542,20 @@ impl BitcoinHash for StoredFilter {
     }
 }
 
-// implement encoder. tedious just repeat the consensus_encode lines
-impl<S: Encoder> Encodable<S> for StoredFilter {
-    fn consensus_encode(&self, s: &mut S) -> Result<(), encode::Error> {
-        self.filter_type.consensus_encode(s)?;
-        self.block_id.consensus_encode(s)?;
-        self.filter_hash.consensus_encode(s)?;
-        self.previous.consensus_encode(s)?;
-        if let Some(ref filter) = self.filter {
-            filter.consensus_encode(s)?;
-        } else {
-            [0u8; 0].consensus_encode(s)?;
-        }
-        Ok(())
-    }
-}
-
-// implement decoder. tedious just repeat the consensus_encode lines
-impl<D: Decoder> Decodable<D> for StoredFilter {
-    fn consensus_decode(d: &mut D) -> Result<StoredFilter, encode::Error> {
-        Ok(StoredFilter {
-            filter_type: Decodable::consensus_decode(d)?,
-            block_id: Decodable::consensus_decode(d)?,
-            filter_hash: Decodable::consensus_decode(d)?,
-            previous: Decodable::consensus_decode(d)?,
-            filter: {
-                let f: Vec<u8> = Decodable::consensus_decode(d)?;
-                if f.len() == 0 {
-                    None
-                } else {
-                    Some(f)
-                }
-            },
-        })
-    }
-}
-
 /// Block stored
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StoredBlock {
     /// the block's unique id
     pub header: StoredHeader,
     /// ids of transaction within the block
     pub txids: Vec<sha256d::Hash>,
     /// persistent references to stored transactions
-    pub txrefs: Vec<PRef>
+    pub txrefs: Vec<u64>
 }
 
 impl BitcoinHash for StoredBlock {
     fn bitcoin_hash(&self) -> sha256d::Hash {
         self.header.bitcoin_hash()
-    }
-}
-
-// implement encoder. tedious just repeat the consensus_encode lines
-impl<S: Encoder> Encodable<S> for StoredBlock {
-    fn consensus_encode(&self, s: &mut S) -> Result<(), encode::Error> {
-        self.header.consensus_encode(s)?;
-        1u16.consensus_encode(s)?;
-        self.txids.consensus_encode(s)?;
-        self.txrefs.consensus_encode(s)?;
-        Ok(())
-    }
-}
-
-// implement decoder. tedious just repeat the consensus_encode lines
-impl<D: Decoder> Decodable<D> for StoredBlock {
-    fn consensus_decode(d: &mut D) -> Result<StoredBlock, encode::Error> {
-        let header = Decodable::consensus_decode(d)?;
-        let block :u16 = Decodable::consensus_decode(d)?;
-        if block > 0 {
-            Ok(StoredBlock {
-                header,
-                txids: Decodable::consensus_decode(d)?,
-                txrefs: Decodable::consensus_decode(d)?
-            })
-        }
-        else {
-            Ok(StoredBlock {
-                header,
-                txids: Vec::new(),
-                txrefs: Vec::new()
-            })
-        }
     }
 }
 

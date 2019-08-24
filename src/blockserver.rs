@@ -19,7 +19,7 @@
 
 use bitcoin::{
     BitcoinHash,
-    blockdata::block::{Block, LoneBlockHeader},
+    blockdata::block::{Block},
     consensus::encode::VarInt,
     network::message::NetworkMessage,
     network::message_blockdata::{GetBlocksMessage, GetHeadersMessage, Inventory, InvType}
@@ -73,7 +73,7 @@ impl BlockServer {
             if let Some(pos) = chaindb.pos_on_trunk(locator) {
                 let mut headers = Vec::with_capacity(2000);
                 for header in chaindb.iter_trunk(pos).take(2000) {
-                    headers.push(LoneBlockHeader{header: header.stored.header, tx_count: VarInt(0)})
+                    headers.push(header.stored.header)
                 }
                 self.p2p.send(P2PControl::Send(peer, NetworkMessage::Headers(headers)));
                 break;

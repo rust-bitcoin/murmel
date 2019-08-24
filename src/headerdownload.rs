@@ -16,16 +16,10 @@
 //!
 //! # Download headers
 //!
-use bitcoin::{
-    BitcoinHash,
-    blockdata::{
-        block::LoneBlockHeader,
-    },
-    network::{
-        message::NetworkMessage,
-        message_blockdata::{GetHeadersMessage, Inventory, InvType},
-    }
-};
+use bitcoin::{BitcoinHash, network::{
+    message::NetworkMessage,
+    message_blockdata::{GetHeadersMessage, Inventory, InvType},
+}, BlockHeader};
 use bitcoin_hashes::sha256d::Hash as Sha256dHash;
 use chaindb::SharedChainDB;
 use error::MurmelError;
@@ -140,7 +134,7 @@ impl HeaderDownload {
         Ok(())
     }
 
-    fn headers(&mut self, headers: &Vec<LoneBlockHeader>, peer: PeerId) -> Result<(), MurmelError> {
+    fn headers(&mut self, headers: &Vec<BlockHeader>, peer: PeerId) -> Result<(), MurmelError> {
         self.timeout.lock().unwrap().received(peer, 1, ExpectedReply::Headers);
 
         if headers.len() > 0 {
@@ -168,7 +162,7 @@ impl HeaderDownload {
                     let mut chaindb = self.chaindb.write().unwrap();
                     while let Some(header) = headers_queue.pop_front() {
                         // add to blockchain - this also checks proof of work
-                        match chaindb.add_header(&header.header) {
+                        match chaindb.add_header(&header) {
                             Ok(Some((stored, unwinds, forwards))) => {
                                 connected_headers.push((stored.header.clone(), stored.height));
                                 // POW is ok, stored top chaindb
@@ -192,7 +186,7 @@ impl HeaderDownload {
                                 return Ok(());
                             }
                             Err(e) => {
-                                debug!("error {} processing header {} ", e, header.header.bitcoin_hash());
+                                debug!("error {} processing header {} ", e, header.bitcoin_hash());
                                 return Ok(());
                             }
                         }

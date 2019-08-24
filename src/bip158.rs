@@ -53,7 +53,7 @@ use std::hash::Hasher;
 
 use bitcoin_hashes::{Hash, sha256d};
 use byteorder::{ByteOrder, LittleEndian};
-use siphasher::sip128::SipHasher;
+use bitcoin_hashes::siphash24;
 
 use bitcoin::{
     blockdata::{
@@ -418,9 +418,7 @@ impl GCSFilter {
 
     /// Hash an arbitary slice with siphash using parameters of this filter
     fn hash(&self, element: &[u8]) -> u64 {
-        let mut hasher = SipHasher::new_with_keys(self.k0, self.k1);
-        hasher.write(element);
-        hasher.finish()
+        siphash24::Hash::hash_to_u64_with_keys(self.k0, self.k1, element)
     }
 }
 
@@ -524,15 +522,9 @@ mod test {
     use bitcoin::blockdata::transaction::OutPoint;
 
     use super::*;
+    use bitcoin::consensus::deserialize;
 
     extern crate hex;
-
-    fn decode<T: ?Sized>(data: Vec<u8>) -> Result<T, io::Error>
-        where T: Decodable<Cursor<Vec<u8>>> {
-        let mut decoder = Cursor::new(data);
-        Ok(Decodable::consensus_decode(&mut decoder)
-            .map_err(|_| { io::Error::new(io::ErrorKind::InvalidData, "serialization error") })?)
-    }
 
     #[test]
     fn test_blockfilters() {
@@ -567,7 +559,7 @@ mod test {
             let block_hash = sha256d::Hash::from_hex(test_case[1]).unwrap();
             let previous_header_hash = sha256d::Hash::from_hex(test_case[3]).unwrap();
             let header_hash = sha256d::Hash::from_hex(test_case[5]).unwrap();
-            let block: Block = decode(hex::decode(test_case[2]).unwrap()).unwrap();
+            let block: Block = deserialize(hex::decode(test_case[2]).unwrap().as_slice()).unwrap();
             assert_eq!(block.bitcoin_hash(), block_hash);
 
             for tx in &block.txdata {
@@ -577,7 +569,7 @@ mod test {
             }
             for i in 0..8 {
                 let ref line = txs[i];
-                let tx: blockdata::transaction::Transaction = decode(hex::decode(line[1]).unwrap()).unwrap();
+                let tx: blockdata::transaction::Transaction = deserialize(hex::decode(line[1]).unwrap().as_slice()).unwrap();
                 assert_eq!(tx.txid().to_string().as_str(), line[0]);
                 for (ix, out) in tx.output.iter().enumerate() {
                     txmap.insert(OutPoint { txid: tx.txid(), vout: ix as u32 }, out.script_pubkey.clone());

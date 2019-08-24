@@ -16,18 +16,19 @@ path = "src/lib.rs"
 
 [dependencies]
 lightning = { version ="0.0.9", optional=true }
-bitcoin = { version="0.18", features = ["bitcoinconsensus"] }
-bitcoin_hashes = "0.3"
-hammersbald = { version="2.0", features=["bitcoin_support"]}
+bitcoin = { git= "https://github.com/tamasblummer/rust-bitcoin.git", branch = "add_serde_to_block", features=["serde", "bitcoinconsensus"]}
+bitcoin_hashes = "0.7"
+hammersbald = { git= "https://github.com/tamasblummer/hammersbald.git", branch = "master", features=["bitcoin_support"]}
 mio = "0.6"
-rand = "0.5"
+rand = "0.7"
 log = "0.4"
 simple_logger = "0.5.0"
 byteorder = "1.2"
 lru-cache = "0.1.1"
-siphasher = "0.3.0"
 futures={ git= "https://github.com/tamasblummer/futures-rs.git", tag = "0.2.1" }
 futures-timer= { git= "https://github.com/tamasblummer/futures-timer.git", branch = "futures_0.2.1" }
+serde="1"
+serde_derive="1"
 
 [dev-dependencies]
 rustc-serialize = "0.3"

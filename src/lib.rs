@@ -32,12 +32,12 @@ extern crate byteorder;
 extern crate futures;
 extern crate futures_timer;
 extern crate hammersbald;
-#[macro_use]
-extern crate log;
+extern crate serde;
+#[macro_use] extern crate serde_derive;
+#[macro_use] extern crate log;
 extern crate lru_cache;
 extern crate mio;
 extern crate rand;
-extern crate siphasher;
 
 #[cfg(feature="lightning")] extern crate lightning;
 #[cfg(feature="lightning")] mod lightning;
