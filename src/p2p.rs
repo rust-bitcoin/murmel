@@ -54,6 +54,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH}
 };
 use std::marker::PhantomData;
+use bitcoin::consensus::serialize;
 
 const IO_BUFFER_SIZE:usize = 1024*1024;
 const EVENT_BUFFER_SIZE:usize = 1024;
@@ -377,11 +378,8 @@ impl P2PConfig<NetworkMessage, RawNetworkMessage> for BitcoinP2PConfig {
     }
 
     // encode a message in Bitcoin's wire format extending the given buffer
-    fn encode(&self, item: &RawNetworkMessage, mut dst: &mut Buffer) -> Result<(), io::Error> {
-        match item.consensus_encode(&mut dst) {
-            Ok(_) => Ok(()),
-            Err(e) => Err(io::Error::new(io::ErrorKind::WriteZero, e))
-        }
+    fn encode(&self, item: &RawNetworkMessage, dst: &mut Buffer) -> Result<(), io::Error> {
+        dst.write_all(serialize(item).as_slice())
     }
 
     // decode a message from the buffer if possible
