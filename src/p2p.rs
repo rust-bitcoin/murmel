@@ -403,10 +403,12 @@ impl P2PConfig<NetworkMessage, RawNetworkMessage> for BitcoinP2PConfig {
                     src.rollback();
                     return Ok(None)
                 } else {
+                    error!("{:?}", e);
                     return Err(e);
                 }
             },
             Err(e) => {
+                error!("{:?}", e);
                 Err(io::Error::new(io::ErrorKind::InvalidData, e))
             }
         }
