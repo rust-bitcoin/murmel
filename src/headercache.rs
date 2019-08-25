@@ -237,7 +237,7 @@ impl HeaderCache {
                 let mut scan = prev.clone();
                 let mut height = prev.stored.height + 1;
                 let max_target = Self::max_target();
-                while height % DIFFCHANGE_INTERVAL != 0 && scan.stored.header.target() == max_target {
+                while height % DIFFCHANGE_INTERVAL != 0 && scan.stored.header.prev_blockhash != Sha256dHash::default() && scan.stored.header.target() == max_target {
                     if let Some(header) = self.headers.get(&scan.stored.header.prev_blockhash) {
                         scan = header.clone();
                         height = header.stored.height;
