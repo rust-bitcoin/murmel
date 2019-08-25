@@ -145,6 +145,7 @@ impl HeaderCache {
                 previous = prev.clone();
             } else {
                 // reject unconnected
+                trace!("previous header not in cache {}", &header.prev_blockhash);
                 return Err(MurmelError::UnconnectedHeader);
             }
             // add  to tree
@@ -202,6 +203,7 @@ impl HeaderCache {
                             if let Some(header) = self.headers.get(&scan.stored.header.prev_blockhash) {
                                 scan = header.clone();
                             } else {
+                                trace!("previous header not in cache (diff change) {}", &scan.stored.header.prev_blockhash);
                                 return Err(MurmelError::UnconnectedHeader);
                             }
                         }
@@ -240,6 +242,7 @@ impl HeaderCache {
                         scan = header.clone();
                         height = header.stored.height;
                     } else {
+                        trace!("previous header not in cache (testnet) {}", &scan.stored.header.prev_blockhash);
                         return Err(MurmelError::UnconnectedHeader);
                     }
                 }
@@ -276,6 +279,7 @@ impl HeaderCache {
                         forks_at = h.stored.header.prev_blockhash;
                         path_to_new_tip.push(forks_at);
                     } else {
+                        trace!("previous header not in cache (path to new tip) {}", &forks_at);
                         return Err(MurmelError::UnconnectedHeader);
                     }
                 }
@@ -294,6 +298,7 @@ impl HeaderCache {
                             self.trunk.truncate(pos + 1);
                         }
                     } else {
+                        trace!("previous header not in cache (header no longer on trunk) {}", &forks_at);
                         return Err(MurmelError::UnconnectedHeader);
                     }
                     self.trunk.extend(path_to_new_tip.iter().map(|h| { Arc::new(*h) }));
