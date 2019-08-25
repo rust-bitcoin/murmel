@@ -235,7 +235,7 @@ impl HeaderCache {
             } else if self.network == Network::Testnet {
                 // Scan back DIFFCHANGE_INTERVAL blocks
                 let mut scan = prev.clone();
-                let mut height = prev.stored.height + 1;
+                let mut height = prev.stored.height;
                 let max_target = Self::max_target();
                 while height % DIFFCHANGE_INTERVAL != 0 && scan.stored.header.prev_blockhash != Sha256dHash::default() && scan.stored.header.target() == max_target {
                     if let Some(header) = self.headers.get(&scan.stored.header.prev_blockhash) {
