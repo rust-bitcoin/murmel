@@ -132,6 +132,7 @@ impl ChainDB {
                 self.db.put_hash_keyed(&cached.stored)?;
                 self.db.batch()?;
                 self.store_header_tip(&cached.bitcoin_hash())?;
+                self.db.batch()?;
             }
             else {
                 error!("Failed to initialize with genesis header");
