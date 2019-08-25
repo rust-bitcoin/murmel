@@ -126,12 +126,16 @@ impl ChainDB {
         }
 
         if sl.is_empty() {
-            info!("Initialized with genesis header.");
             let genesis = genesis_block(self.network).header;
             if let Some((cached, _, _)) = self.headercache.add_header(&genesis)? {
+                info!("Initialized with genesis header {}", genesis.bitcoin_hash());
                 self.db.put_hash_keyed(&cached.stored)?;
                 self.db.batch()?;
                 self.store_header_tip(&cached.bitcoin_hash())?;
+            }
+            else {
+                error!("Failed to initialize with genesis header");
+                return Err(MurmelError::NoTip);
             }
         } else {
             info!("Caching block headers and filter headers ...");
