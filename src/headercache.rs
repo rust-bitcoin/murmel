@@ -227,7 +227,7 @@ impl HeaderCache {
                 // On non-diffchange blocks, Testnet has a rule that any 20-minute-long
                 // block interval resets the difficulty to 1
             } else if self.network == Network::Testnet &&
-                prev.stored.header.time > prev.stored.header.time + 2 * TARGET_BLOCK_SPACING {
+                next.time > prev.stored.header.time + 2 * TARGET_BLOCK_SPACING {
                 Self::max_target()
                 // On the other hand, if we are in Testnet and the block interval is less
                 // than 20 minutes, we need to scan backward to find a block for which the
