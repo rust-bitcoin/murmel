@@ -134,10 +134,6 @@ impl HeaderCache {
 
     /// add a Bitcoin header
     pub fn add_header(&mut self, header: &BlockHeader) -> Result<Option<(CachedHeader, Option<Vec<Sha256dHash>>, Option<Vec<Sha256dHash>>)>, MurmelError> {
-        if self.headers.get(&header.bitcoin_hash()).is_some() {
-            // ignore already known header
-            return Ok(None);
-        }
         if header.prev_blockhash != Sha256dHash::default() {
             // regular update
             let previous;
