@@ -228,7 +228,7 @@ impl HeaderCache {
                 // block interval resets the difficulty to 1
             } else if self.network == Network::Testnet &&
                 prev.stored.header.time > prev.stored.header.time + 2 * TARGET_BLOCK_SPACING {
-                Self::max_target()
+                Self::max_target() << 1
                 // On the other hand, if we are in Testnet and the block interval is less
                 // than 20 minutes, we need to scan backward to find a block for which the
                 // previous rule did not apply, to find the "real" difficulty.
