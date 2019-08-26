@@ -908,8 +908,8 @@ impl<Message: Version + Send + Sync + Clone,
                     if let Err(error) = self.event_processor(event, pid, needed_services, iobuf.as_mut_slice()) {
                         use std::error::Error;
 
-                        warn!("error {} peer={}", error.to_string(), pid);
                         debug!("error {:?} peer={}", error.cause(), pid);
+                        self.ban(pid, 100);
                     }
                 }
             }
