@@ -164,13 +164,13 @@ impl HeaderCache {
         }
     }
 
-    fn log2(work: Uint256) -> f32 {
+    fn log2(work: Uint256) -> f64 {
         // we will have u256 faster in Rust than 2^128 total work in Bitcoin
         assert!(work.0[2] == 0 && work.0[3] == 0);
-        ((work.0[0] as u128 + ((work.0[1] as u128) << 64)) as f32).log2()
+        ((work.0[0] as u128 + ((work.0[1] as u128) << 64)) as f64).log2()
     }
 
-    fn exp2(n: f32) -> Uint256 {
+    fn exp2(n: f64) -> Uint256 {
         // we will have u256 faster in Rust than 2^128 total work in Bitcoin
         assert!(n < 128.0);
         let e: u128 = n.exp2() as u128;

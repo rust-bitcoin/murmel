@@ -495,7 +495,7 @@ pub struct StoredHeader {
     /// chain height
     pub height: u32,
     /// log2 of total work
-    pub log2work: f32
+    pub log2work: f64
 }
 
 // need to implement if put_hash_keyed and get_hash_keyed should be used

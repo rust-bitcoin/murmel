@@ -212,7 +212,7 @@ impl HeaderDownload {
                 info!("received {} headers new tip={} from peer={}", headers.len(), new_tip, peer);
                 self.p2p.send(P2PControl::Height(height));
             } else {
-                debug!("received {} known or orphan headers from peer={}", headers.len(), peer);
+                debug!("received {} known or orphan headers [{} .. {}] from peer={}", headers.len(), headers[0].bitcoin_hash(), headers[headers.len()-1].bitcoin_hash(), peer);
             }
         }
         Ok(())
