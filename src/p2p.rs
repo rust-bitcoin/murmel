@@ -909,7 +909,7 @@ impl<Message: Version + Send + Sync + Clone,
                         use std::error::Error;
 
                         debug!("error {:?} peer={}", error.cause(), pid);
-                        self.ban(pid, 100);
+                        self.ban(pid, 10);
                     }
                 }
             }
