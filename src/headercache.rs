@@ -56,7 +56,7 @@ impl CachedHeader {
         let (mant, expt) = {
             let unshifted_expt = self.stored.header.bits >> 24;
             if unshifted_expt <= 3 {
-                ((self.stored.header.bits & 0xFFFFFF) >> (8 * (3 - unshifted_expt as usize)), 0)
+                ((self.stored.header.bits & 0xFFFFFF) >> (8 * (3 - unshifted_expt)), 0)
             } else {
                 (self.stored.header.bits & 0xFFFFFF, 8 * ((self.stored.header.bits >> 24) - 3))
             }
