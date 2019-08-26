@@ -102,11 +102,6 @@ impl HeaderDownload {
                     // ask for header(s) if observing a new block
                     ask_for_headers = true;
                 }
-            } else {
-                // do not spam us with transactions
-                debug!("received unsolicited inv {:?} peer={}", inventory.inv_type, peer);
-                self.p2p.ban(peer, 10);
-                return Ok(());
             }
         }
         if ask_for_headers {

@@ -332,7 +332,7 @@ impl P2PConfig<NetworkMessage, RawNetworkMessage> for BitcoinP2PConfig {
             nonce: self.nonce,
             user_agent: self.user_agent.clone(),
             start_height: self.height.load(Ordering::Relaxed) as i32,
-            relay: false, // there is no mempool here therefore no use for inv's of transactions
+            relay: true,
         })
     }
 
