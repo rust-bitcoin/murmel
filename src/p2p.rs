@@ -541,7 +541,6 @@ impl<Message: Version + Send + Sync + Clone,
             Ok(addr) => Box::new(
                 future::poll_fn (move |ctx|
                     {
-                        waker.lock().unwrap().insert(pid, ctx.waker().clone());
                         // retrieve peer from peer map
                         if let Some(peer) = peers.read().unwrap().get(&pid) {
                             // return pid if peer is connected (handshake perfect)
@@ -549,6 +548,7 @@ impl<Message: Version + Send + Sync + Clone,
                                 trace!("woke up to handshake");
                                 Ok(Async::Ready(addr))
                             } else {
+                                waker.lock().unwrap().insert(pid, ctx.waker().clone());
                                 Ok(Async::Pending)
                             }
                         } else {
@@ -610,15 +610,14 @@ impl<Message: Version + Send + Sync + Clone,
         {
             // remove from peers before waking up, so disconnect is recognized
             let mut peers = self.peers.write().unwrap();
-            if let Some(peer) = peers.get(&pid) {
+            if let Some(peer) = peers.remove(&pid) {
                 peer.lock().unwrap().stream.shutdown(Shutdown::Both).unwrap_or(());
             }
-            peers.remove(&pid);
         }
         {
             let mut wakers = self.waker.lock().unwrap();
             if let Some(waker) = wakers.remove(&pid) {
-                trace!("waking for disconnect");
+                debug!("waking for disconnect peer={}", pid);
                 waker.wake();
             }
         }
@@ -833,7 +832,7 @@ impl<Message: Version + Send + Sync + Clone,
                     }
                 }
                 if disconnect {
-                    info!("left us peer={}", pid);
+                    info!("disconnecting peer={}", pid);
                     self.disconnect(pid, ban);
                 }
                 else {
