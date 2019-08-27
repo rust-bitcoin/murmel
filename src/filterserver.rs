@@ -54,7 +54,7 @@ impl FilterServer {
     fn run(&mut self, receiver: PeerMessageReceiver<NetworkMessage>) {
         while let Ok(msg) = receiver.recv() {
             if let Err(e) = match msg {
-                PeerMessage::Message(pid, msg) => {
+                PeerMessage::Incoming(pid, msg) => {
                     match msg {
                         NetworkMessage::GetCFCheckpt(get) => self.get_cfcheckpt(pid, get),
                         NetworkMessage::GetCFHeaders(get) => self.get_cfheaders(pid, get),

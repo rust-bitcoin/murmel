@@ -54,7 +54,7 @@ impl Ping {
         loop {
             while let Ok(msg) = receiver.recv_timeout(Duration::from_millis(SECS*1000)) {
                 match msg {
-                    PeerMessage::Message(pid, msg) => {
+                    PeerMessage::Incoming(pid, msg) => {
                         match msg {
                             NetworkMessage::Pong(n) => {
                                 if self.asked.remove(&pid) == Some(n) {

@@ -86,19 +86,10 @@ type PeerMap<Message> = HashMap<PeerId, Mutex<Peer<Message>>>;
 /// A message from network to downstream
 #[derive(Clone)]
 pub enum PeerMessage<Message: Send + Sync + Clone> {
-    Message(PeerId, Message),
+    Outgoing(Message),
+    Incoming(PeerId, Message),
     Connected(PeerId, Option<SocketAddr>),
     Disconnected(PeerId, bool) // true if banned
-}
-
-impl<Message: Send + Sync + Clone> PeerMessage<Message> {
-    pub fn peer_id (&self) -> PeerId {
-        match self {
-            PeerMessage::Message(pid, _) |
-            PeerMessage::Connected(pid,_) |
-            PeerMessage::Disconnected(pid,_) => pid.clone()
-        }
-    }
 }
 
 pub enum P2PControl<Message: Clone> {
@@ -189,12 +180,6 @@ impl<Message: Send + Sync + Clone> PeerMessageSender<Message> {
     pub fn send (&self, msg: PeerMessage<Message>) {
         if let Some(ref sender) = self.sender {
             sender.lock().unwrap().send(msg).expect("P2P message send failed");
-        }
-    }
-
-    pub fn send_network(&self, peer: PeerId, msg: Message) {
-        if let Some(ref sender) = self.sender {
-            sender.lock().unwrap().send(PeerMessage::Message(peer, msg)).expect("P2P message send failed");
         }
     }
 }
@@ -865,7 +850,7 @@ impl<Message: Version + Send + Sync + Clone,
                     for msg in incoming {
                         trace!("processing {} for peer={}", msg.command(), pid);
                         if let Ok(m) = self.config.unwrap(msg) {
-                            self.dispatcher.send(PeerMessage::Message(pid, m));
+                            self.dispatcher.send(PeerMessage::Incoming(pid, m));
                         }
                         else {
                             debug!("Ban for malformed message peer={}", pid);

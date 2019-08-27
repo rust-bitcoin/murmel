@@ -99,7 +99,7 @@ impl FilterCalculator {
                             }
                         }
                     },
-                    PeerMessage::Message(pid, msg) => {
+                    PeerMessage::Incoming(pid, msg) => {
                         match msg {
                             NetworkMessage::Block(block) => {
                                 re_check = true;
@@ -112,6 +112,7 @@ impl FilterCalculator {
                             _ => {}
                         }
                     }
+                    _ => {}
                 }
             }
 

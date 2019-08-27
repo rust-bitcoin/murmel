@@ -51,7 +51,7 @@ impl BlockServer {
     fn run(&mut self, receiver: PeerMessageReceiver<NetworkMessage>) {
         while let Ok(msg) = receiver.recv() {
             if let Err(e) = match msg {
-                PeerMessage::Message(pid, msg) => {
+                PeerMessage::Incoming(pid, msg) => {
                     match msg {
                         NetworkMessage::GetHeaders(get) => self.get_headers(pid, get),
                         NetworkMessage::GetBlocks(get) => self.get_blocks(pid, get),

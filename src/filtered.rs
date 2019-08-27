@@ -81,7 +81,7 @@ impl Filtered {
                     PeerMessage::Disconnected(_, _) => {
                         Ok(())
                     }
-                    PeerMessage::Message(pid, msg) => {
+                    PeerMessage::Incoming(pid, msg) => {
                         if self.is_serving_filters(pid) {
                             match msg {
                                 NetworkMessage::Ping(_) => self.get_filter_headers(pid, SCRIPT_FILTER),
@@ -96,7 +96,8 @@ impl Filtered {
                         else {
                             Ok(())
                         }
-                    }
+                    },
+                    _ => { Ok(())}
                 } {
                     error!("Error processing filters: {}", e);
                 }
