@@ -16,7 +16,7 @@ path = "src/lib.rs"
 
 [dependencies]
 lightning = { version ="0.0.9", optional=true }
-bitcoin = { git= "https://github.com/tamasblummer/rust-bitcoin.git", branch = "add_serde_to_block", features=["serde", "bitcoinconsensus"]}
+bitcoin = { git= "https://github.com/tamasblummer/rust-bitcoin.git", branch = "patches", features=["serde", "bitcoinconsensus"]}
 bitcoin_hashes = "0.7"
 hammersbald = { git= "https://github.com/tamasblummer/hammersbald.git", branch = "master", features=["bitcoin_support"]}
 mio = "0.6"
