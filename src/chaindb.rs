@@ -34,7 +34,6 @@ use hammersbald::{
 };
 use headercache::{CachedHeader, HeaderCache};
 use std::{
-    collections::{VecDeque},
     sync::{Arc, RwLock}
 };
 use std::{
@@ -82,24 +81,21 @@ impl ChainDB {
     }
 
     fn init_headers(&mut self) -> Result<(), Error> {
-        let mut sl = VecDeque::new();
-        {
-            if let Some(tip) = self.fetch_header_tip()? {
-                info!("reading stored header chain from tip {}", tip);
-                let mut h = tip;
-                while let Some(stored) = self.fetch_header(&h)? {
-                    sl.push_front(stored.clone());
-                    if stored.header.prev_blockhash != sha256d::Hash::default() {
-                        h = stored.header.prev_blockhash;
-                    } else {
-                        break;
-                    }
+        if let Some(tip) = self.fetch_header_tip()? {
+            info!("reading stored header chain from tip {}", tip);
+            let mut h = tip;
+            while let Some(stored) = self.fetch_header(&h)? {
+                self.headercache.add_header_unchecked(&stored);
+                if stored.header.prev_blockhash != sha256d::Hash::default() {
+                    h = stored.header.prev_blockhash;
+                } else {
+                    break;
                 }
-                info!("read {} headers", sl.len());
             }
+            self.headercache.reverse_trunk();
+            info!("read {} headers", self.headercache.len());
         }
-
-        if sl.is_empty() {
+        else {
             let genesis = genesis_block(self.network).header;
             if let Some((cached, _, _)) = self.headercache.add_header(&genesis)? {
                 info!("Initialized with genesis header {}", genesis.bitcoin_hash());
@@ -111,12 +107,6 @@ impl ChainDB {
             else {
                 error!("Failed to initialize with genesis header");
                 return Err(Error::NoTip);
-            }
-        } else {
-            info!("Caching block headers ...");
-            self.headercache.clear();
-            while let Some(stored) = sl.pop_front() {
-                self.headercache.add_header_unchecked(&stored);
             }
         }
         Ok(())

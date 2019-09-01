@@ -62,7 +62,7 @@ pub struct Constructor {
 
 impl Constructor {
     /// open DBs
-    pub fn open_db(path: Option<&Path>, network: Network, birth: u64) -> Result<SharedChainDB, Error> {
+    pub fn open_db(path: Option<&Path>, network: Network, _birth: u64) -> Result<SharedChainDB, Error> {
         let mut chaindb =
             if let Some(path) = path {
                 ChainDB::new(path, network)?

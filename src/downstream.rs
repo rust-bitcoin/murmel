@@ -41,9 +41,9 @@ pub trait Downstream : Send + Sync {
 pub struct DownStreamDummy {}
 
 impl Downstream for DownStreamDummy {
-    fn block_connected(&mut self, block: &Block, height: u32) {}
+    fn block_connected(&mut self, _block: &Block, _height: u32) {}
 
-    fn header_connected(&mut self, header: &BlockHeader, height: u32) {}
+    fn header_connected(&mut self, _header: &BlockHeader, _height: u32) {}
 
-    fn block_disconnected(&mut self, header: &BlockHeader) {}
+    fn block_disconnected(&mut self, _header: &BlockHeader) {}
 }

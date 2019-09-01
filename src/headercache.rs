@@ -120,15 +120,18 @@ impl HeaderCache {
         HeaderCache { network, headers: HashMap::with_capacity(EXPECTED_CHAIN_LENGTH), trunk: Vec::with_capacity(EXPECTED_CHAIN_LENGTH) }
     }
 
-    pub fn clear(&mut self) {
-        self.headers.clear();
-        self.trunk.truncate(0);
-    }
-
     pub fn add_header_unchecked(&mut self, stored: &StoredHeader) {
         let id = Arc::new(stored.bitcoin_hash());
         self.headers.insert(id.clone(), CachedHeader::new(stored.clone()));
         self.trunk.push(id);
+    }
+
+    pub fn reverse_trunk(&mut self) {
+        self.trunk.reverse()
+    }
+
+    pub fn len (&self) -> usize {
+        self.trunk.len()
     }
 
     /// add a Bitcoin header
