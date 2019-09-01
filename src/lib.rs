@@ -41,13 +41,8 @@ extern crate rand;
 
 #[cfg(feature="lightning")] extern crate lightning;
 #[cfg(feature="lightning")] mod lightning;
-mod filtered;
-mod blockserver;
-mod scriptcache;
-mod filterserver;
 mod headercache;
-mod filtercache;
-mod filtercalculator;
+
 pub mod ping;
 pub mod dns;
 pub mod timeout;

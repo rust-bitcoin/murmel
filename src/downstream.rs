@@ -23,7 +23,7 @@ use bitcoin::{
     },
 };
 
-use std::sync::{Arc, Weak, Mutex};
+use std::sync::{Arc, Mutex};
 
 pub type SharedDownstream = Arc<Mutex<dyn Downstream>>;
 

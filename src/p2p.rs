@@ -20,7 +20,7 @@
 //!
 
 use bitcoin::{
-    consensus::{Decodable, Encodable, encode}
+    consensus::{Decodable, encode}
 };
 use bitcoin::network::{
     address::Address,
@@ -498,7 +498,6 @@ impl<Message: Version + Send + Sync + Clone,
         let connect = self.connect_peer_with_timeout(pid,CONNECT_TIMEOUT_SECONDS, source.clone());
 
         let peers = self.peers.clone();
-        let peers2 = self.peers.clone();
         let waker = self.waker.clone();
 
         Box::new(connect.then (move |r| {

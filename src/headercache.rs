@@ -31,8 +31,7 @@ use chaindb::StoredHeader;
 use error::Error;
 use std::{
     collections::HashMap,
-    sync::Arc,
-    cell::Cell
+    sync::Arc
 };
 
 #[derive(Clone)]

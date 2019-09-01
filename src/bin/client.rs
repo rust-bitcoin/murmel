@@ -75,8 +75,6 @@ pub fn main() {
         }
     }
 
-    let cache = 0;
-
     let mut peers = get_peers();
     if peers.is_empty () {
         peers.push(SocketAddr::from(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 8333)));
@@ -95,11 +93,11 @@ pub fn main() {
 
     let chaindb =
         if let Some(path) = find_arg("db") {
-            Constructor::open_db(Some(&Path::new(path.as_str())), network, false, cache, birth).unwrap()
+            Constructor::open_db(Some(&Path::new(path.as_str())), network,  birth).unwrap()
         } else {
-            Constructor::open_db(Some(&Path::new("client.db")), network, false, cache, birth).unwrap()
+            Constructor::open_db(Some(&Path::new("client.db")), network, birth).unwrap()
         };
-    let mut spv = Constructor::new("/Murmel:0.1.0/".to_string(), network, listen, true, chaindb).unwrap();
+    let mut spv = Constructor::new(network, listen, chaindb).unwrap();
     spv.run(network, peers, connections, true).expect("can not start node");
 }
 

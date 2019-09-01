@@ -24,7 +24,6 @@ use bitcoin_hashes::sha256d::Hash as Sha256dHash;
 use chaindb::SharedChainDB;
 use error::Error;
 use p2p::{P2PControl, P2PControlSender, PeerId, PeerMessage, PeerMessageReceiver, PeerMessageSender, SERVICE_BLOCKS};
-use downstream::Downstream;
 use std::{
     collections::VecDeque,
     sync::mpsc,

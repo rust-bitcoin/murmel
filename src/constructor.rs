@@ -24,21 +24,17 @@ use bitcoin::{
         constants::Network
     }
 };
-use blockserver::BlockServer;
 use chaindb::{ChainDB, SharedChainDB};
 use dispatcher::Dispatcher;
 use dns::dns_seed;
 use error::Error;
-use filtercalculator::FilterCalculator;
-use filtered::Filtered;
-use filterserver::FilterServer;
 use futures::{
     executor::ThreadPool,
     future,
     prelude::*,
 };
 use headerdownload::HeaderDownload;
-use p2p::{P2P, P2PControl, PeerMessageSender, PeerSource, SERVICE_BLOCKS, SERVICE_FILTERS};
+use p2p::{P2P, P2PControl, PeerMessageSender, PeerSource};
 use ping::Ping;
 use rand::{RngCore, thread_rng};
 use std::{
@@ -61,34 +57,27 @@ const MAX_PROTOCOL_VERSION: u32 = 70001;
 pub struct Constructor {
     p2p: Arc<P2P<NetworkMessage, RawNetworkMessage, BitcoinP2PConfig>>,
     /// this should be accessed by Lightning
-    pub downstream: SharedDownstream,
-    /// message dispatcher
-    dispatcher: Dispatcher<NetworkMessage>,
-    server: bool,
+    pub downstream: SharedDownstream
 }
 
 impl Constructor {
     /// open DBs
-    pub fn open_db(path: Option<&Path>, network: Network, server: bool, script_cache_size: usize, birth: u64) -> Result<SharedChainDB, Error> {
+    pub fn open_db(path: Option<&Path>, network: Network, birth: u64) -> Result<SharedChainDB, Error> {
         let mut chaindb =
             if let Some(path) = path {
-                ChainDB::new(path, network, script_cache_size)?
+                ChainDB::new(path, network)?
             } else {
-                ChainDB::mem(network, script_cache_size)?
+                ChainDB::mem(network)?
             };
-        chaindb.init(server)?;
+        chaindb.init()?;
         Ok(Arc::new(RwLock::new(chaindb)))
     }
 
     /// Construct the stack
-    pub fn new(user_agent: String, network: Network, listen: Vec<SocketAddr>, server: bool, chaindb: SharedChainDB) -> Result<Constructor, Error> {
-        let back_pressure = if server {
-            1000
-        } else {
-            10
-        };
+    pub fn new(network: Network, listen: Vec<SocketAddr>, chaindb: SharedChainDB) -> Result<Constructor, Error> {
+        const BACK_PRESSURE:usize = 10;
 
-        let (to_dispatcher, from_p2p) = mpsc::sync_channel(back_pressure);
+        let (to_dispatcher, from_p2p) = mpsc::sync_channel(BACK_PRESSURE);
 
 
         let p2pconfig = BitcoinP2PConfig {
@@ -101,7 +90,7 @@ impl Constructor {
         };
 
         let (p2p, p2p_control) =
-            P2P::new(p2pconfig, PeerMessageSender::new(to_dispatcher), back_pressure);
+            P2P::new(p2pconfig, PeerMessageSender::new(to_dispatcher), BACK_PRESSURE);
 
         #[cfg(feature = "lightning")] let lightning = Arc::new(Mutex::new(LightningConnector::new(network, p2p_control.clone())));
         #[cfg(not(feature = "lightning"))] let lightning = Arc::new(Mutex::new(DownStreamDummy {}));
@@ -113,20 +102,12 @@ impl Constructor {
 
         dispatcher.add_listener(HeaderDownload::new(chaindb.clone(), p2p_control.clone(), timeout.clone(), lightning.clone()));
         dispatcher.add_listener(Ping::new(p2p_control.clone(), timeout.clone()));
-        if server {
-            dispatcher.add_listener(FilterCalculator::new(network, chaindb.clone(), p2p_control.clone(), timeout.clone()));
-            dispatcher.add_listener(FilterServer::new(chaindb.clone(), p2p_control.clone()));
-            dispatcher.add_listener(BlockServer::new(chaindb.clone(), p2p_control.clone()));
-        } else {
-            dispatcher.add_listener(Filtered::new(chaindb.clone(), p2p_control.clone(), timeout.clone(), lightning.clone(), None));
-        }
-
 
         for addr in &listen {
             p2p_control.send(P2PControl::Bind(addr.clone()));
         }
 
-        Ok(Constructor { p2p, dispatcher, server, downstream: lightning })
+        Ok(Constructor { p2p, downstream: lightning })
     }
 
     /// Run the stack. This should be called AFTER registering listener of the ChainWatchInterface,
@@ -135,11 +116,7 @@ impl Constructor {
     /// * min_connections - keep connections with at least this number of peers. Peers will be randomly chosen
     /// from those discovered in earlier runs
     pub fn run(&mut self, network: Network, peers: Vec<SocketAddr>, min_connections: usize, nodns: bool) -> Result<(), Error> {
-        let needed_services = if self.server {
-            0
-        } else {
-            SERVICE_BLOCKS + SERVICE_FILTERS
-        };
+        let needed_services = 0;
 
         let p2p2 = self.p2p.clone();
         let p2p_task = Box::new(future::poll_fn(move |ctx| {
