@@ -85,7 +85,7 @@ impl ChainDB {
             info!("reading stored header chain from tip {}", tip);
             let mut h = tip;
             while let Some(stored) = self.fetch_header(&h)? {
-                self.headercache.add_header_unchecked(&stored);
+                self.headercache.add_header_unchecked(&h, &stored);
                 if stored.header.prev_blockhash != sha256d::Hash::default() {
                     h = stored.header.prev_blockhash;
                 } else {

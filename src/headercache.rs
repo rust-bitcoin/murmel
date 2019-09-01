@@ -40,9 +40,8 @@ pub struct CachedHeader {
 }
 
 impl CachedHeader {
-    pub fn new (header: StoredHeader) -> CachedHeader {
-        let id = header.bitcoin_hash();
-        CachedHeader{ stored: header, id }
+    pub fn new (id: &Sha256dHash, header: StoredHeader) -> CachedHeader {
+        CachedHeader{ stored: header, id: id.clone() }
     }
 
     /// Computes the target [0, T] that a blockhash must land in to be valid
@@ -119,10 +118,10 @@ impl HeaderCache {
         HeaderCache { network, headers: HashMap::with_capacity(EXPECTED_CHAIN_LENGTH), trunk: Vec::with_capacity(EXPECTED_CHAIN_LENGTH) }
     }
 
-    pub fn add_header_unchecked(&mut self, stored: &StoredHeader) {
-        let id = stored.bitcoin_hash();
-        self.headers.insert(id.clone(), CachedHeader::new(stored.clone()));
-        self.trunk.push(id);
+    pub fn add_header_unchecked(&mut self, id: &Sha256dHash, stored: &StoredHeader) {
+        let cached = CachedHeader::new(id, stored.clone());
+        self.headers.insert(id.clone(), cached);
+        self.trunk.push(id.clone());
     }
 
     pub fn reverse_trunk(&mut self) {
@@ -154,7 +153,7 @@ impl HeaderCache {
         } else {
             // insert genesis
             let new_tip = header.bitcoin_hash();
-            let stored = CachedHeader::new(StoredHeader {
+            let stored = CachedHeader::new(&new_tip, StoredHeader {
                 header: header.clone(),
                 height: 0,
                 log2work: Self::log2(header.work())
@@ -253,7 +252,7 @@ impl HeaderCache {
                 prev.stored.header.target()
             };
 
-        let cached = CachedHeader::new(StoredHeader {
+        let cached = CachedHeader::new(&next.bitcoin_hash(), StoredHeader {
             header: next.clone(),
             height: prev.stored.height + 1,
             log2work: Self::log2(next.work() + Self::exp2(prev.stored.log2work))
