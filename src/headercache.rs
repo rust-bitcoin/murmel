@@ -30,8 +30,7 @@ use bitcoin_hashes::Hash;
 use chaindb::StoredHeader;
 use error::Error;
 use std::{
-    collections::HashMap,
-    sync::Arc
+    collections::HashMap
 };
 
 #[derive(Clone)]
@@ -108,9 +107,9 @@ pub struct HeaderCache {
     // network
     network: Network,
     // all known headers
-    headers: HashMap<Arc<Sha256dHash>, CachedHeader>,
+    headers: HashMap<Sha256dHash, CachedHeader>,
     // header chain with most work
-    trunk: Vec<Arc<Sha256dHash>>,
+    trunk: Vec<Sha256dHash>,
 }
 
 const EXPECTED_CHAIN_LENGTH: usize = 600000;
@@ -121,7 +120,7 @@ impl HeaderCache {
     }
 
     pub fn add_header_unchecked(&mut self, stored: &StoredHeader) {
-        let id = Arc::new(stored.bitcoin_hash());
+        let id = stored.bitcoin_hash();
         self.headers.insert(id.clone(), CachedHeader::new(stored.clone()));
         self.trunk.push(id);
     }
@@ -154,7 +153,7 @@ impl HeaderCache {
             return Ok(Some(self.add_header_to_tree(&previous, header)?));
         } else {
             // insert genesis
-            let new_tip = Arc::new(header.bitcoin_hash());
+            let new_tip = header.bitcoin_hash();
             let stored = CachedHeader::new(StoredHeader {
                 header: header.clone(),
                 height: 0,
@@ -162,7 +161,7 @@ impl HeaderCache {
             });
             self.trunk.push(new_tip.clone());
             self.headers.insert(new_tip.clone(), stored.clone());
-            return Ok(Some((stored, None, Some(vec!(*new_tip)))));
+            return Ok(Some((stored, None, Some(vec!(new_tip)))));
         }
     }
 
@@ -265,7 +264,7 @@ impl HeaderCache {
             return Err(Error::SpvBadProofOfWork);
         }
 
-        let next_hash = Arc::new(cached.bitcoin_hash());
+        let next_hash = cached.bitcoin_hash();
 
         // store header in cache
         self.headers.insert(next_hash.clone(), cached.clone());
@@ -286,27 +285,27 @@ impl HeaderCache {
                     }
                 }
                 path_to_new_tip.reverse();
-                path_to_new_tip.push(*next_hash);
+                path_to_new_tip.push(next_hash);
 
 
                 // compute list of headers no longer on trunk
                 if forks_at != next.prev_blockhash {
                     let mut unwinds = Vec::new();
 
-                    if let Some(pos) = self.trunk.iter().rposition(|h| { **h == forks_at }) {
+                    if let Some(pos) = self.trunk.iter().rposition(|h| { *h == forks_at }) {
                         if pos < self.trunk.len() - 1 {
                             // store and cut headers that are no longer on trunk
-                            unwinds.extend(self.trunk[pos + 1..].iter().rev().map(|h| **h));
+                            unwinds.extend(self.trunk[pos + 1..].iter().rev().map(|h| *h));
                             self.trunk.truncate(pos + 1);
                         }
                     } else {
                         trace!("previous header not in cache (header no longer on trunk) {}", &forks_at);
                         return Err(Error::UnconnectedHeader);
                     }
-                    self.trunk.extend(path_to_new_tip.iter().map(|h| { Arc::new(*h) }));
+                    self.trunk.extend(path_to_new_tip.iter().map(|h| { *h }));
                     return Ok((cached, Some(unwinds), Some(path_to_new_tip)));
                 } else {
-                    self.trunk.extend(path_to_new_tip.iter().map(|h| { Arc::new(*h) }));
+                    self.trunk.extend(path_to_new_tip.iter().map(|h| { *h }));
                     return Ok((cached, None, Some(path_to_new_tip)));
                 }
             } else {
@@ -319,7 +318,7 @@ impl HeaderCache {
 
     /// position on trunk (chain with most work from genesis to tip)
     pub fn pos_on_trunk(&self, hash: &Sha256dHash) -> Option<u32> {
-        self.trunk.iter().rev().position(|e| { **e == *hash }).map(|p| (self.trunk.len() - p - 1) as u32)
+        self.trunk.iter().rev().position(|e| { *e == *hash }).map(|p| (self.trunk.len() - p - 1) as u32)
     }
 
     /// retrieve the id of the block/header with most work
@@ -332,7 +331,7 @@ impl HeaderCache {
 
     pub fn tip_hash(&self) -> Option<Sha256dHash> {
         if let Some(tip) = self.trunk.last() {
-            return Some(**tip);
+            return Some(*tip);
         }
         None
     }
@@ -396,7 +395,7 @@ impl HeaderCache {
         let iterator = self.trunk.iter().rev();
         for h in iterator {
             if s == 0 {
-                locator.push(*h.clone());
+                locator.push(h.clone());
                 count += 1;
                 s = skip;
                 if count > 10 {
