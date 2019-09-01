@@ -22,7 +22,7 @@
 use bitcoin::consensus::encode;
 use bitcoin::util;
 use bitcoin::util::bip158;
-use hammersbald::HammersbaldError;
+use hammersbald;
 use std::convert;
 use std::fmt;
 use std::io;
@@ -52,7 +52,7 @@ pub enum Error {
     /// Bitcoin serialize error
     Serialize(encode::Error),
     /// Hammersbald error
-    Hammersbald(HammersbaldError),
+    Hammersbald(hammersbald::Error),
     /// Handshake failure
     Handshake,
     /// lost connection
@@ -155,8 +155,8 @@ impl convert::From<util::Error> for Error {
     }
 }
 
-impl convert::From<HammersbaldError> for Error {
-    fn from(err: HammersbaldError) -> Error {
+impl convert::From<hammersbald::Error> for Error {
+    fn from(err: hammersbald::Error) -> Error {
         Error::Hammersbald(err)
     }
 }
