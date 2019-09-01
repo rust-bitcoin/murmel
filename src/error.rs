@@ -21,7 +21,7 @@
 
 use bitcoin::consensus::encode;
 use bitcoin::util;
-use bip158;
+use bitcoin::util::bip158;
 use hammersbald::HammersbaldError;
 use std::convert;
 use std::error::Error;

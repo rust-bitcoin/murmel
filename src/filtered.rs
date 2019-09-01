@@ -27,9 +27,8 @@ use bitcoin::{
             CFCheckpt, CFHeaders, CFilter, GetCFCheckpt, GetCFHeaders, GetCFilters
         },
     },
+    util::bip158::BlockFilterReader
 };
-
-use bip158::{BlockFilterReader, SCRIPT_FILTER};
 
 use bitcoin_hashes::sha256d::Hash as Sha256dHash;
 use bitcoin_hashes::Hash;
@@ -73,7 +72,7 @@ impl Filtered {
                 if let Err(e) = match msg {
                     PeerMessage::Connected(pid,_) => {
                         if self.is_serving_filters(pid) {
-                            self.get_filter_checkpoints(pid, SCRIPT_FILTER)
+                            self.get_filter_checkpoints(pid, 0)
                         } else {
                             Ok(())
                         }
@@ -84,7 +83,7 @@ impl Filtered {
                     PeerMessage::Incoming(pid, msg) => {
                         if self.is_serving_filters(pid) {
                             match msg {
-                                NetworkMessage::Ping(_) => self.get_filter_headers(pid, SCRIPT_FILTER),
+                                NetworkMessage::Ping(_) => self.get_filter_headers(pid, 0),
                                 NetworkMessage::CFHeaders(headers) => self.filter_headers(headers, pid),
                                 NetworkMessage::CFilter(filter) => self.filter(filter, pid),
                                 NetworkMessage::CFCheckpt(c) => self.checkpoint(c, pid),
@@ -168,7 +167,7 @@ impl Filtered {
         if block.check_merkle_root() && block.check_witness_commitment() {
             let mut chaindb = self.chaindb.write().unwrap();
             // have to have filter stored before
-            if let Some(filter) = chaindb.fetch_block_filter(&block.bitcoin_hash(), SCRIPT_FILTER)? {
+            if let Some(filter) = chaindb.fetch_block_filter(&block.bitcoin_hash(), 0)? {
                 if let Some(content) = filter.filter {
                     self.timeout.lock().unwrap().received(peer, 1, ExpectedReply::Block);
                     let mut query = Vec::new();
@@ -219,8 +218,8 @@ impl Filtered {
                     stop_hash = sh.bitcoin_hash();
                 }
                 self.timeout.lock().unwrap().expect(peer, 1, ExpectedReply::FilterHeader);
-                debug!("asking for {} filter headers start height {} stop block {} peer={}", if filter_type == SCRIPT_FILTER { "script" } else { "coin" }, start_height, stop_hash, peer);
-                self.p2p.send_network(peer, NetworkMessage::GetCFHeaders(GetCFHeaders { filter_type: SCRIPT_FILTER, start_height, stop_hash }));
+                debug!("asking for {} filter headers start height {} stop block {} peer={}", if filter_type == 0 { "script" } else { "coin" }, start_height, stop_hash, peer);
+                self.p2p.send_network(peer, NetworkMessage::GetCFHeaders(GetCFHeaders { filter_type: 0, start_height, stop_hash }));
             }
         }
         Ok(())
@@ -314,7 +313,7 @@ impl Filtered {
             if inventory.inv_type == InvType::Block {
                 let chaindb = self.chaindb.read().unwrap();
                 debug!("received inv for block {}", inventory.hash);
-                if chaindb.get_block_filter(&inventory.hash, SCRIPT_FILTER).is_none() {
+                if chaindb.get_block_filter(&inventory.hash, 0).is_none() {
                     // ask for filter headers if observing a new block
                     ask_for_headers = true;
                     break;
@@ -322,7 +321,7 @@ impl Filtered {
             }
         }
         if ask_for_headers {
-            self.get_filter_headers(peer, SCRIPT_FILTER)?;
+            self.get_filter_headers(peer, 0)?;
         }
         Ok(())
     }

@@ -26,10 +26,10 @@ use bitcoin::{
         transaction::{OutPoint, Transaction},
     },
     consensus::{Decodable, Encodable},
-    network::constants::Network
+    network::constants::Network,
+    util::bip158::{self, BlockFilter, BlockFilterReader}
 };
-use bip158;
-use bip158::{BlockFilter, SCRIPT_FILTER, BlockFilterReader};
+
 use bitcoin_hashes::{Hash, sha256d};
 use error::MurmelError;
 use filtercache::FilterCache;
@@ -144,7 +144,7 @@ impl ChainDB {
             while let Some(stored) = sl.pop_front() {
                 self.headercache.add_header_unchecked(&stored);
                 let block_id = stored.header.bitcoin_hash();
-                if let Some(filter) = self.fetch_block_filter(&block_id, SCRIPT_FILTER)? {
+                if let Some(filter) = self.fetch_block_filter(&block_id, 0)? {
                     self.filtercache.add_filter_header(filter);
                 }
                 if server {
@@ -282,17 +282,11 @@ impl ChainDB {
     }
 
     /// Store a calculated filter
-    pub fn add_calculated_filter(&mut self, previous: &sha256d::Hash, filter: &BlockFilter) -> Result<(), MurmelError> {
-        let stored_filter = StoredFilter{block_id: filter.block_hash, previous: previous.clone(),
-            filter_hash: sha256d::Hash::hash(filter.content.as_slice()), filter: Some(filter.content.clone()), filter_type: filter.filter_type };
-        if filter.filter_type == TXID_FILTER {
-            self.db.put_hash_keyed(&stored_filter)?;
-            self.filtercache.add_filter(stored_filter);
-        }
-        else {
-            self.db.put_hash_keyed(&stored_filter)?;
-            self.filtercache.add_filter_header(stored_filter);
-        }
+    pub fn add_calculated_filter(&mut self, block_hash: &sha256d::Hash, previous: &sha256d::Hash, filter: &BlockFilter) -> Result<(), MurmelError> {
+        let stored_filter = StoredFilter{block_id: block_hash.clone(), previous: previous.clone(),
+            filter_hash: sha256d::Hash::hash(filter.content.as_slice()), filter: Some(filter.content.clone()), filter_type: 0 };
+        self.db.put_hash_keyed(&stored_filter)?;
+        self.filtercache.add_filter_header(stored_filter);
         Ok(())
     }
 

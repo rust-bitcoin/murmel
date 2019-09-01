@@ -41,7 +41,6 @@ extern crate rand;
 
 #[cfg(feature="lightning")] extern crate lightning;
 #[cfg(feature="lightning")] mod lightning;
-mod bip158;
 mod filtered;
 mod blockserver;
 mod scriptcache;
