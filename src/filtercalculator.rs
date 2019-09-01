@@ -34,7 +34,7 @@ use bitcoin::{
 };
 use bitcoin_hashes::sha256d::Hash as Sha256dHash;
 use chaindb::SharedChainDB;
-use error::MurmelError;
+use error::Error;
 use p2p::{P2PControl, P2PControlSender, PeerId, PeerMessage, PeerMessageReceiver, PeerMessageSender};
 use std::{
     collections::HashSet,
@@ -126,7 +126,7 @@ impl FilterCalculator {
         }
     }
 
-    fn download (&mut self) -> Result<(), MurmelError> {
+    fn download (&mut self) -> Result<(), Error> {
         let genesis = genesis_block(self.network);
         // can not work if no peer is connected
         if let Some(peer) = self.peer {
@@ -188,7 +188,7 @@ impl FilterCalculator {
         Ok(())
     }
 
-    fn block(&mut self, peer: PeerId, block: &Block) -> Result<(), MurmelError> {
+    fn block(&mut self, peer: PeerId, block: &Block) -> Result<(), Error> {
         if self.want.remove(&block.bitcoin_hash()) {
             let block_id = block.bitcoin_hash();
             let mut chaindb = self.chaindb.write().unwrap();
@@ -229,7 +229,7 @@ impl FilterCalculator {
         Ok(())
     }
 
-    fn tx_filter(block: &Block) -> Result<BlockFilter, MurmelError> {
+    fn tx_filter(block: &Block) -> Result<BlockFilter, Error> {
         let mut content = Vec::new();
         let mut writer = BlockFilterWriter::new(&mut content, block);
         for tx in &block.txdata {

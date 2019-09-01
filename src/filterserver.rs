@@ -25,7 +25,7 @@ use bitcoin::{
 use bitcoin_hashes::sha256d::Hash as Sha256dHash;
 use chaindb::{ChainDB, SharedChainDB};
 use chaindb::StoredFilter;
-use error::MurmelError;
+use error::Error;
 use p2p::{P2PControl, P2PControlSender, PeerId, PeerMessage, PeerMessageReceiver, PeerMessageSender};
 use std::{
     iter,
@@ -79,7 +79,7 @@ impl FilterServer {
         Box::new(iter::empty::<Arc<StoredFilter>>())
     }
 
-    fn get_cfcheckpt(&self, peer: PeerId, get: GetCFCheckpt) -> Result<(), MurmelError> {
+    fn get_cfcheckpt(&self, peer: PeerId, get: GetCFCheckpt) -> Result<(), Error> {
         debug!("received request for filter {} checkpoints up to {} peer={}", get.filter_type, get.stop_hash, peer);
         let chaindb = self.chaindb.read().unwrap();
         let headers = self.filter_headers(&chaindb, get.filter_type, 0, get.stop_hash).enumerate()
@@ -96,7 +96,7 @@ impl FilterServer {
         Ok(())
     }
 
-    fn get_cfheaders(&self, peer: PeerId, get: GetCFHeaders) -> Result<(), MurmelError> {
+    fn get_cfheaders(&self, peer: PeerId, get: GetCFHeaders) -> Result<(), Error> {
         debug!("received request for filter {} headers {} .. {} peer={}", get.filter_type, get.start_height, get.stop_hash, peer);
         let chaindb = self.chaindb.read().unwrap();
         let filter_hashes = self.filter_headers(&chaindb, get.filter_type, get.start_height, get.stop_hash).take(2000).map(|f| f.filter_hash).collect::<Vec<_>>();
@@ -128,7 +128,7 @@ impl FilterServer {
         Ok(())
     }
 
-    fn get_cfilters(&self, peer: PeerId, get: GetCFilters) -> Result<(), MurmelError> {
+    fn get_cfilters(&self, peer: PeerId, get: GetCFilters) -> Result<(), Error> {
         let chaindb = self.chaindb.read().unwrap();
         let filter_ids = self.filter_headers(&chaindb, get.filter_type, get.start_height, get.stop_hash).map(|f| f.filter_id()).collect::<Vec<_>>();
         for filter_id in &filter_ids {

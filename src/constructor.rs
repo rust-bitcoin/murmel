@@ -28,7 +28,7 @@ use blockserver::BlockServer;
 use chaindb::{ChainDB, SharedChainDB};
 use dispatcher::Dispatcher;
 use dns::dns_seed;
-use error::MurmelError;
+use error::Error;
 use filtercalculator::FilterCalculator;
 use filtered::Filtered;
 use filterserver::FilterServer;
@@ -69,7 +69,7 @@ pub struct Constructor {
 
 impl Constructor {
     /// open DBs
-    pub fn open_db(path: Option<&Path>, network: Network, server: bool, script_cache_size: usize, birth: u64) -> Result<SharedChainDB, MurmelError> {
+    pub fn open_db(path: Option<&Path>, network: Network, server: bool, script_cache_size: usize, birth: u64) -> Result<SharedChainDB, Error> {
         let mut chaindb =
             if let Some(path) = path {
                 ChainDB::new(path, network, script_cache_size)?
@@ -81,7 +81,7 @@ impl Constructor {
     }
 
     /// Construct the stack
-    pub fn new(user_agent: String, network: Network, listen: Vec<SocketAddr>, server: bool, chaindb: SharedChainDB) -> Result<Constructor, MurmelError> {
+    pub fn new(user_agent: String, network: Network, listen: Vec<SocketAddr>, server: bool, chaindb: SharedChainDB) -> Result<Constructor, Error> {
         let back_pressure = if server {
             1000
         } else {
@@ -134,7 +134,7 @@ impl Constructor {
     /// * peers - connect to these peers at startup (might be empty)
     /// * min_connections - keep connections with at least this number of peers. Peers will be randomly chosen
     /// from those discovered in earlier runs
-    pub fn run(&mut self, network: Network, peers: Vec<SocketAddr>, min_connections: usize, nodns: bool) -> Result<(), MurmelError> {
+    pub fn run(&mut self, network: Network, peers: Vec<SocketAddr>, min_connections: usize, nodns: bool) -> Result<(), Error> {
         let needed_services = if self.server {
             0
         } else {
@@ -180,7 +180,7 @@ impl Constructor {
 struct KeepConnected {
     network: Network,
     min_connections: usize,
-    connections: Vec<Box<dyn Future<Item=SocketAddr, Error=MurmelError> + Send>>,
+    connections: Vec<Box<dyn Future<Item=SocketAddr, Error=Error> + Send>>,
     p2p: Arc<P2P<NetworkMessage, RawNetworkMessage, BitcoinP2PConfig>>,
     dns: Vec<SocketAddr>,
     earlier: HashSet<SocketAddr>,

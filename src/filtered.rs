@@ -35,7 +35,7 @@ use bitcoin_hashes::Hash;
 
 use chaindb::SharedChainDB;
 use chaindb::StoredFilter;
-use error::MurmelError;
+use error::Error;
 use p2p::{P2PControlSender, PeerId, PeerMessage, PeerMessageReceiver, PeerMessageSender, SERVICE_FILTERS};
 use std::{
     sync::mpsc,
@@ -112,7 +112,7 @@ impl Filtered {
         false
     }
 
-    fn get_filter_checkpoints(&mut self, peer: PeerId, filter_type: u8) -> Result<(), MurmelError> {
+    fn get_filter_checkpoints(&mut self, peer: PeerId, filter_type: u8) -> Result<(), Error> {
         if self.timeout.lock().unwrap().is_busy_with(peer, ExpectedReply::FilterCheckpoints) {
             return Ok(());
         }
@@ -123,7 +123,7 @@ impl Filtered {
         Ok(())
     }
 
-    fn checkpoint (&mut self, checkpoints: CFCheckpt, peer: PeerId) -> Result<(), MurmelError> {
+    fn checkpoint (&mut self, checkpoints: CFCheckpt, peer: PeerId) -> Result<(), Error> {
         let mut ok = true;
         {
             self.timeout.lock().unwrap().received(peer, 1, ExpectedReply::FilterCheckpoints);
@@ -162,7 +162,7 @@ impl Filtered {
         Ok(())
     }
 
-    fn block(&mut self, block: Block, peer: PeerId) -> Result<(), MurmelError> {
+    fn block(&mut self, block: Block, peer: PeerId) -> Result<(), Error> {
         // do not store fake blocks
         if block.check_merkle_root() && block.check_witness_commitment() {
             let mut chaindb = self.chaindb.write().unwrap();
@@ -193,7 +193,7 @@ impl Filtered {
         Ok(())
     }
 
-    fn get_filter_headers(&mut self, peer: PeerId, filter_type: u8) -> Result<(), MurmelError> {
+    fn get_filter_headers(&mut self, peer: PeerId, filter_type: u8) -> Result<(), Error> {
         if self.timeout.lock().unwrap().is_busy_with(peer, ExpectedReply::FilterHeader) {
             return Ok(());
         }
@@ -225,7 +225,7 @@ impl Filtered {
         Ok(())
     }
 
-    fn filter_headers(&mut self, headers: CFHeaders, peer: PeerId) -> Result<(), MurmelError> {
+    fn filter_headers(&mut self, headers: CFHeaders, peer: PeerId) -> Result<(), Error> {
         let next_block_pos = if headers.previous_filter == Sha256dHash::default() {
             Some(0)
         }
@@ -281,7 +281,7 @@ impl Filtered {
         Ok(())
     }
 
-    fn filter (&mut self, filter: CFilter, peer: PeerId) -> Result<(), MurmelError> {
+    fn filter (&mut self, filter: CFilter, peer: PeerId) -> Result<(), Error> {
         let mut chaindb = self.chaindb.write().unwrap();
         if let Some(filter_header) = chaindb.get_block_filter(&filter.block_hash, filter.filter_type) {
             self.timeout.lock().unwrap().received(peer, 1, ExpectedReply::Filter);
@@ -306,7 +306,7 @@ impl Filtered {
         Ok(())
     }
 
-    fn inv(&mut self, v: Vec<Inventory>, peer: PeerId) -> Result<(), MurmelError> {
+    fn inv(&mut self, v: Vec<Inventory>, peer: PeerId) -> Result<(), Error> {
         let mut ask_for_headers = false;
         for inventory in v {
             // only care for blocks

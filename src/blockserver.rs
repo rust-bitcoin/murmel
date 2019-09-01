@@ -25,7 +25,7 @@ use bitcoin::{
     network::message_blockdata::{GetBlocksMessage, GetHeadersMessage, Inventory, InvType}
 };
 use chaindb::SharedChainDB;
-use error::MurmelError;
+use error::Error;
 use p2p::{P2PControl, P2PControlSender, PeerId, PeerMessage, PeerMessageReceiver, PeerMessageSender};
 use std::{
     sync::mpsc,
@@ -67,7 +67,7 @@ impl BlockServer {
         panic!("Block server thread failed.");
     }
 
-    fn get_headers(&self, peer: PeerId, get: GetHeadersMessage) -> Result<(), MurmelError> {
+    fn get_headers(&self, peer: PeerId, get: GetHeadersMessage) -> Result<(), Error> {
         let chaindb = self.chaindb.read().unwrap();
         for locator in get.locator_hashes.iter () {
             if let Some(pos) = chaindb.pos_on_trunk(locator) {
@@ -82,7 +82,7 @@ impl BlockServer {
         Ok(())
     }
 
-    fn get_blocks(&self, peer: PeerId, get: GetBlocksMessage) -> Result<(), MurmelError> {
+    fn get_blocks(&self, peer: PeerId, get: GetBlocksMessage) -> Result<(), Error> {
         let chaindb = self.chaindb.read().unwrap();
         for locator in get.locator_hashes.iter () {
             if let Some(pos) = chaindb.pos_on_trunk(locator) {
@@ -97,7 +97,7 @@ impl BlockServer {
         Ok(())
     }
 
-    fn get_data(&self, peer: PeerId, get: Vec<Inventory>) -> Result<(), MurmelError> {
+    fn get_data(&self, peer: PeerId, get: Vec<Inventory>) -> Result<(), Error> {
         let chaindb = self.chaindb.read().unwrap();
         for inv in get {
             if inv.inv_type == InvType::WitnessBlock {

@@ -29,7 +29,7 @@ use bitcoin::network::{
     message_network::VersionMessage
 };
 
-use error::MurmelError;
+use error::Error;
 use futures::{
     Async, Future, future, FutureExt,
     task::{Context, Waker}
@@ -489,7 +489,7 @@ impl<Message: Version + Send + Sync + Clone,
     }
 
     /// return a future that does not complete until the peer is connected
-    pub fn add_peer (&self, network: &'static str, source: PeerSource) -> Box<Future<Item=SocketAddr, Error=MurmelError> + Send> {
+    pub fn add_peer (&self, network: &'static str, source: PeerSource) -> Box<Future<Item=SocketAddr, Error=Error> + Send> {
         // new token, never re-using previously connected peer's id
         // so log messages are easier to follow
         let token = Token(self.next_peer_id.fetch_add(1, Ordering::Relaxed));
@@ -517,21 +517,21 @@ impl<Message: Version + Send + Sync + Clone,
                     Err(ref e) => {
                         peers.write().unwrap().remove(&pid);
                         debug!("finised with error peer={}", pid);
-                        Err(MurmelError::Lost(format!("{:?}", e)))
+                        Err(Error::Lost(format!("{:?}", e)))
                     }
                 }
             }))}))
     }
 
     /// return a future that resolves to a connected (handshake perfect) peer or timeout
-    pub fn connect_peer_with_timeout (&self, pid: PeerId, seconds: u64, source: PeerSource) -> Box<Future<Item=SocketAddr, Error=MurmelError> + Send> {
+    pub fn connect_peer_with_timeout (&self, pid: PeerId, seconds: u64, source: PeerSource) -> Box<Future<Item=SocketAddr, Error=Error> + Send> {
         use futures_timer::FutureExt;
 
         Box::new(self.connect_peer(pid, source).timeout(Duration::from_secs(seconds)))
     }
 
     // connect a peer
-    fn connect_peer(&self, pid: PeerId, source: PeerSource) -> Box<Future<Item=SocketAddr, Error=MurmelError> + Send> {
+    fn connect_peer(&self, pid: PeerId, source: PeerSource) -> Box<Future<Item=SocketAddr, Error=Error> + Send> {
         let peers = self.peers.clone();
         let waker = self.waker.clone();
 
@@ -553,7 +553,7 @@ impl<Message: Version + Send + Sync + Clone,
                             }
                         } else {
                             // rejected or failed handshake
-                            Err(MurmelError::Handshake)
+                            Err(Error::Handshake)
                         }
                     })),
             // resolve to an error returning future if initiation fails
@@ -562,7 +562,7 @@ impl<Message: Version + Send + Sync + Clone,
     }
 
     // initiate connection to peer
-    fn initiate_connect(&self, pid: PeerId, source: PeerSource) -> Result<SocketAddr, MurmelError> {
+    fn initiate_connect(&self, pid: PeerId, source: PeerSource) -> Result<SocketAddr, Error> {
         let outgoing;
         let addr;
         let stream;
@@ -643,7 +643,7 @@ impl<Message: Version + Send + Sync + Clone,
         }
     }
 
-    fn event_processor (&self, event: Event, pid: PeerId, needed_services: u64, iobuf: &mut [u8]) -> Result<(), MurmelError> {
+    fn event_processor (&self, event: Event, pid: PeerId, needed_services: u64, iobuf: &mut [u8]) -> Result<(), Error> {
         let readiness = UnixReady::from(event.readiness());
         // check for error first
         if readiness.is_hup() || readiness.is_error() {
@@ -892,7 +892,7 @@ impl<Message: Version + Send + Sync + Clone,
                     if let Err(error) = self.event_processor(event, pid, needed_services, iobuf.as_mut_slice()) {
                         use std::error::Error;
 
-                        debug!("error {:?} peer={}", error.cause(), pid);
+                        debug!("error {:?} peer={}", error.source(), pid);
                         self.ban(pid, 10);
                     }
                 }
@@ -940,7 +940,7 @@ struct Peer<Message> {
 
 impl<Message> Peer<Message> {
     /// create a new peer
-    pub fn new (pid: PeerId, stream: TcpStream, poll: Arc<Poll>, outgoing: bool) -> Result<Peer<Message>, MurmelError> {
+    pub fn new (pid: PeerId, stream: TcpStream, poll: Arc<Poll>, outgoing: bool) -> Result<Peer<Message>, Error> {
         let (sender, receiver) = mpsc::channel();
         let peer = Peer{pid, poll: poll.clone(), stream, read_buffer: Buffer::new(), write_buffer: Buffer::new(),
             got_verack: false, version: None, sender, receiver, writeable: AtomicBool::new(false),
@@ -949,7 +949,7 @@ impl<Message> Peer<Message> {
     }
 
     // re-register for peer readable events
-    fn reregister_read(&self) -> Result<(), MurmelError> {
+    fn reregister_read(&self) -> Result<(), Error> {
         if self.writeable.swap(false, Ordering::Acquire) {
             trace!("re-register for read peer={}", self.pid);
             self.poll.reregister(&self.stream, self.pid.token, Ready::readable() | UnixReady::error() | UnixReady::hup(), PollOpt::level())?;
@@ -958,7 +958,7 @@ impl<Message> Peer<Message> {
     }
 
     // register for peer readable events
-    fn register_read(&self) -> Result<(), MurmelError> {
+    fn register_read(&self) -> Result<(), Error> {
         trace!("register for read peer={}", self.pid);
         self.poll.register(&self.stream, self.pid.token, Ready::readable() | UnixReady::error() | UnixReady::hup(), PollOpt::level())?;
         self.writeable.store(false, Ordering::Relaxed);
@@ -966,16 +966,16 @@ impl<Message> Peer<Message> {
     }
 
     /// send a message to P2P network
-    pub fn send (&self, msg: Message) -> Result<(), MurmelError> {
+    pub fn send (&self, msg: Message) -> Result<(), Error> {
         // send to outgoing message channel
-        self.sender.send(msg).map_err(| _ | MurmelError::Downstream("can not send to peer queue".to_owned()))?;
+        self.sender.send(msg).map_err(| _ | Error::Downstream("can not send to peer queue".to_owned()))?;
         // register for writable peer events since we have outgoing message
         self.reregister_write()?;
         Ok(())
     }
 
     // register for peer writable events
-    fn reregister_write(&self) -> Result<(), MurmelError> {
+    fn reregister_write(&self) -> Result<(), Error> {
         if !self.writeable.swap(true, Ordering::Acquire) {
             trace!("re-register for write peer={}", self.pid);
             self.poll.reregister(&self.stream, self.pid.token, Ready::writable() | UnixReady::error() | UnixReady::hup(), PollOpt::level())?;
@@ -984,7 +984,7 @@ impl<Message> Peer<Message> {
     }
 
     // register for peer writable events
-    fn register_write(&self) -> Result<(), MurmelError> {
+    fn register_write(&self) -> Result<(), Error> {
         trace!("register for write peer={}", self.pid);
         self.poll.register(&self.stream, self.pid.token, Ready::writable() | UnixReady::error() | UnixReady::hup(), PollOpt::level())?;
         self.writeable.store(true, Ordering::Relaxed);

@@ -24,12 +24,11 @@ use bitcoin::util;
 use bitcoin::util::bip158;
 use hammersbald::HammersbaldError;
 use std::convert;
-use std::error::Error;
 use std::fmt;
 use std::io;
 
 /// An error class to offer a unified error interface upstream
-pub enum MurmelError {
+pub enum Error {
     /// the block's work target is not correct
     SpvBadTarget,
     /// bad proof of work
@@ -60,119 +59,125 @@ pub enum MurmelError {
     Lost(String)
 }
 
-impl Error for MurmelError {
+impl std::error::Error for Error {
     fn description(&self) -> &str {
         match *self {
-            MurmelError::SpvBadTarget => "bad proof of work target",
-            MurmelError::SpvBadProofOfWork => "bad proof of work",
-            MurmelError::UnconnectedHeader => "unconnected header",
-            MurmelError::NoTip => "no chain tip found",
-            MurmelError::UnknownUTXO => "unknown utxo",
-            MurmelError::NoPeers => "no peers",
-            MurmelError::BadMerkleRoot => "merkle root of header does not match transaction list",
-            MurmelError::Downstream(ref s) => s,
-            MurmelError::IO(ref err) => err.description(),
-            MurmelError::Util(ref err) => err.description(),
-            MurmelError::Hammersbald(ref err) => err.description(),
-            MurmelError::Serialize(ref err) => err.description(),
-            MurmelError::Handshake => "handshake",
-            MurmelError::Lost(ref s) => s
+            Error::SpvBadTarget => "bad proof of work target",
+            Error::SpvBadProofOfWork => "bad proof of work",
+            Error::UnconnectedHeader => "unconnected header",
+            Error::NoTip => "no chain tip found",
+            Error::UnknownUTXO => "unknown utxo",
+            Error::NoPeers => "no peers",
+            Error::BadMerkleRoot => "merkle root of header does not match transaction list",
+            Error::Downstream(ref s) => s,
+            Error::IO(ref err) => err.description(),
+            Error::Util(ref err) => err.description(),
+            Error::Hammersbald(ref err) => err.description(),
+            Error::Serialize(ref err) => err.description(),
+            Error::Handshake => "handshake",
+            Error::Lost(ref s) => s
         }
     }
 
-    fn cause(&self) -> Option<&Error> {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match *self {
-            MurmelError::SpvBadTarget => None,
-            MurmelError::SpvBadProofOfWork => None,
-            MurmelError::UnconnectedHeader => None,
-            MurmelError::NoTip => None,
-            MurmelError::NoPeers => None,
-            MurmelError::UnknownUTXO => None,
-            MurmelError::Downstream(_) => None,
-            MurmelError::BadMerkleRoot => None,
-            MurmelError::IO(ref err) => Some(err),
-            MurmelError::Util(ref err) => Some(err),
-            MurmelError::Hammersbald(ref err) => Some(err),
-            MurmelError::Serialize(ref err) => Some(err),
-            MurmelError::Handshake => None,
-            MurmelError::Lost(_) => None
+            Error::SpvBadTarget => None,
+            Error::SpvBadProofOfWork => None,
+            Error::UnconnectedHeader => None,
+            Error::NoTip => None,
+            Error::NoPeers => None,
+            Error::UnknownUTXO => None,
+            Error::Downstream(_) => None,
+            Error::BadMerkleRoot => None,
+            Error::IO(ref err) => Some(err),
+            Error::Util(ref err) => Some(err),
+            Error::Hammersbald(ref err) => Some(err),
+            Error::Serialize(ref err) => Some(err),
+            Error::Handshake => None,
+            Error::Lost(_) => None
         }
     }
 }
 
-impl fmt::Display for MurmelError {
+impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
             // Both underlying errors already impl `Display`, so we defer to
             // their implementations.
-            MurmelError::SpvBadTarget |
-            MurmelError::SpvBadProofOfWork |
-            MurmelError::UnconnectedHeader |
-            MurmelError::NoTip |
-            MurmelError::NoPeers | MurmelError::BadMerkleRoot |
-            MurmelError::Handshake |
-            MurmelError::UnknownUTXO => write!(f, "{}", self.description()),
-            MurmelError::Lost(ref s) |
-            MurmelError::Downstream(ref s) => write!(f, "{}", s),
-            MurmelError::IO(ref err) => write!(f, "IO error: {}", err),
-            MurmelError::Util(ref err) => write!(f, "Util error: {}", err),
-            MurmelError::Hammersbald(ref err) => write!(f, "Hammersbald error: {}", err),
-            MurmelError::Serialize(ref err) => write!(f, "Serialize error: {}", err),
+            Error::SpvBadTarget |
+            Error::SpvBadProofOfWork |
+            Error::UnconnectedHeader |
+            Error::NoTip |
+            Error::NoPeers | Error::BadMerkleRoot |
+            Error::Handshake |
+            Error::UnknownUTXO => {
+                use std::error::Error;
+                write!(f, "{}", self.description())
+            },
+            Error::Lost(ref s) |
+            Error::Downstream(ref s) => write!(f, "{}", s),
+            Error::IO(ref err) => write!(f, "IO error: {}", err),
+            Error::Util(ref err) => write!(f, "Util error: {}", err),
+            Error::Hammersbald(ref err) => write!(f, "Hammersbald error: {}", err),
+            Error::Serialize(ref err) => write!(f, "Serialize error: {}", err),
         }
     }
 }
 
-impl fmt::Debug for MurmelError {
+impl fmt::Debug for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         (self as &fmt::Display).fmt(f)
     }
 }
 
-impl convert::From<MurmelError> for io::Error {
-    fn from(err: MurmelError) -> io::Error {
+impl convert::From<Error> for io::Error {
+    fn from(err: Error) -> io::Error {
         match err {
-            MurmelError::IO(e) => e,
-            _ => io::Error::new(io::ErrorKind::Other, err.description())
+            Error::IO(e) => e,
+            _ => {
+                use std::error::Error;
+                io::Error::new(io::ErrorKind::Other, err.description())
+            }
         }
     }
 }
 
-impl convert::From<io::Error> for MurmelError {
-    fn from(err: io::Error) -> MurmelError {
-        MurmelError::IO(err)
+impl convert::From<io::Error> for Error {
+    fn from(err: io::Error) -> Error {
+        Error::IO(err)
     }
 }
 
 
-impl convert::From<util::Error> for MurmelError {
-    fn from(err: util::Error) -> MurmelError {
-        MurmelError::Util(err)
+impl convert::From<util::Error> for Error {
+    fn from(err: util::Error) -> Error {
+        Error::Util(err)
     }
 }
 
-impl convert::From<HammersbaldError> for MurmelError {
-    fn from(err: HammersbaldError) -> MurmelError {
-        MurmelError::Hammersbald(err)
+impl convert::From<HammersbaldError> for Error {
+    fn from(err: HammersbaldError) -> Error {
+        Error::Hammersbald(err)
     }
 }
 
-impl convert::From<encode::Error> for MurmelError {
-    fn from(err: encode::Error) -> MurmelError {
-        MurmelError::Serialize(err)
+impl convert::From<encode::Error> for Error {
+    fn from(err: encode::Error) -> Error {
+        Error::Serialize(err)
     }
 }
 
-impl convert::From<Box<Error>> for MurmelError {
-    fn from(err: Box<Error>) -> Self {
-        MurmelError::Downstream(err.description().to_owned())
+impl convert::From<Box<dyn std::error::Error>> for Error {
+    fn from(err: Box<std::error::Error>) -> Self {
+        Error::Downstream(err.description().to_owned())
     }
 }
 
-impl convert::From<bip158::Error> for MurmelError {
+impl convert::From<bip158::Error> for Error {
     fn from(err: bip158::Error) -> Self {
         match err {
-            bip158::Error::Io(io) => MurmelError::IO(io),
-            bip158::Error::UtxoMissing(_) => MurmelError::UnknownUTXO
+            bip158::Error::Io(io) => Error::IO(io),
+            bip158::Error::UtxoMissing(_) => Error::UnknownUTXO
         }
     }
 }

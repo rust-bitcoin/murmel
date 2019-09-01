@@ -28,7 +28,7 @@ use bitcoin::{
 use bitcoin_hashes::sha256d::Hash as Sha256dHash;
 use bitcoin_hashes::Hash;
 use chaindb::StoredHeader;
-use error::MurmelError;
+use error::Error;
 use std::{
     collections::HashMap,
     sync::Arc,
@@ -73,18 +73,18 @@ impl CachedHeader {
     /// Performs an SPV validation of a block, which confirms that the proof-of-work
     /// is correct, but does not verify that the transactions are valid or encoded
     /// correctly.
-    pub fn spv_validate(&self, required_target: &Uint256) -> Result<(), MurmelError> {
+    pub fn spv_validate(&self, required_target: &Uint256) -> Result<(), Error> {
         use byteorder::{ByteOrder, LittleEndian};
 
         let target = &self.target();
         if target != required_target {
-            return Err(MurmelError::SpvBadTarget);
+            return Err(Error::SpvBadTarget);
         }
         let data: [u8; 32] = self.bitcoin_hash().into_inner();
         let mut ret = [0u64; 4];
         LittleEndian::read_u64_into(&data, &mut ret);
         let hash = &Uint256(ret);
-        if hash <= target { Ok(()) } else { Err(MurmelError::SpvBadProofOfWork) }
+        if hash <= target { Ok(()) } else { Err(Error::SpvBadProofOfWork) }
     }
 
     /// Returns the total work of the block
@@ -133,7 +133,7 @@ impl HeaderCache {
     }
 
     /// add a Bitcoin header
-    pub fn add_header(&mut self, header: &BlockHeader) -> Result<Option<(CachedHeader, Option<Vec<Sha256dHash>>, Option<Vec<Sha256dHash>>)>, MurmelError> {
+    pub fn add_header(&mut self, header: &BlockHeader) -> Result<Option<(CachedHeader, Option<Vec<Sha256dHash>>, Option<Vec<Sha256dHash>>)>, Error> {
         if self.headers.get(&header.bitcoin_hash()).is_some() {
             // ignore already known header
             return Ok(None);
@@ -146,7 +146,7 @@ impl HeaderCache {
             } else {
                 // reject unconnected
                 trace!("previous header not in cache {}", &header.prev_blockhash);
-                return Err(MurmelError::UnconnectedHeader);
+                return Err(Error::UnconnectedHeader);
             }
             // add  to tree
             return Ok(Some(self.add_header_to_tree(&previous, header)?));
@@ -185,7 +185,7 @@ impl HeaderCache {
     }
 
     // add header to tree, return stored, optional list of unwinds, optional list of extensions
-    fn add_header_to_tree(&mut self, prev: &CachedHeader, next: &BlockHeader) -> Result<(CachedHeader, Option<Vec<Sha256dHash>>, Option<Vec<Sha256dHash>>), MurmelError> {
+    fn add_header_to_tree(&mut self, prev: &CachedHeader, next: &BlockHeader) -> Result<(CachedHeader, Option<Vec<Sha256dHash>>, Option<Vec<Sha256dHash>>), Error> {
         const DIFFCHANGE_INTERVAL: u32 = 2016;
         const DIFFCHANGE_TIMESPAN: u32 = 14 * 24 * 3600;
         const TARGET_BLOCK_SPACING: u32 = 600;
@@ -204,7 +204,7 @@ impl HeaderCache {
                                 scan = header.clone();
                             } else {
                                 trace!("previous header not in cache (diff change) {}", &scan.stored.header.prev_blockhash);
-                                return Err(MurmelError::UnconnectedHeader);
+                                return Err(Error::UnconnectedHeader);
                             }
                         }
                     }
@@ -243,7 +243,7 @@ impl HeaderCache {
                         height = header.stored.height;
                     } else {
                         trace!("previous header not in cache (testnet) {}", &scan.stored.header.prev_blockhash);
-                        return Err(MurmelError::UnconnectedHeader);
+                        return Err(Error::UnconnectedHeader);
                     }
                 }
                 scan.stored.header.target()
@@ -260,7 +260,7 @@ impl HeaderCache {
 
         // Check POW
         if cached.spv_validate(&required_work).is_err() {
-            return Err(MurmelError::SpvBadProofOfWork);
+            return Err(Error::SpvBadProofOfWork);
         }
 
         let next_hash = Arc::new(cached.bitcoin_hash());
@@ -280,7 +280,7 @@ impl HeaderCache {
                         path_to_new_tip.push(forks_at);
                     } else {
                         trace!("previous header not in cache (path to new tip) {}", &forks_at);
-                        return Err(MurmelError::UnconnectedHeader);
+                        return Err(Error::UnconnectedHeader);
                     }
                 }
                 path_to_new_tip.reverse();
@@ -299,7 +299,7 @@ impl HeaderCache {
                         }
                     } else {
                         trace!("previous header not in cache (header no longer on trunk) {}", &forks_at);
-                        return Err(MurmelError::UnconnectedHeader);
+                        return Err(Error::UnconnectedHeader);
                     }
                     self.trunk.extend(path_to_new_tip.iter().map(|h| { Arc::new(*h) }));
                     return Ok((cached, Some(unwinds), Some(path_to_new_tip)));
@@ -311,7 +311,7 @@ impl HeaderCache {
                 return Ok((cached, None, None));
             }
         } else {
-            return Err(MurmelError::NoTip);
+            return Err(Error::NoTip);
         }
     }
 

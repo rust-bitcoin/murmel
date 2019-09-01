@@ -31,7 +31,7 @@ use bitcoin::{
 };
 
 use bitcoin_hashes::{Hash, sha256d};
-use error::MurmelError;
+use error::Error;
 use filtercache::FilterCache;
 use filtercalculator::TXID_FILTER;
 use hammersbald::{
@@ -65,7 +65,7 @@ pub struct ChainDB {
 
 impl ChainDB {
     /// Create an in-memory database instance
-    pub fn mem(network: Network, script_cache_size: usize) -> Result<ChainDB, MurmelError> {
+    pub fn mem(network: Network, script_cache_size: usize) -> Result<ChainDB, Error> {
         info!("working with in memory chain db");
         let db = BitcoinAdaptor::new(transient(2)?);
         let headercache = HeaderCache::new(network);
@@ -75,7 +75,7 @@ impl ChainDB {
     }
 
     /// Create or open a persistent database instance identified by the path
-    pub fn new(path: &Path, network: Network, script_cache_size: usize) -> Result<ChainDB, MurmelError> {
+    pub fn new(path: &Path, network: Network, script_cache_size: usize) -> Result<ChainDB, Error> {
         let basename = path.to_str().unwrap().to_string();
         let db = BitcoinAdaptor::new(persistent((basename.clone()).as_str(), 100, 2)?);
         let headercache = HeaderCache::new(network);
@@ -85,7 +85,7 @@ impl ChainDB {
     }
 
     /// Initialize caches
-    pub fn init(&mut self, server: bool) -> Result<(), MurmelError> {
+    pub fn init(&mut self, server: bool) -> Result<(), Error> {
         self.init_headers(server)?;
         if server {
             if self.scriptcache.lock().unwrap().capacity() > 0 {
@@ -96,12 +96,12 @@ impl ChainDB {
     }
 
     /// Batch updates. Updates are permanent after finishing a batch.
-    pub fn batch(&mut self) -> Result<(), MurmelError> {
+    pub fn batch(&mut self) -> Result<(), Error> {
         self.db.batch()?;
         Ok(())
     }
 
-    fn init_headers(&mut self, server: bool) -> Result<(), MurmelError> {
+    fn init_headers(&mut self, server: bool) -> Result<(), Error> {
         if server {
             info!("Running as filter server");
         }
@@ -136,7 +136,7 @@ impl ChainDB {
             }
             else {
                 error!("Failed to initialize with genesis header");
-                return Err(MurmelError::NoTip);
+                return Err(Error::NoTip);
             }
         } else {
             info!("Caching block headers and filter headers ...");
@@ -158,7 +158,7 @@ impl ChainDB {
         Ok(())
     }
 
-    fn rebuild_cache(&mut self) -> Result<(), MurmelError> {
+    fn rebuild_cache(&mut self) -> Result<(), Error> {
         debug!("Rebuilding UTXO cache ...");
         let trunk = self.iter_trunk(0).cloned().collect::<Vec<_>>();
         for header in trunk {
@@ -193,7 +193,7 @@ impl ChainDB {
     }
 
     /// Store a header
-    pub fn add_header(&mut self, header: &BlockHeader) -> Result<Option<(StoredHeader, Option<Vec<sha256d::Hash>>, Option<Vec<sha256d::Hash>>)>, MurmelError> {
+    pub fn add_header(&mut self, header: &BlockHeader) -> Result<Option<(StoredHeader, Option<Vec<sha256d::Hash>>, Option<Vec<sha256d::Hash>>)>, Error> {
         if let Some((cached, unwinds, forward)) = self.headercache.add_header(header)? {
             self.db.put_hash_keyed(&cached.stored)?;
             if let Some(forward) = forward.clone() {
@@ -242,14 +242,14 @@ impl ChainDB {
     }
 
     /// Store a filter
-    pub fn add_filter_header (&mut self, filter: StoredFilter) -> Result<(), MurmelError> {
+    pub fn add_filter_header (&mut self, filter: StoredFilter) -> Result<(), Error> {
         self.db.put_hash_keyed(&filter)?;
         self.filtercache.add_filter_header(filter);
         Ok(())
     }
 
     /// add a filter to db and cache
-    pub fn add_filter (&mut self, filter: StoredFilter) -> Result<(), MurmelError> {
+    pub fn add_filter (&mut self, filter: StoredFilter) -> Result<(), Error> {
         self.db.put_hash_keyed(&filter)?;
         self.filtercache.add_filter(filter);
         Ok(())
@@ -266,23 +266,23 @@ impl ChainDB {
     }
 
     /// Store the header id with most work
-    pub fn store_header_tip(&mut self, tip: &sha256d::Hash) -> Result<(), MurmelError> {
+    pub fn store_header_tip(&mut self, tip: &sha256d::Hash) -> Result<(), Error> {
         self.db.put_keyed_encodable(HEADER_TIP_KEY, tip)?;
         Ok(())
     }
 
     /// Find header id with most work
-    pub fn fetch_header_tip(&self) -> Result<Option<sha256d::Hash>, MurmelError> {
+    pub fn fetch_header_tip(&self) -> Result<Option<sha256d::Hash>, Error> {
         Ok(self.db.get_keyed_decodable::<sha256d::Hash>(HEADER_TIP_KEY)?.map(|(_, h)| h.clone()))
     }
 
     /// Read header from the DB
-    pub fn fetch_header(&self, id: &sha256d::Hash) -> Result<Option<StoredHeader>, MurmelError> {
+    pub fn fetch_header(&self, id: &sha256d::Hash) -> Result<Option<StoredHeader>, Error> {
         Ok(self.db.get_hash_keyed::<StoredHeader>(id)?.map(|(_, header)| header))
     }
 
     /// Store a calculated filter
-    pub fn add_calculated_filter(&mut self, block_hash: &sha256d::Hash, previous: &sha256d::Hash, filter: &BlockFilter) -> Result<(), MurmelError> {
+    pub fn add_calculated_filter(&mut self, block_hash: &sha256d::Hash, previous: &sha256d::Hash, filter: &BlockFilter) -> Result<(), Error> {
         let stored_filter = StoredFilter{block_id: block_hash.clone(), previous: previous.clone(),
             filter_hash: sha256d::Hash::hash(filter.content.as_slice()), filter: Some(filter.content.clone()), filter_type: 0 };
         self.db.put_hash_keyed(&stored_filter)?;
@@ -291,17 +291,17 @@ impl ChainDB {
     }
 
     /// Read filter from DB
-    pub fn fetch_block_filter(&self, block_id: &sha256d::Hash, filter_type: u8) -> Result<Option<StoredFilter>, MurmelError> {
+    pub fn fetch_block_filter(&self, block_id: &sha256d::Hash, filter_type: u8) -> Result<Option<StoredFilter>, Error> {
         Ok(self.db.get_hash_keyed::<StoredFilter>(&StoredFilter::storage_id(block_id, filter_type))?.map(|(_, filter)| filter))
     }
 
     /// Check if the DB may have a block. This might return false positive but is really quick.
-    pub fn may_have_block (&self, block_id: &sha256d::Hash) -> Result<bool, MurmelError> {
+    pub fn may_have_block (&self, block_id: &sha256d::Hash) -> Result<bool, Error> {
         Ok(self.db.may_have_hash_key (block_id)?)
     }
 
     /// read a block from DB
-    pub fn fetch_stored_block(&self, block_id: &sha256d::Hash) -> Result<Option<StoredBlock>, MurmelError> {
+    pub fn fetch_stored_block(&self, block_id: &sha256d::Hash) -> Result<Option<StoredBlock>, Error> {
         if let Some((_, block)) = self.db.get_hash_keyed::<StoredBlock>(block_id)? {
             return Ok(Some(block));
         }
@@ -309,7 +309,7 @@ impl ChainDB {
     }
 
     /// read transactions of a block
-    pub fn fetch_txdata(&self, block_id: &sha256d::Hash) -> Result<Option<Vec<Transaction>>, MurmelError> {
+    pub fn fetch_txdata(&self, block_id: &sha256d::Hash) -> Result<Option<Vec<Transaction>>, Error> {
         let mut txdata = Vec::new();
         if let Some((_, block)) = self.db.get_hash_keyed::<StoredBlock>(block_id)? {
             for txref in block.txrefs {
@@ -321,13 +321,13 @@ impl ChainDB {
     }
 
     /// read a single transaction
-    fn fetch_transaction (&self, txref: PRef) -> Result<Transaction, MurmelError> {
+    fn fetch_transaction (&self, txref: PRef) -> Result<Transaction, Error> {
         let (_, tx) = self.db.get_decodable::<Transaction>(txref)?;
         return Ok(tx);
     }
 
     /// store a block
-    pub fn store_block(&mut self, block: &Block) -> Result<PRef, MurmelError> {
+    pub fn store_block(&mut self, block: &Block) -> Result<PRef, Error> {
         if let Some(header) = self.headercache.get_header(&block.bitcoin_hash()) {
             debug!("store block  {:6} {} tx: {}", header.stored.height, header.bitcoin_hash(), block.txdata.len());
             let txids = block.txdata.iter().map(|tx| tx.txid()).collect::<Vec<_>>();
@@ -358,7 +358,7 @@ impl ChainDB {
         }
     }
 
-    fn get_scripts(&self, mut remains: Vec<Vec<u8>>, mut sofar: Vec<Script>) -> Result<Vec<Script>, MurmelError> {
+    fn get_scripts(&self, mut remains: Vec<Vec<u8>>, mut sofar: Vec<Script>) -> Result<Vec<Script>, Error> {
         remains.sort();
         if remains.len() > 0 {
             let from = self.scriptcache.lock().unwrap().complete_after();
@@ -377,7 +377,7 @@ impl ChainDB {
             let coins = remains.iter().map(|v| OutPoint::consensus_decode(&mut Cursor::new(v.as_slice())).unwrap())
                 .map(|o| format!("{} {}", o.txid, o.vout)).collect::<Vec<_>>();
             error!("can not find coins {:?}", coins);
-            return Err(MurmelError::UnknownUTXO);
+            return Err(Error::UnknownUTXO);
         }
         Ok(sofar)
     }
