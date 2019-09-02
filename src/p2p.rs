@@ -503,7 +503,7 @@ impl<Message: Version + Send + Sync + Clone,
         let waker2 = self.waker.clone();
         use futures_timer::FutureExt;
 
-        let version = self.config.version( // TODO address wrong
+        let version = self.config.version(
             &SocketAddr::from_str("127.0.0.1:8333").unwrap(), self.config.max_protocol_version());
 
         Box::new(
@@ -579,6 +579,82 @@ impl<Message: Version + Send + Sync + Clone,
         if outgoing {
             // send this node's version message to peer
             peers.get(&pid).unwrap().lock().unwrap().send(version)?;
+        }
+
+        Ok(addr)
+    }
+
+
+    // connect a peer
+    fn connect_peer(&self, pid: PeerId, source: PeerSource) -> Box<Future<Item=SocketAddr, Error=Error> + Send> {
+        let peers = self.peers.clone();
+        let waker = self.waker.clone();
+
+        // initiate connection
+        match self.initiate_connect(pid,source) {
+            // connection initiated, resolve to a future that polls for handshake complete
+            Ok(addr) => Box::new(
+                future::poll_fn (move |ctx|
+                    {
+                        // retrieve peer from peer map
+                        if let Some(peer) = peers.read().unwrap().get(&pid) {
+                            // return pid if peer is connected (handshake perfect)
+                            if peer.lock().unwrap().connected {
+                                trace!("woke up to handshake");
+                                Ok(Async::Ready(addr))
+                            } else {
+                                waker.lock().unwrap().insert(pid, ctx.waker().clone());
+                                Ok(Async::Pending)
+                            }
+                        } else {
+                            // rejected or failed handshake
+                            Err(Error::Handshake)
+                        }
+                    })),
+            // resolve to an error returning future if initiation fails
+            Err(e) => Box::new(future::err(e))
+        }
+    }
+
+    // initiate connection to peer
+    fn initiate_connect(&self, pid: PeerId, source: PeerSource) -> Result<SocketAddr, Error> {
+        let outgoing;
+        let addr;
+        let stream;
+        match source {
+            PeerSource::Outgoing(a) => {
+                addr = a;
+                outgoing = true;
+                info!("trying outgoing connect to {} peer={}", addr, pid);
+                stream = TcpStream::connect(&addr)?;
+            },
+            PeerSource::Incoming(listener) => {
+                let (s, a) = listener.accept()?;
+                addr = a;
+                stream = s;
+                info!("trying incoming connect to {} peer={}", addr, pid);
+                outgoing = false;
+            }
+        };
+
+        // create lock protected peer object
+        let peer = Mutex::new(Peer::new(pid, stream,self.poll.clone(), outgoing)?);
+
+        let mut peers = self.peers.write().unwrap();
+
+        // add to peer map
+        peers.insert(pid, peer);
+
+        let stored_peer = peers.get(&pid).unwrap();
+
+        if outgoing {
+            stored_peer.lock().unwrap().register_write()?;
+        } else {
+            stored_peer.lock().unwrap().register_read()?;
+        }
+        if outgoing {
+            // send this node's version message to peer
+            peers.get(&pid).unwrap().lock().unwrap().send(self.config.version(&addr, self.config.max_protocol_version()))?;
         }
 
         Ok(addr)
@@ -805,6 +881,9 @@ impl<Message: Version + Send + Sync + Clone,
                                 }
                             }
                         }
+                    }
+                    else {
+                        disconnect = true;
                     }
                 }
                 if disconnect {
