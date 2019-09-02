@@ -708,7 +708,7 @@ impl<Message: Version + Send + Sync + Clone,
                     if let Ok(len) = locked_peer.stream.read(iobuf) {
                         trace!("received {} bytes from peer={}", len, pid);
                         if len == 0 {
-                            disconnect = true;
+                            return Ok(()); // nothing to do here
                         }
                         // accumulate in a buffer
                         locked_peer.read_buffer.write_all(&iobuf[0..len])?;
@@ -808,6 +808,7 @@ impl<Message: Version + Send + Sync + Clone,
                         }
                     }
                     else {
+                        debug!("IO error reading peer={}", pid);
                         disconnect = true;
                     }
                 }
