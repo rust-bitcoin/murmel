@@ -495,38 +495,23 @@ impl<Message: Version + Send + Sync + Clone,
         let token = Token(self.next_peer_id.fetch_add(1, Ordering::Relaxed));
         let pid = PeerId{network, token};
 
-        let connect = self.connect_peer_with_timeout(pid,CONNECT_TIMEOUT_SECONDS, source.clone());
-
         let peers = self.peers.clone();
         let waker = self.waker.clone();
-
-        Box::new(connect.then (move |r| {
-            Box::new(future::poll_fn(move |ctx| {
-                match r {
-                    Ok(addr) => {
-                        if peers.read().unwrap().get(&pid).is_some() {
-                            waker.lock().unwrap().insert(pid, ctx.waker().clone());
-                            Ok(Async::Pending)
-                        }
-                        else {
-                            debug!("finished orderly peer={}", pid);
-                            Ok(Async::Ready(addr))
-                        }
-                    }
-                    Err(ref e) => {
-                        peers.write().unwrap().remove(&pid);
-                        debug!("finised with error peer={}", pid);
-                        Err(Error::Lost(format!("{:?}", e)))
-                    }
-                }
-            }))}))
-    }
-
-    /// return a future that resolves to a connected (handshake perfect) peer or timeout
-    pub fn connect_peer_with_timeout (&self, pid: PeerId, seconds: u64, source: PeerSource) -> Box<Future<Item=SocketAddr, Error=Error> + Send> {
         use futures_timer::FutureExt;
 
-        Box::new(self.connect_peer(pid, source).timeout(Duration::from_secs(seconds)))
+        Box::new(
+            self.connect_peer(pid, source).timeout(Duration::from_secs(CONNECT_TIMEOUT_SECONDS))
+            .and_then (move |addr| {
+                Box::new(future::poll_fn(move |ctx| {
+                    if peers.read().unwrap().get(&pid).is_some() {
+                        waker.lock().unwrap().insert(pid, ctx.waker().clone());
+                        Ok(Async::Pending)
+                    } else {
+                        debug!("finished orderly peer={}", pid);
+                        Ok(Async::Ready(addr))
+                    }
+                }))
+            }))
     }
 
     // connect a peer
