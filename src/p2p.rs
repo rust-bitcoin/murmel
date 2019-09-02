@@ -30,10 +30,7 @@ use bitcoin::network::{
 };
 
 use error::Error;
-use futures::{
-    Async, Future, future, FutureExt,
-    task::{Context, Waker}
-};
+use futures::{Poll as Async, Future, future, FutureExt, task::{Waker}, TryFutureExt};
 use mio::{
     Event, Events, net::{TcpListener, TcpStream}, Poll, PollOpt, Ready,
     Token,
@@ -56,10 +53,11 @@ use std::{
 };
 use std::marker::PhantomData;
 use bitcoin::consensus::serialize;
+use futures::task::{Spawn, SpawnExt};
 
 const IO_BUFFER_SIZE:usize = 1024*1024;
 const EVENT_BUFFER_SIZE:usize = 1024;
-const CONNECT_TIMEOUT_SECONDS: u64 = 30;
+const CONNECT_TIMEOUT_SECONDS: u64 = 5;
 const BAN :u32 = 100;
 
 /// do we serve blocks?
@@ -451,6 +449,10 @@ impl<Message: Version + Send + Sync + Clone,
         (p2p, P2PControlSender::new(control_sender, peers, back_pressure))
     }
 
+    pub fn connected_peers (&self) -> usize {
+        self.peers.read().unwrap().len()
+    }
+
     fn control_loop (&self, receiver: P2PControlReceiver<Message>) {
         while let Ok(control) = receiver.recv() {
             match control {
@@ -490,55 +492,64 @@ impl<Message: Version + Send + Sync + Clone,
     }
 
     /// return a future that does not complete until the peer is connected
-    pub fn add_peer (&self, network: &'static str, source: PeerSource) -> Box<Future<Item=SocketAddr, Error=Error> + Send> {
+    pub fn add_peer (&self, network: &'static str, source: PeerSource) -> impl Future<Output=Result<SocketAddr, Error>> + Send {
         // new token, never re-using previously connected peer's id
         // so log messages are easier to follow
         let token = Token(self.next_peer_id.fetch_add(1, Ordering::Relaxed));
         let pid = PeerId{network, token};
 
         let peers = self.peers.clone();
-        let peers2 = self.peers.clone();
-        let poll = self.poll.clone();
         let waker = self.waker.clone();
-        let waker2 = self.waker.clone();
-        use futures_timer::FutureExt;
+
+        self.connecting(pid, source)
+            .and_then (move |addr| {
+            future::poll_fn(move |ctx| {
+                if peers.read().unwrap().get(&pid).is_some() {
+                    waker.lock().unwrap().insert(pid, ctx.waker().clone());
+                    Async::Pending
+                } else {
+                    debug!("finished orderly peer={}", pid);
+                    Async::Ready(Ok(addr))
+                }
+            })
+        })
+    }
+
+    fn connecting(&self, pid: PeerId, source: PeerSource) -> impl Future<Output=Result<SocketAddr, Error>> + Send {
+
 
         let version = self.config.version(
             &SocketAddr::from_str("127.0.0.1:8333").unwrap(), // TODO wrong address
             self.config.max_protocol_version());
+        let peers = self.peers.clone();
+        let peers2 = self.peers.clone();
+        let poll = self.poll.clone();
+        let waker = self.waker.clone();
 
-        Box::new(
-            //self.connect_peer(pid, source).timeout(Duration::from_secs(CONNECT_TIMEOUT_SECONDS))
-            future::poll_fn(move |ctx| {
-                match Self::connect(version.clone(), peers.clone(), poll.clone(),pid, source.clone()) {
-                    Ok(addr) => // retrieve peer from peer map
-                        if let Some(peer) = peers.read().unwrap().get(&pid) {
-                            // return pid if peer is connected (handshake perfect)
-                            if peer.lock().unwrap().connected {
-                                trace!("woke up to handshake");
-                                Ok(Async::Ready(addr))
-                            } else {
-                                waker.lock().unwrap().insert(pid, ctx.waker().clone());
-                                Ok(Async::Pending)
-                            }
-                        } else {
-                            // rejected or failed handshake
-                            Err(Error::Handshake)
-                        },
-                    Err(e) => Err(e)
-                }
-            }).timeout(Duration::from_secs(CONNECT_TIMEOUT_SECONDS))
-                .and_then (move |addr| {
-                future::poll_fn(move |ctx| {
-                    if peers2.read().unwrap().get(&pid).is_some() {
-                        waker2.lock().unwrap().insert(pid, ctx.waker().clone());
-                        Ok(Async::Pending)
+        future::poll_fn(move |_| {
+            match Self::connect(version.clone(), peers.clone(), poll.clone(), pid, source.clone()) {
+                Ok(addr) => Async::Ready(Ok(addr)),
+                Err(e) => Async::Ready(Err(e))
+            }
+        }).and_then(move |addr| {
+            use futures_timer::TryFutureExt;
+
+            future::poll_fn(move |ctx|
+                if let Some(peer) = peers2.read().unwrap().get(&pid) {
+                    // return pid if peer is connected (handshake perfect)
+                    if peer.lock().unwrap().connected {
+                        trace!("woke up to handshake");
+                        Async::Ready(Ok(addr))
                     } else {
-                        debug!("finished orderly peer={}", pid);
-                        Ok(Async::Ready(addr))
+                        waker.lock().unwrap().insert(pid, ctx.waker().clone());
+                        Async::Pending
                     }
-                })
-            }))
+                } else {
+                    // rejected or failed handshake
+                    Async::Ready(Err(Error::Handshake))
+                }
+            ).timeout(Duration::from_secs(CONNECT_TIMEOUT_SECONDS))
+        })
     }
 
     // initiate connection to peer
@@ -846,28 +857,23 @@ impl<Message: Version + Send + Sync + Clone,
     /// run the message dispatcher loop
     /// this method does not return unless there is an error obtaining network events
     /// run in its own thread, which will process all network events
-    pub fn run(&self, network: &'static str, needed_services: u64, ctx: &mut Context) -> Result<(), io::Error>{
-        trace!("start mio event loop");
-        loop {
-            // events buffer
-            let mut events = Events::with_capacity(EVENT_BUFFER_SIZE);
-            // IO buffer
-            let mut iobuf = vec!(0u8; IO_BUFFER_SIZE);
+    pub fn poll_events(&self, network: &'static str, needed_services: u64, spawn: &mut Spawn) {
+        // events buffer
+        let mut events = Events::with_capacity(EVENT_BUFFER_SIZE);
+        // IO buffer
+        let mut iobuf = vec!(0u8; IO_BUFFER_SIZE);
 
+        loop {
             // get the next batch of events
-            self.poll.poll(&mut events, None)?;
+            self.poll.poll(&mut events, None).expect("can not poll mio events");
 
             // iterate over events
             for event in events.iter() {
                 // check for listener
                 if let Some(server) = self.is_listener(event.token()) {
                     trace!("incoming connection request");
-                    ctx.executor().spawn(
-                        Box::new(self.add_peer(network, PeerSource::Incoming(server))
-                        .map(|_|()).or_else(|_|Ok(()))))
-                        .expect("can not spawn task for incoming connection");
-                }
-                else {
+                    spawn.spawn(self.add_peer(network, PeerSource::Incoming(server)).map(|_| ())).expect("can not add peer for incoming connection");
+                } else {
                     // construct the id of the peer the event concerns
                     let pid = PeerId { network, token: event.token() };
                     if let Err(error) = self.event_processor(event, pid, needed_services, iobuf.as_mut_slice()) {

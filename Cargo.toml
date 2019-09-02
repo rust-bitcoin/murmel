@@ -25,8 +25,8 @@ log = "0.4"
 simple_logger = "0.5.0"
 byteorder = "1.2"
 lru-cache = "0.1.1"
-futures={ git= "https://github.com/tamasblummer/futures-rs.git", tag = "0.2.1" }
-futures-timer= { git= "https://github.com/tamasblummer/futures-timer.git", branch = "futures_0.2.1" }
+futures-preview = "=0.3.0-alpha.18"
+futures-timer = "0.3"
 serde="1"
 serde_derive="1"
 

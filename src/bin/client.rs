@@ -98,7 +98,7 @@ pub fn main() {
             Constructor::open_db(Some(&Path::new("client.db")), network, birth).unwrap()
         };
     let mut spv = Constructor::new(network, listen, chaindb).unwrap();
-    spv.run(network, peers, connections, true).expect("can not start node");
+    spv.run(network, peers, connections).expect("can not start node");
 }
 
 fn get_peers() -> Vec<SocketAddr> {
