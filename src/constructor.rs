@@ -49,7 +49,7 @@ use downstream::SharedDownstream;
 use bitcoin::network::message::NetworkMessage;
 use bitcoin::network::message::RawNetworkMessage;
 use p2p::BitcoinP2PConfig;
-use futures::task::Waker;
+use std::time::Duration;
 
 const MAX_PROTOCOL_VERSION: u32 = 70001;
 
@@ -149,8 +149,7 @@ impl Constructor {
             p2p,
             dns: Vec::new(),
             earlier: HashSet::new(),
-            nodns,
-            waker: Arc::new(Mutex::new(None))
+            nodns
         };
     }
 }
@@ -161,8 +160,7 @@ struct KeepConnected {
     p2p: Arc<P2P<NetworkMessage, RawNetworkMessage, BitcoinP2PConfig>>,
     dns: Vec<SocketAddr>,
     earlier: HashSet<SocketAddr>,
-    nodns: bool,
-    waker: Arc<Mutex<Option<Waker>>>
+    nodns: bool
 }
 
 // this task runs until it runs out of peers
@@ -171,37 +169,36 @@ impl Future for KeepConnected {
     type Error = Never;
 
     fn poll(&mut self, cx: &mut task::Context) -> Poll<Self::Item, Self::Error> {
-        // find a finished peers
-        let finished = self.connections.iter_mut().enumerate().filter_map(|(i, c)| {
-            match c.poll(cx) {
-                Ok(Async::Pending) => None,
-                Ok(Async::Ready(address)) => {
-                    debug!("keep connected woke up to lost peer at {}", address);
-                    Some(i)
-                },
-                Err(e) => {
-                    debug!("keep connected woke up to error {:?}", e);
-                    Some(i)
+        loop {
+            // find a finished peers
+            let finished = self.connections.iter_mut().enumerate().filter_map(|(i, c)| {
+                match c.poll(cx) {
+                    Ok(Async::Pending) => None,
+                    Ok(Async::Ready(address)) => {
+                        debug!("keep connected woke up to lost peer at {}", address);
+                        Some(i)
+                    },
+                    Err(e) => {
+                        debug!("keep connected woke up to error {:?}", e);
+                        Some(i)
+                    }
+                }
+            }).collect::<Vec<_>>();
+            let mut n = 0;
+            for i in finished.iter() {
+                self.connections.remove(*i - n);
+                n += 1;
+            }
+            while self.connections.len() < self.min_connections {
+                if let Some(addr) = self.get_an_address() {
+                    self.connections.push(self.p2p.add_peer("bitcoin", PeerSource::Outgoing(addr)));
+                } else {
+                    warn!("no more bitcoin peers to connect, currently have {}", self.connections.len());
+                    break;
                 }
             }
-        }).collect::<Vec<_>>();
-        let mut n = 0;
-        for i in finished.iter() {
-            self.connections.remove(*i - n);
-            n += 1;
+            std::thread::sleep(Duration::from_secs(60));
         }
-        while self.connections.len() < self.min_connections {
-            if let Some(addr) = self.get_an_address() {
-                self.connections.push(self.p2p.add_peer("bitcoin", PeerSource::Outgoing(addr)));
-            }
-            else {
-                warn!("no more bitcoin peers to connect, currently have {}", self.connections.len());
-                break;
-            }
-        }
-        let mut waker = self.waker.lock().unwrap();
-        *waker = Some(cx.waker().clone());
-        return Ok(Async::Pending);
     }
 }
 
