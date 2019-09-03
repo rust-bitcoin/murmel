@@ -55,6 +55,7 @@ use futures::task::{SpawnExt, Context};
 use futures_timer::Interval;
 use futures::Future;
 use std::pin::Pin;
+use futures::executor::ThreadPoolBuilder;
 
 const MAX_PROTOCOL_VERSION: u32 = 70001;
 
@@ -122,7 +123,7 @@ impl Constructor {
     /// from those discovered in earlier runs
     pub fn run(&mut self, network: Network, peers: Vec<SocketAddr>, min_connections: usize) -> Result<(), Error> {
 
-        let mut executor = ThreadPool::new().expect("can not start futures thread pool");
+        let mut executor = ThreadPoolBuilder::new().name_prefix("bitcoin-io").pool_size(2).create().expect("can not start futures thread pool");
 
         let p2p = self.p2p.clone();
         for addr in &peers {
