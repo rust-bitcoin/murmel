@@ -54,6 +54,10 @@ impl Ping {
         loop {
             while let Ok(msg) = receiver.recv_timeout(Duration::from_millis(SECS*1000)) {
                 match msg {
+                    PeerMessage::Disconnected(pid,_) => {
+                        self.timeout.lock().unwrap().forget(pid);
+                        self.asked.remove(&pid);
+                    },
                     PeerMessage::Incoming(pid, msg) => {
                         match msg {
                             NetworkMessage::Pong(n) => {

@@ -109,6 +109,7 @@ impl<Message: Send + Sync + Clone, Reply: Eq + Hash + std::fmt::Debug> Timeout<M
         }
         for peer in &banned {
             self.timeouts.remove(peer);
+            self.expected.remove(peer);
         }
     }
 

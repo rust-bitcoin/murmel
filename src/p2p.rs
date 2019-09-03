@@ -529,7 +529,10 @@ impl<Message: Version + Send + Sync + Clone,
         future::poll_fn(move |_| {
             match Self::connect(version.clone(), peers.clone(), poll.clone(), pid, source.clone()) {
                 Ok(addr) => Async::Ready(Ok(addr)),
-                Err(e) => Async::Ready(Err(e))
+                Err(e) => {
+                    peers.write().unwrap().remove(&pid);
+                    Async::Ready(Err(e))
+                }
             }
         }).and_then(move |addr| {
             use futures_timer::TryFutureExt;
