@@ -123,7 +123,7 @@ impl Constructor {
     /// from those discovered in earlier runs
     pub fn run(&mut self, network: Network, peers: Vec<SocketAddr>, min_connections: usize) -> Result<(), Error> {
 
-        let mut executor = ThreadPoolBuilder::new().name_prefix("bitcoin-io").create().expect("can not start futures thread pool");
+        let mut executor = ThreadPoolBuilder::new().name_prefix("bitcoin-connect").pool_size(1).create().expect("can not start futures thread pool");
 
         let p2p = self.p2p.clone();
         for addr in &peers {
