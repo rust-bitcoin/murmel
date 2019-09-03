@@ -728,8 +728,7 @@ impl<Message: Version + Send + Sync + Clone,
                         trace!("received {} bytes from peer={}", len, pid);
                         if len == 0 {
                             debug!("read zero length message, disconnecting peer={}", pid);
-                            self.disconnect(pid, false);
-                            return Ok(()); // nothing to do here
+                            disconnect = true;
                         }
                         // accumulate in a buffer
                         locked_peer.read_buffer.write_all(&iobuf[0..len])?;
