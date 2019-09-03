@@ -444,7 +444,7 @@ impl<Message: Version + Send + Sync + Clone,
 
         let p2p2 = p2p.clone();
 
-        thread::Builder::new().name("P2P control loop".to_string()).spawn(move || p2p2.control_loop(control_receiver)).unwrap();
+        thread::Builder::new().name("p2pcntrl".to_string()).spawn(move || p2p2.control_loop(control_receiver)).unwrap();
 
         (p2p, P2PControlSender::new(control_sender, peers, back_pressure))
     }
@@ -719,6 +719,8 @@ impl<Message: Version + Send + Sync + Clone,
                     if let Ok(len) = locked_peer.stream.read(iobuf) {
                         trace!("received {} bytes from peer={}", len, pid);
                         if len == 0 {
+                            debug!("read zero length message, disconnecting peer={}", pid);
+                            self.disconnect(pid, false);
                             return Ok(()); // nothing to do here
                         }
                         // accumulate in a buffer
