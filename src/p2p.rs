@@ -499,9 +499,17 @@ impl<Message: Version + Send + Sync + Clone,
         let pid = PeerId{network, token};
 
         let peers = self.peers.clone();
+        let peers2 = self.peers.clone();
         let waker = self.waker.clone();
 
         self.connecting(pid, source)
+            .map_err(move |e| {
+                let mut peers = peers2.write().unwrap();
+                if let Some(peer) = peers.remove(&pid) {
+                    peer.lock().unwrap().stream.shutdown(Shutdown::Both).unwrap_or(());
+                }
+                e
+            })
             .and_then (move |addr| {
             future::poll_fn(move |ctx| {
                 if peers.read().unwrap().get(&pid).is_some() {
@@ -529,10 +537,7 @@ impl<Message: Version + Send + Sync + Clone,
         future::poll_fn(move |_| {
             match Self::connect(version.clone(), peers.clone(), poll.clone(), pid, source.clone()) {
                 Ok(addr) => Async::Ready(Ok(addr)),
-                Err(e) => {
-                    peers.write().unwrap().remove(&pid);
-                    Async::Ready(Err(e))
-                }
+                Err(e) => { Async::Ready(Err(e)) }
             }
         }).and_then(move |addr| {
             use futures_timer::TryFutureExt;
