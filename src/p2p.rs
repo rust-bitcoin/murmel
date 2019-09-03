@@ -866,7 +866,7 @@ impl<Message: Version + Send + Sync + Clone,
     /// run the message dispatcher loop
     /// this method does not return unless there is an error obtaining network events
     /// run in its own thread, which will process all network events
-    pub fn poll_events(&self, network: &'static str, needed_services: u64, spawn: &mut Spawn) {
+    pub fn poll_events(&self, network: &'static str, needed_services: u64, spawn: &mut dyn Spawn) {
         // events buffer
         let mut events = Events::with_capacity(EVENT_BUFFER_SIZE);
         // IO buffer

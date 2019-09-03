@@ -126,7 +126,7 @@ impl fmt::Display for Error {
 
 impl fmt::Debug for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        (self as &fmt::Display).fmt(f)
+        (self as &dyn fmt::Display).fmt(f)
     }
 }
 
@@ -168,7 +168,7 @@ impl convert::From<encode::Error> for Error {
 }
 
 impl convert::From<Box<dyn std::error::Error>> for Error {
-    fn from(err: Box<std::error::Error>) -> Self {
+    fn from(err: Box<dyn std::error::Error>) -> Self {
         Error::Downstream(err.description().to_owned())
     }
 }

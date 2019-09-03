@@ -370,11 +370,11 @@ impl HeaderCache {
         }
     }
 
-    pub fn iter_trunk<'a> (&'a self, from: u32) -> Box<Iterator<Item=&'a CachedHeader> +'a> {
+    pub fn iter_trunk<'a> (&'a self, from: u32) -> Box<dyn Iterator<Item=&'a CachedHeader> +'a> {
         Box::new(self.trunk.iter().skip(from as usize).map(move |a| self.headers.get(&*a).unwrap()))
     }
 
-    pub fn iter_trunk_rev<'a> (&'a self, from: Option<u32>) -> Box<Iterator<Item=&'a CachedHeader> +'a> {
+    pub fn iter_trunk_rev<'a> (&'a self, from: Option<u32>) -> Box<dyn Iterator<Item=&'a CachedHeader> +'a> {
         let len = self.trunk.len();
         if let Some(from) = from {
             Box::new(self.trunk.iter().rev().skip(len - from as usize).map(move |a| self.headers.get(&*a).unwrap()))
