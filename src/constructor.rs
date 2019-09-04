@@ -29,11 +29,15 @@ use dispatcher::Dispatcher;
 use dns::dns_seed;
 use error::Error;
 use futures::{
-    executor::ThreadPool,
+    executor::{ThreadPool, ThreadPoolBuilder},
     future,
     Poll as Async,
-    FutureExt, StreamExt
+    FutureExt, StreamExt,
+    task::{SpawnExt, Context},
+    Future
 };
+use std::pin::Pin;
+use futures_timer::Interval;
 use headerdownload::HeaderDownload;
 use p2p::{P2P, P2PControl, PeerMessageSender, PeerSource};
 use ping::Ping;
@@ -51,11 +55,6 @@ use bitcoin::network::message::NetworkMessage;
 use bitcoin::network::message::RawNetworkMessage;
 use p2p::BitcoinP2PConfig;
 use std::time::Duration;
-use futures::task::{SpawnExt, Context};
-use futures_timer::Interval;
-use futures::Future;
-use std::pin::Pin;
-use futures::executor::ThreadPoolBuilder;
 
 const MAX_PROTOCOL_VERSION: u32 = 70001;
 
