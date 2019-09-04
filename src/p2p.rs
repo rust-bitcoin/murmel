@@ -570,11 +570,10 @@ impl<Message: Version + Send + Sync + Clone,
                 if let PeerSource::Outgoing(a) = source {
                     if peers.read().unwrap().values()
                         .any(|peer|
-                            if Ok(addr) = peer.lock().unwrap().stream.peer_addr() {
+                            if let Ok(addr) = peer.lock().unwrap().stream.peer_addr() {
                                 a.ip() == addr.ip()
                             } else { false }) {
                         debug!("rejecting outgoing connect for a peer already connected");
-                        s.shutdown(Shutdown::Both);
                         return Err(Error::Handshake);
                     }
                 }
@@ -588,11 +587,11 @@ impl<Message: Version + Send + Sync + Clone,
                 let (s, a) = listener.accept()?;
                 if peers.read().unwrap().values()
                     .any(|peer|
-                        if Ok(addr) = peer.lock().unwrap().stream.peer_addr() {
+                        if let Ok(addr) = peer.lock().unwrap().stream.peer_addr() {
                             a.ip() == addr.ip()
                         } else { false }) {
                     debug!("rejecting incoming connect from a peer already connected");
-                    s.shutdown(Shutdown::Both);
+                    s.shutdown(Shutdown::Both).unwrap_or(());
                     return Err(Error::Handshake);
                 }
                 addr = a;
@@ -617,7 +616,7 @@ impl<Message: Version + Send + Sync + Clone,
         } else {
             stored_peer.lock().unwrap().register_read()?;
         }
-        if outgoing {-
+        if outgoing {
             // send this node's version message to peer
             peers.get(&pid).unwrap().lock().unwrap().send(version)?;
         }
