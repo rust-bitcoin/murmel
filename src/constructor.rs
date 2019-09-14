@@ -161,7 +161,7 @@ impl Future for KeepConnected {
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Async<Self::Output> {
-        if self.p2p.connected_peers() < self.min_connections {
+        if self.p2p.n_connected_peers() < self.min_connections {
             let eligible = self.dns.iter().cloned().filter(|a| !self.earlier.contains(a)).collect::<Vec<_>>();
             if eligible.len() > 0 {
                 let mut rng = thread_rng();

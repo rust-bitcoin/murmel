@@ -449,7 +449,15 @@ impl<Message: Version + Send + Sync + Clone,
         (p2p, P2PControlSender::new(control_sender, peers, back_pressure))
     }
 
-    pub fn connected_peers (&self) -> usize {
+    pub fn connected_peers (&self) -> Vec<SocketAddr> {
+        self.peers.read().unwrap().values()
+            .filter_map(|peer|
+                if let Ok(a) = peer.lock().unwrap().stream.peer_addr() {
+                    Some(a)
+                } else {None}).collect()
+    }
+
+    pub fn n_connected_peers (&self) -> usize {
         self.peers.read().unwrap().len()
     }
 
