@@ -1,6 +1,6 @@
 [package]
 name = "murmel"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Tamas Blummer <tamas.blummer@gmail.com>"]
 license = "Apache-2.0"
 homepage = "https://github.com/rust-bitcoin/murmel/"
@@ -16,9 +16,9 @@ path = "src/lib.rs"
 
 [dependencies]
 lightning = { version ="0.0.9", optional=true }
-bitcoin = { git= "https://github.com/tamasblummer/rust-bitcoin.git", branch = "patches", features=["serde", "bitcoinconsensus"]}
+bitcoin = { version= "0.21", features=["serde"]}
 bitcoin_hashes = "0.7"
-hammersbald = { git= "https://github.com/tamasblummer/hammersbald.git", branch = "master", features=["bitcoin_support"]}
+hammersbald = { version= "2.4", features=["bitcoin_support"]}
 mio = "0.6"
 rand = "0.7"
 log = "0.4"
