@@ -95,6 +95,7 @@ pub enum P2PControl<Message: Clone> {
     Send(PeerId, Message),
     Broadcast(Message),
     Ban(PeerId, u32),
+    Disconnect(PeerId),
     Height(u32),
     Bind(SocketAddr)
 }
@@ -466,6 +467,9 @@ impl<Message: Version + Send + Sync + Clone,
             match control {
                 P2PControl::Ban(peer_id, score) => {
                     self.ban(peer_id, score);
+                },
+                P2PControl::Disconnect(peer_id) => {
+                    self.disconnect(peer_id, false);
                 },
                 P2PControl::Height(height) => {
                     self.config.set_height(height);

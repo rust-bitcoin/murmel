@@ -101,8 +101,8 @@ impl<Message: Send + Sync + Clone, Reply: Eq + Hash + std::fmt::Debug> Timeout<M
         for (peer, timeout) in &self.timeouts {
             if *timeout < Self::now () {
                 if expected.iter().any(|expected| if let Some(e) = self.expected.get(peer) { if let Some(n) = e.get(expected) { *n>0 } else { false } } else { false }) {
-                    debug!("too slow answering {:?} requests {:?}, banning peer={}", expected, self.expected.get(peer), *peer);
-                    self.p2p.send(P2PControl::Ban(*peer, 100));
+                    debug!("too slow answering {:?} requests {:?}, disconnecting peer={}", expected, self.expected.get(peer), *peer);
+                    self.p2p.send(P2PControl::Disconnect(*peer));
                     banned.push(*peer);
                 }
             }
