@@ -71,7 +71,8 @@ pub fn main() {
         match net.as_str() {
             "main" => network = Network::Bitcoin,
             "test" => network = Network::Testnet,
-            _ => network = Network::Bitcoin
+            "regtest" => network = Network::Regtest,
+            _ => network = Network::Bitcoin,
         }
     }
 
