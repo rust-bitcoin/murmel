@@ -177,6 +177,12 @@ impl ChainDB {
     pub fn fetch_header(&self, id: &sha256d::Hash) -> Result<Option<StoredHeader>, Error> {
         Ok(self.db.get_hash_keyed::<StoredHeader>(id)?.map(|(_, header)| header))
     }
+
+    /// Shutdown db
+    pub fn shutdown(&mut self) {
+        self.db.shutdown();
+        debug!("shutdown chain db")
+    }
 }
 
 /// A header enriched with information about its position on the blockchain
