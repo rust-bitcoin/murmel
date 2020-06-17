@@ -61,22 +61,7 @@ pub enum Error {
 
 impl std::error::Error for Error {
     fn description(&self) -> &str {
-        match *self {
-            Error::SpvBadTarget => "bad proof of work target",
-            Error::SpvBadProofOfWork => "bad proof of work",
-            Error::UnconnectedHeader => "unconnected header",
-            Error::NoTip => "no chain tip found",
-            Error::UnknownUTXO => "unknown utxo",
-            Error::NoPeers => "no peers",
-            Error::BadMerkleRoot => "merkle root of header does not match transaction list",
-            Error::Downstream(ref s) => s,
-            Error::IO(ref err) => err.description(),
-            Error::Util(ref err) => err.description(),
-            Error::Hammersbald(ref err) => err.description(),
-            Error::Serialize(ref err) => err.description(),
-            Error::Handshake => "handshake",
-            Error::Lost(ref s) => s
-        }
+        "description() is deprecated; use Display"
     }
 
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
@@ -102,20 +87,18 @@ impl std::error::Error for Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            // Both underlying errors already impl `Display`, so we defer to
-            // their implementations.
-            Error::SpvBadTarget |
-            Error::SpvBadProofOfWork |
-            Error::UnconnectedHeader |
-            Error::NoTip |
-            Error::NoPeers | Error::BadMerkleRoot |
-            Error::Handshake |
-            Error::UnknownUTXO => {
-                use std::error::Error;
-                write!(f, "{}", self.description())
-            },
-            Error::Lost(ref s) |
-            Error::Downstream(ref s) => write!(f, "{}", s),
+            Error::SpvBadTarget => write!(f, "bad proof of work target"),
+            Error::SpvBadProofOfWork => write!(f, "bad proof of work"),
+            Error::UnconnectedHeader => write!(f, "unconnected header"),
+            Error::NoTip => write!(f, "no chain tip found"),
+            Error::UnknownUTXO => write!(f, "unknown utxo"),
+            Error::NoPeers => write!(f, "no peers"),
+            Error::BadMerkleRoot =>
+                write!(f, "merkle root of header does not match transaction list"),
+            Error::Handshake => write!(f, "handshake"),
+            Error::Lost(ref s) => write!(f, "lost connection: {}", s),
+            Error::Downstream(ref s) => write!(f, "downstream error: {}", s),
+            // The underlying errors already impl `Display`, so we defer to their implementations.
             Error::IO(ref err) => write!(f, "IO error: {}", err),
             Error::Util(ref err) => write!(f, "Util error: {}", err),
             Error::Hammersbald(ref err) => write!(f, "Hammersbald error: {}", err),
@@ -135,8 +118,7 @@ impl convert::From<Error> for io::Error {
         match err {
             Error::IO(e) => e,
             _ => {
-                use std::error::Error;
-                io::Error::new(io::ErrorKind::Other, err.description())
+                io::Error::new(io::ErrorKind::Other, err.to_string())
             }
         }
     }
@@ -169,7 +151,7 @@ impl convert::From<encode::Error> for Error {
 
 impl convert::From<Box<dyn std::error::Error>> for Error {
     fn from(err: Box<dyn std::error::Error>) -> Self {
-        Error::Downstream(err.description().to_owned())
+        Error::Downstream(err.to_string())
     }
 }
 
