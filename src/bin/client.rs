@@ -41,7 +41,7 @@ pub fn main() {
         println!("--connections n: maintain at least n connections");
         println!("--peer ip_address: connect to the given peer at start. You may use more than one --peer option.");
         println!("--db file: store data in the given sqlite database file. Created if does not exist.");
-        println!("--network net: net is one of main|test for corresponding Bitcoin networks");
+        println!("--network net: net is one of main|test|regtest for corresponding Bitcoin networks");
         println!("--nodns : do not use dns seed");
         println!("--birth unixtime : blocks will be downloaded if matching filters after this time stamp");
         println!("defaults:");
@@ -71,13 +71,19 @@ pub fn main() {
         match net.as_str() {
             "main" => network = Network::Bitcoin,
             "test" => network = Network::Testnet,
+            "regtest" => network = Network::Regtest,
             _ => network = Network::Bitcoin
         }
     }
 
     let mut peers = get_peers();
     if peers.is_empty () {
-        peers.push(SocketAddr::from(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 8333)));
+        let port = match network {
+            Network::Bitcoin => 8333,
+            Network::Testnet => 18333,
+            Network::Regtest => 18444,
+        };
+        peers.push(SocketAddr::from(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), port)));
     }
     let mut connections = 1;
     if let Some(numstring) = find_arg("connections") {
