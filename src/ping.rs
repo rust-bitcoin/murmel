@@ -18,7 +18,7 @@
 //!
 
 use bitcoin::network::message::NetworkMessage;
-use p2p::{
+use crate::p2p::{
     P2PControlSender, PeerId, PeerMessage, PeerMessageReceiver, PeerMessageSender
 };
 use rand::{RngCore, thread_rng};
@@ -28,7 +28,7 @@ use std::{
     thread,
     time::Duration
 };
-use timeout::{ExpectedReply, SharedTimeout};
+use crate::timeout::{ExpectedReply, SharedTimeout};
 
 // ping peers every SECS seconds if not asked anything else in the meanwhile
 const SECS: u64 = 60;

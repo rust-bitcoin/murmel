@@ -9,6 +9,7 @@ documentation = "https://github.com/rust-bitcoin/murmel/"
 description = "Murmel Bitcoin node"
 keywords = [ "bitcoin" ]
 readme = "README.md"
+edition = "2018"
 
 [lib]
 name = "murmel"

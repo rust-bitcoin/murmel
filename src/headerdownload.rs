@@ -21,17 +21,18 @@ use bitcoin::{BitcoinHash, network::{
     message_blockdata::{GetHeadersMessage, Inventory, InvType},
 }, BlockHeader};
 use bitcoin_hashes::sha256d::Hash as Sha256dHash;
-use chaindb::SharedChainDB;
-use error::Error;
-use p2p::{P2PControl, P2PControlSender, PeerId, PeerMessage, PeerMessageReceiver, PeerMessageSender, SERVICE_BLOCKS};
+use crate::chaindb::SharedChainDB;
+use crate::error::Error;
+use crate::p2p::{P2PControl, P2PControlSender, PeerId, PeerMessage, PeerMessageReceiver, PeerMessageSender, SERVICE_BLOCKS};
+use log::{info, trace, debug, error};
 use std::{
     collections::VecDeque,
     sync::mpsc,
     thread,
     time::Duration,
 };
-use timeout::{ExpectedReply, SharedTimeout};
-use downstream::SharedDownstream;
+use crate::timeout::{ExpectedReply, SharedTimeout};
+use crate::downstream::SharedDownstream;
 
 pub struct HeaderDownload {
     p2p: P2PControlSender<NetworkMessage>,

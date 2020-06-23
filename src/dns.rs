@@ -23,6 +23,7 @@
 //!
 
 use bitcoin::network::constants::Network;
+use log::{info, trace};
 use std::net::{SocketAddr, ToSocketAddrs};
 
 const MAIN_SEEDER: [&str;5] = [
