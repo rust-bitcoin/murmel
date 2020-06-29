@@ -17,28 +17,18 @@
 //! # Blockchain DB for a node
 //!
 
-use bitcoin::{
-    BitcoinHash,
-    blockdata::{
-        block::{BlockHeader},
-        constants::genesis_block,
-    },
-    network::constants::Network,
-};
+use std::sync::{Arc, RwLock};
+use std::path::Path;
 
-use bitcoin_hashes::{sha256d};
+use bitcoin::{BitcoinHash, Network};
+use bitcoin::blockdata::block::BlockHeader;
+use bitcoin::blockdata::constants::genesis_block;
+
+use bitcoin_hashes::sha256d;
+use hammersbald::{BitcoinAdaptor, HammersbaldAPI, persistent, transient};
+
 use error::Error;
-use hammersbald::{
-    BitcoinAdaptor, HammersbaldAPI, persistent,
-    transient,
-};
 use headercache::{CachedHeader, HeaderCache};
-use std::{
-    sync::{Arc, RwLock}
-};
-use std::{
-    path::Path
-};
 
 /// Shared handle to a database storing the block chain
 /// protected by an RwLock
@@ -216,14 +206,16 @@ const HEADER_TIP_KEY: &[u8] = &[0u8; 1];
 
 #[cfg(test)]
 mod test {
+    use std::error::Error;
+
     use bitcoin::{Network, BitcoinHash};
-    use chaindb::{ChainDB, StoredHeader};
     use bitcoin_hashes::sha256d::Hash;
     use bitcoin::blockdata::constants::genesis_block;
     use hammersbald::HammersbaldAPI;
-    use std::error::Error;
     use futures::TryFutureExt;
     use futures::future::err;
+
+    use chaindb::{ChainDB, StoredHeader};
 
     #[test]
     fn init_tip_header() {
