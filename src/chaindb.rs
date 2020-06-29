@@ -219,7 +219,6 @@ mod test {
 
     #[test]
     fn init_tip_header() {
-        simple_logger::init().unwrap();
         let network = Network::Testnet;
         let genesis_header = genesis_block(network).header;
 
@@ -234,7 +233,6 @@ mod test {
 
     #[test]
     fn init_recover_if_missing_tip_header() {
-        simple_logger::init().unwrap();
         let network = Network::Testnet;
         let genesis_header = genesis_block(network).header;
 
