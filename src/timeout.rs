@@ -17,7 +17,8 @@
 //! # Keep track of peer timeouts
 //!
 
-use p2p::{P2PControl, P2PControlSender, PeerId};
+use crate::p2p::{P2PControl, P2PControlSender, PeerId};
+use log::debug;
 use std::{
     cmp::min,
     collections::HashMap,

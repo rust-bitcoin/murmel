@@ -29,8 +29,9 @@ use bitcoin::network::{
     message_network::VersionMessage
 };
 
-use error::Error;
+use crate::error::Error;
 use futures::{Poll as Async, Future, future, FutureExt, task::{Waker}, TryFutureExt};
+use log::{info, trace, debug, error};
 use mio::{
     Event, Events, net::{TcpListener, TcpStream}, Poll, PollOpt, Ready,
     Token,
@@ -258,7 +259,7 @@ pub trait P2PConfig<Message: Version + Send + Sync + 'static, Envelope: Command 
     fn magic(&self) -> u32;
     fn user_agent(&self) -> &str;
     fn get_height(&self) -> u32;
-    fn set_height(&self, u32);
+    fn set_height(&self, height: u32);
     fn max_protocol_version(&self) -> u32;
     fn min_protocol_version(&self) -> u32;
     fn verack(&self) -> Message;

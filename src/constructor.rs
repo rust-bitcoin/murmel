@@ -24,10 +24,10 @@ use bitcoin::{
         constants::Network
     }
 };
-use chaindb::{ChainDB, SharedChainDB};
-use dispatcher::Dispatcher;
-use dns::dns_seed;
-use error::Error;
+use crate::chaindb::{ChainDB, SharedChainDB};
+use crate::dispatcher::Dispatcher;
+use crate::dns::dns_seed;
+use crate::error::Error;
 use futures::{
     executor::{ThreadPool, ThreadPoolBuilder},
     future,
@@ -38,9 +38,10 @@ use futures::{
 };
 use std::pin::Pin;
 use futures_timer::Interval;
-use headerdownload::HeaderDownload;
-use p2p::{P2P, P2PControl, PeerMessageSender, PeerSource};
-use ping::Ping;
+use crate::headerdownload::HeaderDownload;
+#[cfg(feature = "lightning")] use crate::lightning::LightningConnector;
+use crate::p2p::{P2P, P2PControl, PeerMessageSender, PeerSource};
+use crate::ping::Ping;
 use rand::{RngCore, thread_rng};
 use std::{
     collections::HashSet,
@@ -48,12 +49,11 @@ use std::{
     path::Path,
     sync::{Arc, mpsc, Mutex, RwLock, atomic::AtomicUsize},
 };
-use timeout::Timeout;
-use downstream::DownStreamDummy;
-use downstream::SharedDownstream;
+use crate::timeout::Timeout;
+use crate::downstream::{DownStreamDummy, SharedDownstream};
 use bitcoin::network::message::NetworkMessage;
 use bitcoin::network::message::RawNetworkMessage;
-use p2p::BitcoinP2PConfig;
+use crate::p2p::BitcoinP2PConfig;
 use std::time::Duration;
 
 const MAX_PROTOCOL_VERSION: u32 = 70001;

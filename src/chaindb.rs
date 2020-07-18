@@ -27,8 +27,10 @@ use bitcoin::blockdata::constants::genesis_block;
 use bitcoin_hashes::sha256d;
 use hammersbald::{BitcoinAdaptor, HammersbaldAPI, persistent, transient};
 
-use error::Error;
-use headercache::{CachedHeader, HeaderCache};
+use crate::error::Error;
+use crate::headercache::{CachedHeader, HeaderCache};
+use log::{debug, info, warn, error};
+use serde_derive::{Serialize, Deserialize};
 
 /// Shared handle to a database storing the block chain
 /// protected by an RwLock
@@ -206,16 +208,11 @@ const HEADER_TIP_KEY: &[u8] = &[0u8; 1];
 
 #[cfg(test)]
 mod test {
-    use std::error::Error;
-
     use bitcoin::{Network, BitcoinHash};
     use bitcoin_hashes::sha256d::Hash;
     use bitcoin::blockdata::constants::genesis_block;
-    use hammersbald::HammersbaldAPI;
-    use futures::TryFutureExt;
-    use futures::future::err;
 
-    use chaindb::{ChainDB, StoredHeader};
+    use crate::chaindb::ChainDB;
 
     #[test]
     fn init_tip_header() {

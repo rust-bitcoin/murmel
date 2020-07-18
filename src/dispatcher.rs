@@ -18,7 +18,7 @@
 //!
 
 
-use p2p::{PeerMessageReceiver, PeerMessageSender};
+use crate::p2p::{PeerMessageReceiver, PeerMessageSender};
 use std::{
     thread,
     sync::{Arc, Mutex}

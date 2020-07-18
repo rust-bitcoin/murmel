@@ -27,8 +27,9 @@ use bitcoin::{
 };
 use bitcoin_hashes::sha256d::Hash as Sha256dHash;
 use bitcoin_hashes::Hash;
-use chaindb::StoredHeader;
-use error::Error;
+use crate::chaindb::StoredHeader;
+use crate::error::Error;
+use log::trace;
 use std::{
     collections::HashMap
 };
