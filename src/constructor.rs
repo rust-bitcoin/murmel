@@ -57,6 +57,7 @@ use crate::p2p::BitcoinP2PConfig;
 use std::time::Duration;
 
 const MAX_PROTOCOL_VERSION: u32 = 70001;
+const USER_AGENT: &'static str = concat!("/Murmel:", env!("CARGO_PKG_VERSION"), '/');
 
 /// The complete stack
 pub struct Constructor {
@@ -89,7 +90,7 @@ impl Constructor {
             network,
             nonce: thread_rng().next_u64(),
             max_protocol_version: MAX_PROTOCOL_VERSION,
-            user_agent: "murmel: 0.1.0".to_owned(),
+            user_agent: USER_AGENT.to_owned(),
             height: AtomicUsize::new(0),
             server: !listen.is_empty()
         };
