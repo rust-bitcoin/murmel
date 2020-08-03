@@ -37,14 +37,15 @@ use lightning::{
     chain::chaininterface::{ChainListener, ChainWatchInterface, ChainWatchInterfaceUtil,ChainError},
     util::logger::{Level, Logger, Record}
 };
+use log::debug;
 
-use downstream::Downstream;
+use crate::downstream::Downstream;
 
-use p2p::P2PControlSender;
+use crate::p2p::P2PControlSender;
 
 use std::sync::{Arc, Weak, Mutex};
 
-struct LightningLogger{
+struct LightningLogger {
     level: Level
 }
 
@@ -61,28 +62,30 @@ pub type SharedLightningConnector = Arc<Mutex<LightningConnector>>;
 /// connector to lightning network
 pub struct LightningConnector {
     util: ChainWatchInterfaceUtil,
-    p2p: P2PControlSender
+    p2p: P2PControlSender<NetworkMessage>,
 }
 
 impl Downstream for LightningConnector {
     /// called by the node if new block added to trunk (longest chain)
     /// this will notify listeners on lightning side
-    fn block_connected(&mut self, block: &Block, height: u32) {
-        self.util.block_connected_with_filtering(block, height)
+    fn block_connected(&mut self, _block: &Block, _height: u32) {
+        // TODO FIX
+        // self.util.block_connected(block, height)
     }
 
-    fn header_connected(&mut self, block: &BlockHeader, height: u32) {}
+    fn header_connected(&mut self, _block: &BlockHeader, _height: u32) {}
 
     /// called by the node if a block is removed from trunk (orphaned from longest chain)
     /// this will notify listeners on lightning side
-    fn block_disconnected(&mut self, header: &BlockHeader) {
-        self.util.block_disconnected(header)
+    fn block_disconnected(&mut self, _header: &BlockHeader) {
+        // TODO FIX
+        // self.util.block_disconnected(header)
     }
 }
 
 impl LightningConnector {
     /// create a connector
-    pub fn new (network: Network, p2p: P2PControlSender) -> LightningConnector {
+    pub fn new(network: Network, p2p: P2PControlSender<NetworkMessage>) -> LightningConnector {
         LightningConnector {
             util: ChainWatchInterfaceUtil::new(network, Arc::new(LightningLogger{level: Level::Info})),
             p2p
@@ -90,7 +93,7 @@ impl LightningConnector {
     }
 
     /// broadcast transaction to all connected peers
-    pub fn broadcast (&self, tx: Transaction) {
+    pub fn broadcast(&self, tx: Transaction) {
         self.p2p.broadcast(NetworkMessage::Tx(tx))
     }
 }
@@ -111,12 +114,21 @@ impl ChainWatchInterface for LightningConnector {
         self.util.watch_all_txn()
     }
 
+    // TODO FIX
     /// install a listener for blocks added to or removed from trunk
-    fn register_listener(&self, listener: Weak<ChainListener>) {
-        self.util.register_listener(listener)
+    // fn register_listener(&self, listener: Weak<ChainListener>) {
+    //     self.util.register_listener(listener)
+    // }
+
+    fn get_chain_utxo(&self, genesis_hash: Sha256dHash, unspent_tx_output_identifier: u64, ) -> Result<(Script, u64), ChainError> {
+        self.util.get_chain_utxo(genesis_hash, unspent_tx_output_identifier)
     }
 
-    fn get_chain_utxo(&self, _genesis_hash: Sha256dHash, _unspent_tx_output_identifier: u64) -> Result<(Script, u64), ChainError> {
-        Err(ChainError::NotSupported)
+    fn filter_block<'a>(&self, block: &'a Block) -> (Vec<&'a Transaction>, Vec<u32>) {
+        self.util.filter_block(block)
+    }
+
+    fn reentered(&self) -> usize {
+        self.util.reentered()
     }
 }
