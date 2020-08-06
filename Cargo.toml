@@ -16,10 +16,9 @@ name = "murmel"
 path = "src/lib.rs"
 
 [dependencies]
-lightning = { version ="0.0.9", optional=true }
-bitcoin = { version= "0.21", features=["use-serde"]}
+bitcoin = { version= "0.23", features=["use-serde"]}
 bitcoin_hashes = "0.7"
-hammersbald = { version= "2.4", features=["bitcoin_support"]}
+hammersbald = { git= "https://github.com/jrawsthorne/hammersbald.git", branch="upgrade-bitcoin", features=["bitcoin_support"]}
 mio = "0.6"
 rand = "0.7"
 log = "0.4"

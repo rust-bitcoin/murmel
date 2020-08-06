@@ -21,7 +21,7 @@
 
 use bitcoin::{
     network::{
-        constants::Network
+        constants::{ServiceFlags, Network}
     }
 };
 use crate::chaindb::{ChainDB, SharedChainDB};
@@ -39,7 +39,6 @@ use futures::{
 use std::pin::Pin;
 use futures_timer::Interval;
 use crate::headerdownload::HeaderDownload;
-#[cfg(feature = "lightning")] use crate::lightning::LightningConnector;
 use crate::p2p::{P2P, P2PControl, PeerMessageSender, PeerSource};
 use crate::ping::Ping;
 use rand::{RngCore, thread_rng};
@@ -98,22 +97,20 @@ impl Constructor {
         let (p2p, p2p_control) =
             P2P::new(p2pconfig, PeerMessageSender::new(to_dispatcher), BACK_PRESSURE);
 
-        #[cfg(feature = "lightning")] let lightning = Arc::new(Mutex::new(LightningConnector::new(network, p2p_control.clone())));
-        #[cfg(not(feature = "lightning"))] let lightning = Arc::new(Mutex::new(DownStreamDummy {}));
-
+        let downstream = Arc::new(Mutex::new(DownStreamDummy {}));
 
         let timeout = Arc::new(Mutex::new(Timeout::new(p2p_control.clone())));
 
         let mut dispatcher = Dispatcher::new(from_p2p);
 
-        dispatcher.add_listener(HeaderDownload::new(chaindb.clone(), p2p_control.clone(), timeout.clone(), lightning.clone()));
+        dispatcher.add_listener(HeaderDownload::new(chaindb.clone(), p2p_control.clone(), timeout.clone(), downstream.clone()));
         dispatcher.add_listener(Ping::new(p2p_control.clone(), timeout.clone()));
 
         for addr in &listen {
             p2p_control.send(P2PControl::Bind(addr.clone()));
         }
 
-        Ok(Constructor { p2p, downstream: lightning })
+        Ok(Constructor { p2p, downstream })
     }
 
     /// Run the stack. This should be called AFTER registering listener of the ChainWatchInterface,
@@ -141,7 +138,7 @@ impl Constructor {
         let p2p = self.p2p.clone();
         let mut cex = executor.clone();
         executor.run(future::poll_fn(move |_| {
-            let needed_services = 0;
+            let needed_services = ServiceFlags::NONE;
             p2p.poll_events("bitcoin", needed_services, &mut cex);
             Async::Ready(())
         }));
