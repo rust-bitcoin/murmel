@@ -37,6 +37,7 @@ pub mod dispatcher;
 pub mod p2p;
 pub mod error;
 pub mod chaindb;
+#[cfg(feature = "default")] pub mod hammersbald;
 pub mod constructor;
 
 pub use error::Error;

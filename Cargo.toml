@@ -11,13 +11,17 @@ keywords = [ "bitcoin" ]
 readme = "README.md"
 edition = "2018"
 
+[features]
+default = ["hammersbald"]
+
 [lib]
 name = "murmel"
 path = "src/lib.rs"
 
 [dependencies]
 bitcoin = "0.26"
-hammersbald = { version = "3.0.1", features = [ "bitcoin_support" ] }
+lightning = { version ="0.0.9", optional=true }
+bitcoin_hashes = "0.7"
 mio = "0.6"
 rand = "0.7"
 log = "0.4"
@@ -28,6 +32,9 @@ futures-preview = "=0.3.0-alpha.18"
 futures-timer = "0.3"
 serde="1"
 serde_derive="1"
+
+## optional
+hammersbald = { version = "3.0.1", features = [ "bitcoin_support" ], optional=true }
 
 [dev-dependencies]
 rustc-serialize = "0.3"
