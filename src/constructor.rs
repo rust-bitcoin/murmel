@@ -24,7 +24,7 @@ use bitcoin::{
         constants::Network
     }
 };
-use crate::chaindb::{ChainDB, SharedChainDB};
+use crate::hammersbald::Hammersbald;
 use crate::dispatcher::Dispatcher;
 use crate::dns::dns_seed;
 use crate::error::Error;
@@ -55,6 +55,7 @@ use bitcoin::network::message::NetworkMessage;
 use bitcoin::network::message::RawNetworkMessage;
 use crate::p2p::BitcoinP2PConfig;
 use std::time::Duration;
+use crate::chaindb::SharedChainDB;
 
 const MAX_PROTOCOL_VERSION: u32 = 70001;
 const USER_AGENT: &'static str = concat!("/Murmel:", env!("CARGO_PKG_VERSION"), '/');
@@ -71,9 +72,11 @@ impl Constructor {
     pub fn open_db(path: Option<&Path>, network: Network, _birth: u64) -> Result<SharedChainDB, Error> {
         let mut chaindb =
             if let Some(path) = path {
-                ChainDB::new(path, network)?
+                #[cfg(feature = "default")]
+                Hammersbald::new(path, network)?
             } else {
-                ChainDB::mem(network)?
+                #[cfg(feature = "default")]
+                Hammersbald::mem(network)?
             };
         chaindb.init()?;
         Ok(Arc::new(RwLock::new(chaindb)))
