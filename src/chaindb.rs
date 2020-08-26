@@ -74,9 +74,9 @@ impl ChainDB {
     fn init_headers(&mut self) -> Result<(), Error> {
         if let Some(tip) = self.fetch_header_tip()? {
             info!("reading stored header chain from tip {}", tip);
-            if self.fetch_header(&tip)?.is_some() {
+            if self.fetch_header(tip)?.is_some() {
                 let mut h = tip;
-                while let Some(stored) = self.fetch_header(&h)? {
+                while let Some(stored) = self.fetch_header(h)? {
                     debug!("read stored header {}", &stored.block_hash());
                     self.headercache.add_header_unchecked(&h, &stored);
                     if stored.header.prev_blockhash != BlockHash::default() {
@@ -102,7 +102,7 @@ impl ChainDB {
         let genesis = genesis_block(self.network).header;
         if let Some((cached, _, _)) = self.headercache.add_header(&genesis)? {
             info!("initialized with genesis header {}", genesis.block_hash());
-            self.db.put_hash_keyed(&cached.block_hash().as_hash(), &cached.stored)?;
+            self.db.put_hash_keyed(cached.block_hash(), &cached.stored)?;
             self.db.batch()?;
             self.store_header_tip(&cached.block_hash())?;
             self.db.batch()?;
@@ -116,7 +116,7 @@ impl ChainDB {
     /// Store a header
     pub fn add_header(&mut self, header: &BlockHeader) -> Result<Option<(StoredHeader, Option<Vec<BlockHash>>, Option<Vec<BlockHash>>)>, Error> {
         if let Some((cached, unwinds, forward)) = self.headercache.add_header(header)? {
-            self.db.put_hash_keyed(&cached.block_hash().as_hash(), &cached.stored)?;
+            self.db.put_hash_keyed(cached.block_hash(), &cached.stored)?;
             if let Some(forward) = forward.clone() {
                 if forward.len() > 0 {
                     self.store_header_tip(forward.last().unwrap())?;
@@ -174,8 +174,8 @@ impl ChainDB {
     }
 
     /// Read header from the DB
-    pub fn fetch_header(&self, id: &BlockHash) -> Result<Option<StoredHeader>, Error> {
-        Ok(self.db.get_hash_keyed::<StoredHeader>(&id.as_hash())?.map(|(_, header)| header))
+    pub fn fetch_header(&self, id: BlockHash) -> Result<Option<StoredHeader>, Error> {
+        Ok(self.db.get_hash_keyed::<_, StoredHeader>(id)?.map(|(_, header)| header))
     }
 
     /// Shutdown db
