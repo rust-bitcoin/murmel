@@ -74,9 +74,6 @@ pub trait ChainDB: Send + Sync {
 
     /// Read header from the DB.
     fn fetch_header(&self, id: &sha256d::Hash) -> Result<Option<StoredHeader>, Error>;
-
-    /// Shutdown the DB.
-    fn shutdown(&mut self);
 }
 
 /// A header enriched with information about its position on the blockchain
