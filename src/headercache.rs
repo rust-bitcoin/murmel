@@ -18,7 +18,6 @@
 //!
 
 use bitcoin::{
-    BitcoinHash,
     blockdata::block::BlockHeader,
     network::constants::Network,
     util::{
@@ -77,7 +76,7 @@ impl CachedHeader {
         if target != required_target {
             return Err(Error::SpvBadTarget);
         }
-        let data: [u8; 32] = self.bitcoin_hash().into_inner();
+        let data: [u8; 32] = self.block_hash().into_inner();
         let mut ret = [0u64; 4];
         LittleEndian::read_u64_into(&data, &mut ret);
         let hash = &Uint256(ret);
@@ -96,8 +95,8 @@ impl CachedHeader {
     }
 }
 
-impl BitcoinHash<BlockHash> for CachedHeader {
-    fn bitcoin_hash(&self) -> BlockHash {
+impl CachedHeader {
+    pub fn block_hash(&self) -> BlockHash {
         self.id
     }
 }
@@ -134,7 +133,7 @@ impl HeaderCache {
 
     /// add a Bitcoin header
     pub fn add_header(&mut self, header: &BlockHeader) -> Result<Option<(CachedHeader, Option<Vec<BlockHash>>, Option<Vec<BlockHash>>)>, Error> {
-        if self.headers.get(&header.bitcoin_hash()).is_some() {
+        if self.headers.get(&header.block_hash()).is_some() {
             // ignore already known header
             return Ok(None);
         }
@@ -152,7 +151,7 @@ impl HeaderCache {
             return Ok(Some(self.add_header_to_tree(&previous, header)?));
         } else {
             // insert genesis
-            let new_tip = header.bitcoin_hash();
+            let new_tip = header.block_hash();
             let stored = CachedHeader::new(&new_tip, StoredHeader {
                 header: header.clone(),
                 height: 0,
@@ -252,7 +251,7 @@ impl HeaderCache {
                 prev.stored.header.target()
             };
 
-        let cached = CachedHeader::new(&next.bitcoin_hash(), StoredHeader {
+        let cached = CachedHeader::new(&next.block_hash(), StoredHeader {
             header: next.clone(),
             height: prev.stored.height + 1,
             log2work: Self::log2(next.work() + Self::exp2(prev.stored.log2work))
@@ -263,7 +262,7 @@ impl HeaderCache {
             return Err(Error::SpvBadProofOfWork);
         }
 
-        let next_hash = cached.bitcoin_hash();
+        let next_hash = cached.block_hash();
 
         // store header in cache
         self.headers.insert(next_hash.clone(), cached.clone());

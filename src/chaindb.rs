@@ -20,7 +20,7 @@
 use std::sync::{Arc, RwLock};
 use std::path::Path;
 
-use bitcoin::{BitcoinHash, Network};
+use bitcoin::Network;
 use bitcoin::blockdata::block::BlockHeader;
 use bitcoin::{BlockHash, blockdata::constants::genesis_block};
 
@@ -77,7 +77,7 @@ impl ChainDB {
             if self.fetch_header(&tip)?.is_some() {
                 let mut h = tip;
                 while let Some(stored) = self.fetch_header(&h)? {
-                    debug!("read stored header {}", &stored.bitcoin_hash());
+                    debug!("read stored header {}", &stored.block_hash());
                     self.headercache.add_header_unchecked(&h, &stored);
                     if stored.header.prev_blockhash != BlockHash::default() {
                         h = stored.header.prev_blockhash;
@@ -101,10 +101,10 @@ impl ChainDB {
     fn init_to_genesis(&mut self) -> Result<(), Error> {
         let genesis = genesis_block(self.network).header;
         if let Some((cached, _, _)) = self.headercache.add_header(&genesis)? {
-            info!("initialized with genesis header {}", genesis.bitcoin_hash());
-            self.db.put_hash_keyed(&cached.bitcoin_hash().as_hash(), &cached.stored)?;
+            info!("initialized with genesis header {}", genesis.block_hash());
+            self.db.put_hash_keyed(&cached.block_hash().as_hash(), &cached.stored)?;
             self.db.batch()?;
-            self.store_header_tip(&cached.bitcoin_hash())?;
+            self.store_header_tip(&cached.block_hash())?;
             self.db.batch()?;
         } else {
             error!("failed to initialize with genesis header");
@@ -116,7 +116,7 @@ impl ChainDB {
     /// Store a header
     pub fn add_header(&mut self, header: &BlockHeader) -> Result<Option<(StoredHeader, Option<Vec<BlockHash>>, Option<Vec<BlockHash>>)>, Error> {
         if let Some((cached, unwinds, forward)) = self.headercache.add_header(header)? {
-            self.db.put_hash_keyed(&cached.bitcoin_hash().as_hash(), &cached.stored)?;
+            self.db.put_hash_keyed(&cached.block_hash().as_hash(), &cached.stored)?;
             if let Some(forward) = forward.clone() {
                 if forward.len() > 0 {
                     self.store_header_tip(forward.last().unwrap())?;
@@ -197,9 +197,9 @@ pub struct StoredHeader {
 }
 
 // need to implement if put_hash_keyed and get_hash_keyed should be used
-impl BitcoinHash<BlockHash> for StoredHeader {
-    fn bitcoin_hash(&self) -> BlockHash {
-        self.header.bitcoin_hash()
+impl StoredHeader {
+    pub fn block_hash(&self) -> BlockHash {
+        self.header.block_hash()
     }
 }
 
@@ -207,7 +207,7 @@ const HEADER_TIP_KEY: &[u8] = &[0u8; 1];
 
 #[cfg(test)]
 mod test {
-    use bitcoin::{Network, BitcoinHash};
+    use bitcoin::Network;
     use bitcoin::blockdata::constants::genesis_block;
 
     use crate::chaindb::ChainDB;
@@ -223,7 +223,7 @@ mod test {
 
         let header_tip = chaindb.header_tip();
         assert!(header_tip.is_some(), "failed to get header for tip");
-        assert!(header_tip.unwrap().stored.bitcoin_hash().eq(&genesis_header.bitcoin_hash()))
+        assert!(header_tip.unwrap().stored.block_hash().eq(&genesis_header.block_hash()))
     }
 
     #[test]
@@ -239,7 +239,7 @@ mod test {
 
         let header_tip = chaindb.header_tip();
         assert!(header_tip.is_some(), "failed to get header for tip");
-        assert!(header_tip.unwrap().stored.bitcoin_hash().eq(&genesis_header.bitcoin_hash()))
+        assert!(header_tip.unwrap().stored.block_hash().eq(&genesis_header.block_hash()))
     }
 }
 

@@ -16,7 +16,7 @@
 //!
 //! # Download headers
 //!
-use bitcoin::{BitcoinHash, network::{
+use bitcoin::{network::{
     message::NetworkMessage,
     message_blockdata::{GetHeadersMessage, Inventory}, constants::ServiceFlags,
 }, BlockHeader, BlockHash};
@@ -181,7 +181,7 @@ impl HeaderDownload {
                                 return Ok(());
                             }
                             Err(e) => {
-                                debug!("error {} processing header {} ", e, header.bitcoin_hash());
+                                debug!("error {} processing header {} ", e, header.block_hash());
                                 return Ok(());
                             }
                         }
@@ -207,7 +207,7 @@ impl HeaderDownload {
                 info!("received {} headers new tip={} from peer={}", headers.len(), new_tip, peer);
                 self.p2p.send(P2PControl::Height(height));
             } else {
-                debug!("received {} known or orphan headers [{} .. {}] from peer={}", headers.len(), headers[0].bitcoin_hash(), headers[headers.len()-1].bitcoin_hash(), peer);
+                debug!("received {} known or orphan headers [{} .. {}] from peer={}", headers.len(), headers[0].block_hash(), headers[headers.len()-1].block_hash(), peer);
             }
         }
         Ok(())
