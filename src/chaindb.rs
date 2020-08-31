@@ -24,7 +24,7 @@ use bitcoin::Network;
 use bitcoin::blockdata::block::BlockHeader;
 use bitcoin::{BlockHash, blockdata::constants::genesis_block};
 
-use hammersbald::{BitcoinAdaptor, HammersbaldAPI, persistent, transient};
+use hammersbald::{BitcoinAdaptor, HammersbaldAPI, persistent, transient, BitcoinHash};
 
 use crate::error::Error;
 use crate::headercache::{CachedHeader, HeaderCache};
@@ -102,7 +102,7 @@ impl ChainDB {
         let genesis = genesis_block(self.network).header;
         if let Some((cached, _, _)) = self.headercache.add_header(&genesis)? {
             info!("initialized with genesis header {}", genesis.block_hash());
-            self.db.put_hash_keyed(cached.block_hash(), &cached.stored)?;
+            self.db.put_hash_keyed(&cached.stored)?;
             self.db.batch()?;
             self.store_header_tip(&cached.block_hash())?;
             self.db.batch()?;
@@ -116,7 +116,7 @@ impl ChainDB {
     /// Store a header
     pub fn add_header(&mut self, header: &BlockHeader) -> Result<Option<(StoredHeader, Option<Vec<BlockHash>>, Option<Vec<BlockHash>>)>, Error> {
         if let Some((cached, unwinds, forward)) = self.headercache.add_header(header)? {
-            self.db.put_hash_keyed(cached.block_hash(), &cached.stored)?;
+            self.db.put_hash_keyed(&cached.stored)?;
             if let Some(forward) = forward.clone() {
                 if forward.len() > 0 {
                     self.store_header_tip(forward.last().unwrap())?;
@@ -175,7 +175,7 @@ impl ChainDB {
 
     /// Read header from the DB
     pub fn fetch_header(&self, id: BlockHash) -> Result<Option<StoredHeader>, Error> {
-        Ok(self.db.get_hash_keyed::<_, StoredHeader>(id)?.map(|(_, header)| header))
+        Ok(self.db.get_hash_keyed::<StoredHeader>(&id.as_hash())?.map(|(_, header)| header))
     }
 
     /// Shutdown db
@@ -200,6 +200,12 @@ pub struct StoredHeader {
 impl StoredHeader {
     pub fn block_hash(&self) -> BlockHash {
         self.header.block_hash()
+    }
+}
+
+impl BitcoinHash for StoredHeader {
+    fn bitcoin_hash(&self) -> bitcoin_hashes::sha256d::Hash {
+        self.block_hash().as_hash()
     }
 }
 
