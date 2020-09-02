@@ -34,6 +34,8 @@ use std::{
     collections::HashMap
 };
 
+use log::debug;
+
 #[derive(Clone)]
 pub struct CachedHeader {
     pub stored : StoredHeader,
@@ -137,6 +139,7 @@ impl HeaderCache {
     pub fn add_header(&mut self, header: &BlockHeader) -> Result<Option<(CachedHeader, Option<Vec<Sha256dHash>>, Option<Vec<Sha256dHash>>)>, Error> {
         if self.headers.get(&header.bitcoin_hash()).is_some() {
             // ignore already known header
+            debug!("ignore already known header");
             return Ok(None);
         }
         if header.prev_blockhash != Sha256dHash::default() {
