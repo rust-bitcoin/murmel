@@ -3,3 +3,4 @@ target
 *.iml
 Cargo.lock
 client.db.*
+client.db

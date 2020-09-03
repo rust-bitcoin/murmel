@@ -193,9 +193,20 @@ mod test {
 
     use crate::hammersbald::Hammersbald;
 
+    use std::sync::Once;
+
+    static INIT: Once = Once::new();
+
+    /// Setup function that is only run once, even if called multiple times.
+    fn setup() {
+        INIT.call_once(|| {
+            simple_logger::init().unwrap();
+        });
+    }
+
     #[test]
     fn init_tip_header() {
-        //simple_logger::init().unwrap();
+        setup();
 
         let network = Network::Testnet;
         let genesis_header = genesis_block(network).header;
@@ -214,6 +225,8 @@ mod test {
 
     #[test]
     fn init_recover_if_missing_tip_header() {
+        setup();
+
         let network = Network::Testnet;
         let genesis_header = genesis_block(network).header;
 

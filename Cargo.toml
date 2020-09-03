@@ -36,7 +36,7 @@ serde_cbor = "0.10"
 
 ## optional
 hammersbald = { version = "2.4", features = ["bitcoin_support"], optional = true }
-rocksdb = { version = "0.15.0", default-feature = false, features = ["lz4"], optional = true }
+rocksdb = { version = "0.15.0", default-features = false, features = ["lz4"], optional = true }
 
 [dev-dependencies]
 rustc-serialize = "0.3"

@@ -22,7 +22,13 @@
 use bitcoin::consensus::encode;
 use bitcoin::util;
 use bitcoin::util::bip158;
+
+#[cfg(feature="default")]
 use hammersbald;
+
+#[cfg(feature="rocksdb")]
+use rocksdb;
+
 use std::convert;
 use std::fmt;
 use std::io;
@@ -52,7 +58,10 @@ pub enum Error {
     /// Bitcoin serialize error
     Serialize(encode::Error),
     /// Hammersbald error
+    #[cfg(feature="default")]
     Hammersbald(hammersbald::Error),
+    #[cfg(feature="rocksdb")]
+    RocksDB(String),
     /// Handshake failure
     Handshake,
     /// lost connection
@@ -76,7 +85,10 @@ impl std::error::Error for Error {
             Error::BadMerkleRoot => None,
             Error::IO(ref err) => Some(err),
             Error::Util(ref err) => Some(err),
+            #[cfg(feature="default")]
             Error::Hammersbald(ref err) => Some(err),
+            #[cfg(feature="rocksdb")]
+            Error::RocksDB(_) => None,
             Error::Serialize(ref err) => Some(err),
             Error::Handshake => None,
             Error::Lost(_) => None
@@ -101,7 +113,10 @@ impl fmt::Display for Error {
             // The underlying errors already impl `Display`, so we defer to their implementations.
             Error::IO(ref err) => write!(f, "IO error: {}", err),
             Error::Util(ref err) => write!(f, "Util error: {}", err),
+            #[cfg(feature="default")]
             Error::Hammersbald(ref err) => write!(f, "Hammersbald error: {}", err),
+            #[cfg(feature="rocksdb")]
+            Error::RocksDB(ref err) => write!(f, "RocksDB error: {}", err),
             Error::Serialize(ref err) => write!(f, "Serialize error: {}", err),
         }
     }
@@ -137,9 +152,17 @@ impl convert::From<util::Error> for Error {
     }
 }
 
+#[cfg(feature="default")]
 impl convert::From<hammersbald::Error> for Error {
     fn from(err: hammersbald::Error) -> Error {
         Error::Hammersbald(err)
+    }
+}
+
+#[cfg(feature="rocksdb")]
+impl convert::From<rocksdb::Error> for Error {
+    fn from(err: rocksdb::Error) -> Error {
+        Error::RocksDB(err.into_string())
     }
 }
 

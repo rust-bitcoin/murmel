@@ -24,7 +24,7 @@ use bitcoin::{
         constants::Network
     }
 };
-use crate::hammersbald::Hammersbald;
+
 use crate::dispatcher::Dispatcher;
 use crate::dns::dns_seed;
 use crate::error::Error;
@@ -55,7 +55,7 @@ use bitcoin::network::message::NetworkMessage;
 use bitcoin::network::message::RawNetworkMessage;
 use crate::p2p::BitcoinP2PConfig;
 use std::time::Duration;
-use crate::chaindb::SharedChainDB;
+use crate::chaindb::{SharedChainDB, ChainDB};
 
 const MAX_PROTOCOL_VERSION: u32 = 70001;
 const USER_AGENT: &'static str = concat!("/Murmel:", env!("CARGO_PKG_VERSION"), '/');
@@ -68,18 +68,33 @@ pub struct Constructor {
 }
 
 impl Constructor {
-    /// open DBs
+    /// open DB
     pub fn open_db(path: Option<&Path>, network: Network, _birth: u64) -> Result<SharedChainDB, Error> {
-        let mut chaindb =
-            if let Some(path) = path {
-                #[cfg(feature = "default")]
-                Hammersbald::new(path, network)?
-            } else {
-                #[cfg(feature = "default")]
-                Hammersbald::mem(network)?
-            };
+        let mut chaindb = Constructor::new_db(path, network)?;
         chaindb.init()?;
         Ok(Arc::new(RwLock::new(chaindb)))
+    }
+
+    /// new Hammersbald DB
+    #[cfg(feature = "default")]
+    fn new_db(path: Option<&Path>, network:Network) -> Result<Box<dyn ChainDB>, Error> {
+        use crate::hammersbald::Hammersbald;
+        if let Some(path) = path {
+            Hammersbald::new(path, network)
+        } else {
+            Hammersbald::mem(network)
+        }
+    }
+
+    /// new RocksDB
+    #[cfg(feature = "rocksdb")]
+    fn new_db(path: Option<&Path>, network:Network) -> Result<Box<dyn ChainDB>, Error> {
+        use crate::rocksdb::RocksDB;
+        if let Some(path) = path {
+            RocksDB::new(path, network)
+        } else {
+            Err(Error::RocksDB("RocksDB doesn't support mem DB, path is required.".to_string()))
+        }
     }
 
     /// Construct the stack
