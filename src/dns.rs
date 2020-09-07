@@ -26,24 +26,27 @@ use bitcoin::network::constants::Network;
 use log::{info, trace};
 use std::net::{SocketAddr, ToSocketAddrs};
 
-const MAIN_SEEDER: [&str;5] = [
+const MAIN_SEEDER: [&str; 9] = [
     "seed.bitcoin.sipa.be",
     "dnsseed.bluematt.me",
     "dnsseed.bitcoin.dashjr.org",
     "seed.bitcoinstats.com",
-    "seed.btc.petertodd.org"
+    "seed.bitcoin.jonasschnelli.ch",
+    "seed.btc.petertodd.org",
+    "seed.bitcoin.sprovoost.nl",
+    "dnsseed.emzy.de",
+    "seed.bitcoin.wiz.biz",
 ];
 
-const TEST_SEEDER: [&str;4] = [
+const TEST_SEEDER: [&str; 4] = [
     "testnet-seed.bitcoin.jonasschnelli.ch",
     "seed.tbtc.petertodd.org",
     "seed.testnet.bitcoin.sprovoost.nl",
-    "testnet-seed.bluematt.me"
+    "testnet-seed.bluematt.me",
 ];
 
-
-pub fn dns_seed (network: Network) -> Vec<SocketAddr> {
-    let mut seeds = Vec::new ();
+pub fn dns_seed(network: Network) -> Vec<SocketAddr> {
+    let mut seeds = Vec::new();
     if network == Network::Bitcoin {
         info!("reaching out for DNS seed...");
         for seedhost in MAIN_SEEDER.iter() {
