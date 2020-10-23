@@ -20,12 +20,11 @@
 use std::sync::{Arc, RwLock};
 use std::path::Path;
 
-use bitcoin::{BitcoinHash, Network};
+use bitcoin::Network;
 use bitcoin::blockdata::block::BlockHeader;
-use bitcoin::blockdata::constants::genesis_block;
+use bitcoin::{BlockHash, blockdata::constants::genesis_block};
 
-use bitcoin_hashes::sha256d;
-use hammersbald::{BitcoinAdaptor, HammersbaldAPI, persistent, transient};
+use hammersbald::{BitcoinAdaptor, HammersbaldAPI, persistent, transient, BitcoinHash};
 
 use crate::error::Error;
 use crate::headercache::{CachedHeader, HeaderCache};
@@ -75,12 +74,12 @@ impl ChainDB {
     fn init_headers(&mut self) -> Result<(), Error> {
         if let Some(tip) = self.fetch_header_tip()? {
             info!("reading stored header chain from tip {}", tip);
-            if self.fetch_header(&tip)?.is_some() {
+            if self.fetch_header(tip)?.is_some() {
                 let mut h = tip;
-                while let Some(stored) = self.fetch_header(&h)? {
-                    debug!("read stored header {}", &stored.bitcoin_hash());
+                while let Some(stored) = self.fetch_header(h)? {
+                    debug!("read stored header {}", &stored.block_hash());
                     self.headercache.add_header_unchecked(&h, &stored);
-                    if stored.header.prev_blockhash != sha256d::Hash::default() {
+                    if stored.header.prev_blockhash != BlockHash::default() {
                         h = stored.header.prev_blockhash;
                     } else {
                         break;
@@ -102,10 +101,10 @@ impl ChainDB {
     fn init_to_genesis(&mut self) -> Result<(), Error> {
         let genesis = genesis_block(self.network).header;
         if let Some((cached, _, _)) = self.headercache.add_header(&genesis)? {
-            info!("initialized with genesis header {}", genesis.bitcoin_hash());
+            info!("initialized with genesis header {}", genesis.block_hash());
             self.db.put_hash_keyed(&cached.stored)?;
             self.db.batch()?;
-            self.store_header_tip(&cached.bitcoin_hash())?;
+            self.store_header_tip(&cached.block_hash())?;
             self.db.batch()?;
         } else {
             error!("failed to initialize with genesis header");
@@ -115,7 +114,7 @@ impl ChainDB {
     }
 
     /// Store a header
-    pub fn add_header(&mut self, header: &BlockHeader) -> Result<Option<(StoredHeader, Option<Vec<sha256d::Hash>>, Option<Vec<sha256d::Hash>>)>, Error> {
+    pub fn add_header(&mut self, header: &BlockHeader) -> Result<Option<(StoredHeader, Option<Vec<BlockHash>>, Option<Vec<BlockHash>>)>, Error> {
         if let Some((cached, unwinds, forward)) = self.headercache.add_header(header)? {
             self.db.put_hash_keyed(&cached.stored)?;
             if let Some(forward) = forward.clone() {
@@ -129,7 +128,7 @@ impl ChainDB {
     }
 
     /// return position of hash on trunk if hash is on trunk
-    pub fn pos_on_trunk(&self, hash: &sha256d::Hash) -> Option<u32> {
+    pub fn pos_on_trunk(&self, hash: &BlockHash) -> Option<u32> {
         self.headercache.pos_on_trunk(hash)
     }
 
@@ -149,7 +148,7 @@ impl ChainDB {
     }
 
     /// Fetch a header by its id from cache
-    pub fn get_header(&self, id: &sha256d::Hash) -> Option<CachedHeader> {
+    pub fn get_header(&self, id: &BlockHash) -> Option<CachedHeader> {
         self.headercache.get_header(id)
     }
 
@@ -159,24 +158,24 @@ impl ChainDB {
     }
 
     /// locator for getheaders message
-    pub fn header_locators(&self) -> Vec<sha256d::Hash> {
+    pub fn header_locators(&self) -> Vec<BlockHash> {
         self.headercache.locator_hashes()
     }
 
     /// Store the header id with most work
-    pub fn store_header_tip(&mut self, tip: &sha256d::Hash) -> Result<(), Error> {
+    pub fn store_header_tip(&mut self, tip: &BlockHash) -> Result<(), Error> {
         self.db.put_keyed_encodable(HEADER_TIP_KEY, tip)?;
         Ok(())
     }
 
     /// Find header id with most work
-    pub fn fetch_header_tip(&self) -> Result<Option<sha256d::Hash>, Error> {
-        Ok(self.db.get_keyed_decodable::<sha256d::Hash>(HEADER_TIP_KEY)?.map(|(_, h)| h.clone()))
+    pub fn fetch_header_tip(&self) -> Result<Option<BlockHash>, Error> {
+        Ok(self.db.get_keyed_decodable::<BlockHash>(HEADER_TIP_KEY)?.map(|(_, h)| h.clone()))
     }
 
     /// Read header from the DB
-    pub fn fetch_header(&self, id: &sha256d::Hash) -> Result<Option<StoredHeader>, Error> {
-        Ok(self.db.get_hash_keyed::<StoredHeader>(id)?.map(|(_, header)| header))
+    pub fn fetch_header(&self, id: BlockHash) -> Result<Option<StoredHeader>, Error> {
+        Ok(self.db.get_hash_keyed::<StoredHeader>(&id.as_hash())?.map(|(_, header)| header))
     }
 
     /// Shutdown db
@@ -198,9 +197,15 @@ pub struct StoredHeader {
 }
 
 // need to implement if put_hash_keyed and get_hash_keyed should be used
+impl StoredHeader {
+    pub fn block_hash(&self) -> BlockHash {
+        self.header.block_hash()
+    }
+}
+
 impl BitcoinHash for StoredHeader {
-    fn bitcoin_hash(&self) -> sha256d::Hash {
-        self.header.bitcoin_hash()
+    fn bitcoin_hash(&self) -> bitcoin_hashes::sha256d::Hash {
+        self.block_hash().as_hash()
     }
 }
 
@@ -208,8 +213,7 @@ const HEADER_TIP_KEY: &[u8] = &[0u8; 1];
 
 #[cfg(test)]
 mod test {
-    use bitcoin::{Network, BitcoinHash};
-    use bitcoin_hashes::sha256d::Hash;
+    use bitcoin::Network;
     use bitcoin::blockdata::constants::genesis_block;
 
     use crate::chaindb::ChainDB;
@@ -225,7 +229,7 @@ mod test {
 
         let header_tip = chaindb.header_tip();
         assert!(header_tip.is_some(), "failed to get header for tip");
-        assert!(header_tip.unwrap().stored.bitcoin_hash().eq(&genesis_header.bitcoin_hash()))
+        assert!(header_tip.unwrap().stored.block_hash().eq(&genesis_header.block_hash()))
     }
 
     #[test]
@@ -234,14 +238,14 @@ mod test {
         let genesis_header = genesis_block(network).header;
 
         let mut chaindb = ChainDB::mem(network).unwrap();
-        let missing_tip_header_hash: Hash = "6cfb35868c4465b7c289d7d5641563aa973db6a929655282a7bf95c8257f53ef".parse().unwrap();
+        let missing_tip_header_hash = "6cfb35868c4465b7c289d7d5641563aa973db6a929655282a7bf95c8257f53ef".parse().unwrap();
         chaindb.store_header_tip(&missing_tip_header_hash).unwrap();
 
         chaindb.init().unwrap();
 
         let header_tip = chaindb.header_tip();
         assert!(header_tip.is_some(), "failed to get header for tip");
-        assert!(header_tip.unwrap().stored.bitcoin_hash().eq(&genesis_header.bitcoin_hash()))
+        assert!(header_tip.unwrap().stored.block_hash().eq(&genesis_header.block_hash()))
     }
 }
 

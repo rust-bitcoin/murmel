@@ -24,7 +24,7 @@ use bitcoin::{
 };
 use bitcoin::network::{
     address::Address,
-    constants::Network,
+    constants::{ServiceFlags, Network},
     message::{NetworkMessage, RawNetworkMessage},
     message_network::VersionMessage
 };
@@ -191,7 +191,7 @@ pub trait Command {
 
 impl Command for RawNetworkMessage {
     fn command(&self) -> String {
-        self.command()
+        self.command().to_string()
     }
 }
 
@@ -205,7 +205,7 @@ pub struct VersionCarrier {
     /// The P2P network protocol version
     pub version: u32,
     /// A bitmask describing the services supported by this node
-    pub services: u64,
+    pub services: ServiceFlags,
     /// The time at which the `version` message was sent
     pub timestamp: u64,
     /// The network address of the peer receiving the message
@@ -300,11 +300,11 @@ impl P2PConfig<NetworkMessage, RawNetworkMessage> for BitcoinP2PConfig {
         let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
 
         let services = if !self.server {
-            0
+            ServiceFlags::NONE
         } else {
-            SERVICE_BLOCKS + SERVICE_WITNESS +
+            ServiceFlags::NETWORK | ServiceFlags::WITNESS |
                 // announce that this node is capable of serving BIP157 messages
-                SERVICE_FILTERS
+                ServiceFlags::COMPACT_FILTERS
         };
 
         // build message
@@ -312,9 +312,9 @@ impl P2PConfig<NetworkMessage, RawNetworkMessage> for BitcoinP2PConfig {
             version: min(max_protocol_version, self.max_protocol_version),
             services,
             timestamp,
-            receiver: Address::new(remote, 1),
+            receiver: Address::new(remote, ServiceFlags::NETWORK),
             // sender is only dummy
-            sender: Address::new(remote, 1),
+            sender: Address::new(remote, ServiceFlags::NETWORK),
             nonce: self.nonce,
             user_agent: self.user_agent.clone(),
             start_height: self.height.load(Ordering::Relaxed) as i32,
@@ -675,7 +675,7 @@ impl<Message: Version + Send + Sync + Clone,
         }
     }
 
-    fn event_processor (&self, event: Event, pid: PeerId, needed_services: u64, iobuf: &mut [u8]) -> Result<(), Error> {
+    fn event_processor (&self, event: Event, pid: PeerId, needed_services: ServiceFlags, iobuf: &mut [u8]) -> Result<(), Error> {
         let readiness = UnixReady::from(event.readiness());
         // check for error first
         if readiness.is_hup() || readiness.is_error() {
@@ -792,8 +792,8 @@ impl<Message: Version + Send + Sync + Clone,
                                                 debug!("rejecting to connect to myself peer={}", pid);
                                                 break;
                                             } else {
-                                                if version.version < self.config.min_protocol_version() || (needed_services & version.services) != needed_services {
-                                                    debug!("rejecting peer of version {} and services {:b} peer={}", version.version, version.services, pid);
+                                                if version.version < self.config.min_protocol_version() || !version.services.has(needed_services) {
+                                                    debug!("rejecting peer of version {} and services {} peer={}", version.version, version.services, pid);
                                                     disconnect = true;
                                                     break;
                                                 } else {
@@ -812,7 +812,7 @@ impl<Message: Version + Send + Sync + Clone,
                                                             break;
                                                         }
                                                     }
-                                                    debug!("accepting peer of version {} and services {:b} peer={}", version.version, version.services, pid);
+                                                    debug!("accepting peer of version {} and services {} peer={}", version.version, version.services, pid);
                                                     // acknowledge version message received
                                                     locked_peer.send(self.config.verack())?;
                                                     // all right, remember this peer
@@ -899,7 +899,7 @@ impl<Message: Version + Send + Sync + Clone,
     /// run the message dispatcher loop
     /// this method does not return unless there is an error obtaining network events
     /// run in its own thread, which will process all network events
-    pub fn poll_events(&self, network: &'static str, needed_services: u64, spawn: &mut dyn Spawn) {
+    pub fn poll_events(&self, network: &'static str, needed_services: ServiceFlags, spawn: &mut dyn Spawn) {
         // events buffer
         let mut events = Events::with_capacity(EVENT_BUFFER_SIZE);
         // IO buffer

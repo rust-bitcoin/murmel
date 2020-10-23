@@ -16,14 +16,13 @@
 //!
 //! # Download headers
 //!
-use bitcoin::{BitcoinHash, network::{
+use bitcoin::{network::{
     message::NetworkMessage,
-    message_blockdata::{GetHeadersMessage, Inventory, InvType},
-}, BlockHeader};
-use bitcoin_hashes::sha256d::Hash as Sha256dHash;
+    message_blockdata::{GetHeadersMessage, Inventory}, constants::ServiceFlags,
+}, BlockHeader, BlockHash};
 use crate::chaindb::SharedChainDB;
 use crate::error::Error;
-use crate::p2p::{P2PControl, P2PControlSender, PeerId, PeerMessage, PeerMessageReceiver, PeerMessageSender, SERVICE_BLOCKS};
+use crate::p2p::{P2PControl, P2PControlSender, PeerId, PeerMessage, PeerMessageReceiver, PeerMessageSender};
 use log::{info, trace, debug, error};
 use std::{
     collections::VecDeque,
@@ -86,7 +85,7 @@ impl HeaderDownload {
 
     fn is_serving_blocks(&self, peer: PeerId) -> bool {
         if let Some(peer_version) = self.p2p.peer_version(peer) {
-            return peer_version.services & SERVICE_BLOCKS != 0;
+            return peer_version.services.has(ServiceFlags::NETWORK);
         }
         false
     }
@@ -96,10 +95,10 @@ impl HeaderDownload {
         let mut ask_for_headers = false;
         for inventory in v {
             // only care for blocks
-            if inventory.inv_type == InvType::Block {
+            if let Inventory::Block(hash) = inventory {
                 let chaindb = self.chaindb.read().unwrap();
-                if chaindb.get_header(&inventory.hash).is_none() {
-                    debug!("received inv for new block {} peer={}", inventory.hash, peer);
+                if chaindb.get_header(&hash).is_none() {
+                    debug!("received inv for new block {} peer={}", hash, peer);
                     // ask for header(s) if observing a new block
                     ask_for_headers = true;
                 }
@@ -122,7 +121,7 @@ impl HeaderDownload {
             let first = if locator.len() > 0 {
                 *locator.first().unwrap()
             } else {
-                Sha256dHash::default()
+                BlockHash::default()
             };
             self.timeout.lock().unwrap().expect(peer, 1, ExpectedReply::Headers);
             self.p2p.send_network(peer, NetworkMessage::GetHeaders(GetHeadersMessage::new(locator, first)));
@@ -182,7 +181,7 @@ impl HeaderDownload {
                                 return Ok(());
                             }
                             Err(e) => {
-                                debug!("error {} processing header {} ", e, header.bitcoin_hash());
+                                debug!("error {} processing header {} ", e, header.block_hash());
                                 return Ok(());
                             }
                         }
@@ -208,7 +207,7 @@ impl HeaderDownload {
                 info!("received {} headers new tip={} from peer={}", headers.len(), new_tip, peer);
                 self.p2p.send(P2PControl::Height(height));
             } else {
-                debug!("received {} known or orphan headers [{} .. {}] from peer={}", headers.len(), headers[0].bitcoin_hash(), headers[headers.len()-1].bitcoin_hash(), peer);
+                debug!("received {} known or orphan headers [{} .. {}] from peer={}", headers.len(), headers[0].block_hash(), headers[headers.len()-1].block_hash(), peer);
             }
         }
         Ok(())
