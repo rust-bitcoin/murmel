@@ -24,7 +24,7 @@ use bitcoin::{
         uint::Uint256,
     }, BlockHash,
 };
-use bitcoin_hashes::Hash;
+use bitcoin::hashes::Hash;
 use crate::chaindb::StoredHeader;
 use crate::error::Error;
 use log::trace;

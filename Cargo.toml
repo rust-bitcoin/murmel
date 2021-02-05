@@ -16,9 +16,8 @@ name = "murmel"
 path = "src/lib.rs"
 
 [dependencies]
-bitcoin = { git= "https://github.com/rust-bitcoin/rust-bitcoin", rev="e8bcde4", features=["use-serde"]}
-bitcoin_hashes = "0.7"
-hammersbald = { git= "https://github.com/jrawsthorne/hammersbald.git", branch="upgrade-bitcoin", features=["bitcoin_support"]}
+bitcoin = "0.26"
+hammersbald = { version = "3.0.1", features = [ "bitcoin_support" ] }
 mio = "0.6"
 rand = "0.7"
 log = "0.4"

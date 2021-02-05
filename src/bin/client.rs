@@ -82,6 +82,7 @@ pub fn main() {
             Network::Bitcoin => 8333,
             Network::Testnet => 18333,
             Network::Regtest => 18444,
+            Network::Signet => 38333,
         };
         peers.push(SocketAddr::from(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), port)));
     }

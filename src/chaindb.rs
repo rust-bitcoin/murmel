@@ -17,14 +17,16 @@
 //! # Blockchain DB for a node
 //!
 
+use std::io;
 use std::sync::{Arc, RwLock};
 use std::path::Path;
 
 use bitcoin::Network;
 use bitcoin::blockdata::block::BlockHeader;
+use bitcoin::consensus::encode::{Decodable, Encodable};
 use bitcoin::{BlockHash, blockdata::constants::genesis_block};
 
-use hammersbald::{BitcoinAdaptor, HammersbaldAPI, persistent, transient, BitcoinHash};
+use hammersbald::{BitcoinAdaptor, BitcoinObject, HammersbaldAPI, persistent, transient};
 
 use crate::error::Error;
 use crate::headercache::{CachedHeader, HeaderCache};
@@ -102,7 +104,7 @@ impl ChainDB {
         let genesis = genesis_block(self.network).header;
         if let Some((cached, _, _)) = self.headercache.add_header(&genesis)? {
             info!("initialized with genesis header {}", genesis.block_hash());
-            self.db.put_hash_keyed(&cached.stored)?;
+            self.db.put_object_by_hash(&cached.stored)?;
             self.db.batch()?;
             self.store_header_tip(&cached.block_hash())?;
             self.db.batch()?;
@@ -116,7 +118,7 @@ impl ChainDB {
     /// Store a header
     pub fn add_header(&mut self, header: &BlockHeader) -> Result<Option<(StoredHeader, Option<Vec<BlockHash>>, Option<Vec<BlockHash>>)>, Error> {
         if let Some((cached, unwinds, forward)) = self.headercache.add_header(header)? {
-            self.db.put_hash_keyed(&cached.stored)?;
+            self.db.put_object_by_hash::<_, _>(&cached.stored)?;
             if let Some(forward) = forward.clone() {
                 if forward.len() > 0 {
                     self.store_header_tip(forward.last().unwrap())?;
@@ -164,18 +166,18 @@ impl ChainDB {
 
     /// Store the header id with most work
     pub fn store_header_tip(&mut self, tip: &BlockHash) -> Result<(), Error> {
-        self.db.put_keyed_encodable(HEADER_TIP_KEY, tip)?;
+        self.db.put_object_by_key(HEADER_TIP_KEY, tip)?;
         Ok(())
     }
 
     /// Find header id with most work
     pub fn fetch_header_tip(&self) -> Result<Option<BlockHash>, Error> {
-        Ok(self.db.get_keyed_decodable::<BlockHash>(HEADER_TIP_KEY)?.map(|(_, h)| h.clone()))
+        Ok(self.db.get_object_by_key::<BlockHash>(HEADER_TIP_KEY)?.map(|(_, h)| h.clone()))
     }
 
     /// Read header from the DB
     pub fn fetch_header(&self, id: BlockHash) -> Result<Option<StoredHeader>, Error> {
-        Ok(self.db.get_hash_keyed::<StoredHeader>(&id.as_hash())?.map(|(_, header)| header))
+        Ok(self.db.get_object_by_hash(id)?.map(|(_, header)| header))
     }
 
     /// Shutdown db
@@ -203,9 +205,23 @@ impl StoredHeader {
     }
 }
 
-impl BitcoinHash for StoredHeader {
-    fn bitcoin_hash(&self) -> bitcoin_hashes::sha256d::Hash {
-        self.block_hash().as_hash()
+impl BitcoinObject<BlockHash> for StoredHeader {
+    fn encode<W: io::Write>(&self, mut w: W) -> Result<usize, io::Error> {
+        Ok(self.header.consensus_encode(&mut w)?
+            + self.height.consensus_encode(&mut w)?
+            + self.log2work.to_bits().consensus_encode(&mut w)?)
+    }
+
+    fn decode<D: io::Read>(mut d: D) -> Result<Self, hammersbald::Error> {
+        Ok(StoredHeader {
+            header: Decodable::consensus_decode(&mut d)?,
+            height: Decodable::consensus_decode(&mut d)?,
+            log2work: f64::from_bits(Decodable::consensus_decode(&mut d)?),
+        })
+    }
+
+    fn hash(&self) -> BlockHash {
+        self.block_hash()
     }
 }
 
